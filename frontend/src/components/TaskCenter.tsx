@@ -49,7 +49,13 @@ const TaskRow = React.forwardRef<HTMLDivElement, {
   onSelect: (task: Task) => void;
   onDelete: (id: string) => void;
 }>(({ task, onToggle, onSelect, onDelete }, ref) => {
+  const { t } = useTranslation();
   const isCompleted = task.isCompleted === 1;
+  const PRIORITY_CONFIG: Record<number, { label: string; color: string; flagClass: string }> = {
+    3: { label: t('tasks.high'), color: "text-red-500", flagClass: "text-red-500" },
+    2: { label: t('tasks.medium'), color: "text-amber-500", flagClass: "text-amber-500" },
+    1: { label: t('tasks.low'), color: "text-blue-400", flagClass: "text-blue-400" },
+  };
   const pri = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG[2];
 
   return (

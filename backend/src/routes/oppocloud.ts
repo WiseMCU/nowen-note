@@ -6,10 +6,12 @@ interface OppoNoteData {
   id: string;
   title: string;
   content: string;
+  date?: string; // 提取脚本获取的日期字符串，如 "2024-01-15"
   createTime?: number;
   modifyTime?: number;
   folderId?: string;
   folderName?: string;
+  folder?: string; // 来源设备信息
 }
 
 // 从 OPPO 便签内容提取标题
@@ -117,7 +119,7 @@ app.post("/import", async (c) => {
     return c.json({ error: "请提供要导入的便签数据" }, 400);
   }
 
-  const results: { id: string; title: string; content: string; contentText: string }[] = [];
+  const results: { id: string; title: string; content: string; contentText: string; date?: string }[] = [];
   const errors: string[] = [];
 
   for (const note of notes as OppoNoteData[]) {
@@ -131,6 +133,7 @@ app.post("/import", async (c) => {
         title,
         content,
         contentText,
+        date: note.date, // 保留日期信息
       });
     } catch (err: any) {
       errors.push(`便签处理失败: ${err.message}`);
@@ -166,23 +169,42 @@ app.post("/import", async (c) => {
   }
 
   const insert = db.prepare(`
-    INSERT INTO notes (id, userId, notebookId, title, content, contentText)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO notes (id, userId, notebookId, title, content, contentText, createdAt, updatedAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const { v4: uuid } = require("uuid");
   const imported: any[] = [];
 
+  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+
   const tx = db.transaction(() => {
     for (const note of results) {
       const id = uuid();
+      let createdAt = now;
+      if (note.date) {
+        // 统一将斜杠替换为横杠，兼容 2025/09/03 和 2025-09-03
+        const dateStr = note.date.trim().replace(/\//g, '-');
+        let noteDate: Date | null = null;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+          noteDate = new Date(dateStr + 'T00:00:00');
+        } else if (/^\d{2}-\d{2}$/.test(dateStr)) {
+          noteDate = new Date(`${new Date().getFullYear()}-${dateStr}T00:00:00`);
+        }
+        if (noteDate && !isNaN(noteDate.getTime())) {
+          createdAt = noteDate.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+        }
+      }
+      const updatedAt = createdAt;
       insert.run(
         id,
         userId,
         targetNotebookId,
         note.title,
         note.content,
-        note.contentText
+        note.contentText,
+        createdAt,
+        updatedAt
       );
       imported.push({ id, title: note.title });
     }

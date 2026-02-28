@@ -235,7 +235,7 @@ app.post("/import", async (c) => {
     return c.json({ error: "请选择要导入的笔记" }, 400);
   }
 
-  const results: { id: string; title: string; content: string; contentText: string }[] = [];
+  const results: { id: string; title: string; content: string; contentText: string; createDate?: number; modifyDate?: number }[] = [];
   const errors: string[] = [];
 
   for (const noteId of noteIds) {
@@ -263,7 +263,14 @@ app.post("/import", async (c) => {
       const content = convertMiNoteToHtml(entry.content || "");
       const contentText = extractPlainText(entry.content || "");
 
-      results.push({ id: noteId, title, content, contentText });
+      results.push({
+        id: noteId,
+        title,
+        content,
+        contentText,
+        createDate: entry.createDate,
+        modifyDate: entry.modifyDate,
+      });
     } catch (err: any) {
       errors.push(`笔记 ${noteId} 处理失败: ${err.message}`);
     }
@@ -299,23 +306,46 @@ app.post("/import", async (c) => {
   }
 
   const insert = db.prepare(`
-    INSERT INTO notes (id, userId, notebookId, title, content, contentText)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO notes (id, userId, notebookId, title, content, contentText, createdAt, updatedAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const { v4: uuid } = require("uuid");
   const imported: any[] = [];
 
+  // 将时间戳转为 SQLite datetime 兼容格式：YYYY-MM-DD HH:MM:SS
+  function toSqliteDatetime(ts: number | string | undefined, fallback: string): string {
+    if (!ts) return fallback;
+    let ms: number;
+    if (typeof ts === 'number') {
+      ms = ts < 10000000000 ? ts * 1000 : ts;
+    } else {
+      const parsed = parseInt(String(ts), 10);
+      if (isNaN(parsed)) return fallback;
+      ms = parsed < 10000000000 ? parsed * 1000 : parsed;
+    }
+    const date = new Date(ms);
+    if (isNaN(date.getTime())) return fallback;
+    return date.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+  }
+
+  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+
   const tx = db.transaction(() => {
     for (const note of results) {
       const id = uuid();
+      const createdAt = toSqliteDatetime(note.createDate, now);
+      const updatedAt = toSqliteDatetime(note.modifyDate, createdAt);
+      
       insert.run(
         id,
         userId,
         targetNotebookId,
         note.title,
         note.content,
-        note.contentText
+        note.contentText,
+        createdAt,
+        updatedAt
       );
       imported.push({ id, title: note.title });
     }

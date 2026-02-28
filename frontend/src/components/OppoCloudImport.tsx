@@ -12,6 +12,7 @@ interface OppoNoteEntry {
   id: string;
   title: string;
   content: string;
+  date?: string; // 日期字符串
   selected: boolean;
 }
 
@@ -77,6 +78,7 @@ export default function OppoCloudImport() {
         id: String(n.id || n.noteId || Date.now() + Math.random()),
         title: n.title || (n.content || "").split("\n")[0]?.replace(/<[^>]+>/g, "").substring(0, 50) || t("oppoCloud.untitled"),
         content: n.content || n.text || n.body || "",
+        date: n.date || "", // 保留日期字段
         selected: true,
       }));
 
@@ -103,6 +105,7 @@ export default function OppoCloudImport() {
           id: n.id,
           title: n.title,
           content: n.content,
+          date: n.date, // 传递日期字段
         })),
         selectedNotebookId || undefined
       );

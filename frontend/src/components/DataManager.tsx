@@ -253,7 +253,7 @@ export default function DataManager() {
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".md,.txt,.markdown,.zip"
+                accept=".md,.txt,.markdown,.html,.htm,.zip"
                 onChange={handleFileSelect}
                 className="hidden"
               />

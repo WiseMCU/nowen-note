@@ -339,10 +339,14 @@
     "zoomIn": "Zoom In",
     "zoomOut": "Zoom Out",
     "fitView": "Fit to View",
+    "miniMap": "Mini Map",
     "shortcutAdd": "Add child",
     "shortcutEdit": "Edit node",
     "shortcutDelete": "Delete node",
     "shortcutCollapse": "Expand/Collapse",
-    "dragToMove": "Drag to pan · Scroll to zoom"
+    "dragToMove": "Drag to pan · Scroll to zoom",
+    "downloadPNG": "Download as PNG",
+    "downloadSVG": "Download as SVG",
+    "downloadXmind": "Download as .xmind"
   }
 }

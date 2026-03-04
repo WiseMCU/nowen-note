@@ -4,6 +4,8 @@ import { v4 as uuidv4 } from "uuid";
 import fs from "fs";
 import path from "path";
 import JSZip from "jszip";
+import mammoth from "mammoth";
+import WordExtractor from "word-extractor";
 
 const app = new Hono();
 
@@ -214,11 +216,25 @@ app.post("/upload", async (c) => {
   }
 
   const id = uuidv4();
-  const fileKey = `${id}.${ext}`;
-  const filePath = path.join(DOCS_DIR, fileKey);
   const title = file.name.replace(/\.[^.]+$/, "") || "未命名文档";
+  let buffer = Buffer.from(await file.arrayBuffer());
 
-  const buffer = Buffer.from(await file.arrayBuffer());
+  // 对非 docx 的 word 类文件，尝试转换为 docx
+  let finalExt = ext;
+  if (docType === "word" && ext !== "docx") {
+    try {
+      const converted = await convertToDocx(buffer, ext);
+      buffer = converted;
+      finalExt = "docx";
+    } catch (err) {
+      console.error(`Failed to convert .${ext} to .docx:`, err);
+      // 转换失败，保留原格式
+    }
+  }
+
+  const fileKey = `${id}.${finalExt}`;
+  const filePath = path.join(DOCS_DIR, fileKey);
+
   fs.writeFileSync(filePath, buffer);
   const fileSize = buffer.length;
 
@@ -329,7 +345,7 @@ app.get("/:id/file", (c) => {
 });
 
 // 获取文档文件的原始二进制（供前端预览/编辑读取）
-app.get("/:id/content", (c) => {
+app.get("/:id/content", async (c) => {
   const db = getDb();
   const userId = c.req.header("X-User-Id");
   const id = c.req.param("id");
@@ -341,7 +357,30 @@ app.get("/:id/content", (c) => {
   if (!fs.existsSync(filePath)) return c.json({ error: "文件不存在" }, 404);
 
   const typeInfo = DOC_TYPE_MAP[doc.docType] || DOC_TYPE_MAP.word;
-  const buffer = fs.readFileSync(filePath);
+  let buffer = fs.readFileSync(filePath);
+
+  // 如果是旧格式的 word 文件（.doc/.txt/.rtf/.odt），在读取时转换为 docx
+  if (doc.docType === "word") {
+    const fileExt = doc.fileKey.split(".").pop()?.toLowerCase() || "";
+    if (fileExt !== "docx") {
+      try {
+        const converted = await convertToDocx(buffer, fileExt);
+        // 转换成功后，替换磁盘文件为 docx 格式
+        const newFileKey = doc.fileKey.replace(/\.[^.]+$/, ".docx");
+        const newFilePath = path.join(DOCS_DIR, newFileKey);
+        fs.writeFileSync(newFilePath, converted);
+        // 更新数据库记录
+        db.prepare("UPDATE documents SET fileKey = ?, fileSize = ? WHERE id = ?")
+          .run(newFileKey, converted.length, id);
+        // 删除旧文件
+        try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+        buffer = converted;
+      } catch (err) {
+        console.error(`Failed to convert .${fileExt} on read:`, err);
+        // 转换失败，返回原始内容
+      }
+    }
+  }
 
   return new Response(buffer, {
     headers: {
@@ -370,5 +409,277 @@ app.put("/:id/content", async (c) => {
 
   return c.json({ success: true, fileSize: buffer.length });
 });
+
+/**
+ * 将非 docx 格式的文件转换为 docx
+ * 支持 .doc (OLE2), .txt, .rtf
+ */
+async function convertToDocx(buffer: Buffer, ext: string): Promise<Buffer> {
+  if (ext === "doc") {
+    // 先尝试 mammoth（支持 .docx 格式的 .doc 文件），转 HTML 保留图片
+    try {
+      const result = await mammoth.convertToHtml({
+        buffer,
+        convertImage: mammoth.images.imgElement(async (image: any) => {
+          const buf = await image.read();
+          const base64 = buf.toString("base64");
+          const contentType = image.contentType || "image/png";
+          return { src: `data:${contentType};base64,${base64}` };
+        }),
+      });
+      if (result.value && result.value.trim().length > 0) {
+        return htmlToDocx(result.value);
+      }
+    } catch { /* mammoth 不支持此格式，fallback */ }
+
+    // 使用 word-extractor 处理旧版 OLE2 .doc 文件（仅文本）
+    const extractor = new WordExtractor();
+    const tmpPath = path.join(DOCS_DIR, `_tmp_${Date.now()}.doc`);
+    try {
+      fs.writeFileSync(tmpPath, buffer);
+      const doc = await extractor.extract(tmpPath);
+      const text = doc.getBody();
+      if (!text || text.trim().length === 0) {
+        throw new Error("Extracted empty content from .doc file");
+      }
+      return textToDocx(text);
+    } finally {
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    }
+  }
+
+  if (ext === "txt") {
+    let text = buffer.toString("utf-8");
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    return textToDocx(text);
+  }
+
+  if (ext === "rtf") {
+    let text = buffer.toString("utf-8");
+    text = text.replace(/\{\\[^{}]*\}/g, "")
+      .replace(/\\[a-z]+[\d]*\s?/gi, "")
+      .replace(/[{}]/g, "")
+      .trim();
+    return textToDocx(text);
+  }
+
+  if (ext === "odt") {
+    const zip = await JSZip.loadAsync(buffer);
+    const contentXml = await zip.file("content.xml")?.async("string");
+    if (!contentXml) throw new Error("ODT file missing content.xml");
+    const text = contentXml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    return textToDocx(text);
+  }
+
+  throw new Error(`Unsupported format: .${ext}`);
+}
+
+/** 将 HTML（含 base64 图片）转为有效的 docx 格式 */
+async function htmlToDocx(html: string): Promise<Buffer> {
+  // 解析 HTML 提取文本段落和图片
+  const paragraphs: Array<{ type: "text"; content: string; bold?: boolean; italic?: boolean; heading?: number } | { type: "image"; base64: string; contentType: string }> = [];
+
+  // 简单 HTML 解析：按标签分段
+  const parts = html.split(/(<[^>]+>)/);
+  let currentText = "";
+  let inBold = false;
+  let inItalic = false;
+  let headingLevel = 0;
+
+  const flushText = () => {
+    if (currentText.trim()) {
+      paragraphs.push({ type: "text", content: currentText, bold: inBold, italic: inItalic, heading: headingLevel });
+    }
+    currentText = "";
+  };
+
+  for (const part of parts) {
+    if (part.startsWith("<")) {
+      const tag = part.toLowerCase();
+      if (tag.startsWith("<p") || tag.startsWith("<br") || tag.startsWith("<div")) {
+        flushText();
+      } else if (tag === "</p>" || tag === "</div>") {
+        flushText();
+        headingLevel = 0;
+      } else if (tag.match(/^<h(\d)/)) {
+        flushText();
+        headingLevel = parseInt(tag.match(/^<h(\d)/)![1]);
+      } else if (tag.match(/^<\/h\d/)) {
+        flushText();
+        headingLevel = 0;
+      } else if (tag === "<strong>" || tag === "<b>") {
+        inBold = true;
+      } else if (tag === "</strong>" || tag === "</b>") {
+        inBold = false;
+      } else if (tag === "<em>" || tag === "<i>") {
+        inItalic = true;
+      } else if (tag === "</em>" || tag === "</i>") {
+        inItalic = false;
+      } else if (tag.startsWith("<img ")) {
+        flushText();
+        const srcMatch = part.match(/src="([^"]+)"/);
+        if (srcMatch && srcMatch[1].startsWith("data:")) {
+          const dataUrl = srcMatch[1];
+          const m = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+          if (m) {
+            paragraphs.push({ type: "image", base64: m[2], contentType: m[1] });
+          }
+        }
+      }
+    } else {
+      // 解码 HTML entities
+      const decoded = part.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+      currentText += decoded;
+    }
+  }
+  flushText();
+
+  // 构建 docx
+  const zip = new JSZip();
+  const imageFiles: Array<{ rId: string; filename: string; ext: string; base64: string; contentType: string }> = [];
+  let rIdCounter = 10;
+  let bodyXml = "";
+
+  for (const p of paragraphs) {
+    if (p.type === "text") {
+      const escaped = p.content
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+
+      let rPr = "";
+      const fontSize = p.heading && p.heading <= 3 ? (36 - (p.heading - 1) * 4) : 14;
+      rPr += `<w:sz w:val="${fontSize * 2}"/><w:szCs w:val="${fontSize * 2}"/>`;
+      if (p.bold || (p.heading && p.heading <= 3)) rPr += "<w:b/>";
+      if (p.italic) rPr += "<w:i/>";
+
+      bodyXml += `<w:p><w:r><w:rPr>${rPr}</w:rPr><w:t xml:space="preserve">${escaped}</w:t></w:r></w:p>\n`;
+    } else if (p.type === "image") {
+      const rId = `rId${rIdCounter++}`;
+      const extMap: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/bmp": "bmp", "image/webp": "webp" };
+      const imgExt = extMap[p.contentType] || "png";
+      const filename = `image${imageFiles.length + 1}.${imgExt}`;
+      imageFiles.push({ rId, filename, ext: imgExt, base64: p.base64, contentType: p.contentType });
+
+      // 尝试获取图片尺寸，默认 400x300 pt → EMU
+      const widthEmu = 5000000; // ~394pt
+      const heightEmu = 3750000; // ~295pt
+
+      bodyXml += `<w:p><w:r><w:rPr/><w:drawing>
+        <wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+          <wp:extent cx="${widthEmu}" cy="${heightEmu}"/>
+          <wp:docPr id="${rIdCounter}" name="${filename}"/>
+          <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+              <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <pic:nvPicPr><pic:cNvPr id="0" name="${filename}"/><pic:cNvPicPr/></pic:nvPicPr>
+                <pic:blipFill><a:blip r:embed="${rId}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+                <pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${widthEmu}" cy="${heightEmu}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>
+              </pic:pic>
+            </a:graphicData>
+          </a:graphic>
+        </wp:inline>
+      </w:drawing></w:r></w:p>\n`;
+    }
+  }
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    ${bodyXml}
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`;
+
+  // Content Types - 包含图片扩展名
+  const imgExts = new Set(imageFiles.map(f => f.ext));
+  const extMime: Record<string, string> = { png: "image/png", jpg: "image/jpeg", gif: "image/gif", bmp: "image/bmp", webp: "image/webp" };
+  let ctXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>`;
+  for (const ext of imgExts) {
+    ctXml += `\n  <Default Extension="${ext}" ContentType="${extMime[ext] || "application/octet-stream"}"/>`;
+  }
+  ctXml += `\n  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`;
+
+  const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+  let docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`;
+  for (const img of imageFiles) {
+    docRels += `\n  <Relationship Id="${img.rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${img.filename}"/>`;
+  }
+  docRels += `\n</Relationships>`;
+
+  zip.file("[Content_Types].xml", ctXml);
+  zip.folder("_rels")!.file(".rels", rels);
+  zip.folder("word")!.file("document.xml", documentXml);
+  zip.folder("word")!.folder("_rels")!.file("document.xml.rels", docRels);
+
+  // 写入图片文件
+  for (const img of imageFiles) {
+    zip.folder("word")!.folder("media")!.file(img.filename, img.base64, { base64: true });
+  }
+
+  return await zip.generateAsync({ type: "nodebuffer" });
+}
+
+/** 将纯文本转为有效的 docx 格式 (Buffer) */
+async function textToDocx(text: string): Promise<Buffer> {
+  const lines = text.split(/\r?\n/);
+  let bodyXml = "";
+  for (const line of lines) {
+    const escaped = line
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    bodyXml += `<w:p><w:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><w:t xml:space="preserve">${escaped}</w:t></w:r></w:p>\n`;
+  }
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    ${bodyXml}
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`;
+
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`;
+
+  const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+  const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+</Relationships>`;
+
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", contentTypes);
+  zip.folder("_rels")!.file(".rels", rels);
+  zip.folder("word")!.file("document.xml", documentXml);
+  zip.folder("word")!.folder("_rels")!.file("document.xml.rels", docRels);
+
+  return await zip.generateAsync({ type: "nodebuffer" });
+}
 
 export default app;

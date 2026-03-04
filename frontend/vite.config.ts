@@ -10,6 +10,11 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  optimizeDeps: {
+    esbuildOptions: {
+      keepNames: true,
+    },
+  },
   server: {
     host: "0.0.0.0",
     allowedHosts: true,

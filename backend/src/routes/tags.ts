@@ -28,6 +28,7 @@ app.post("/", async (c) => {
 app.delete("/:id", (c) => {
   const db = getDb();
   const id = c.req.param("id");
+  db.prepare("DELETE FROM note_tags WHERE tagId = ?").run(id);
   db.prepare("DELETE FROM tags WHERE id = ?").run(id);
   return c.json({ success: true });
 });

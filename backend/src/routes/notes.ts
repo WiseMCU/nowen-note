@@ -71,7 +71,7 @@ app.post("/", async (c) => {
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(id, userId, body.notebookId, body.title || "无标题笔记", body.content || "{}", body.contentText || "");
   const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(id);
-  return c.json(note, 201);
+  return c.json({ ...note as any, tags: [] }, 201);
 });
 
 // 更新笔记
@@ -122,7 +122,14 @@ app.put("/:id", async (c) => {
 
   db.prepare(`UPDATE notes SET ${fields.join(", ")} WHERE id = ?`).run(...params);
   const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(id);
-  return c.json(note);
+
+  const tags = db.prepare(`
+    SELECT t.* FROM tags t
+    JOIN note_tags nt ON t.id = nt.tagId
+    WHERE nt.noteId = ?
+  `).all(id);
+
+  return c.json({ ...note as any, tags });
 });
 
 // 删除笔记（永久）

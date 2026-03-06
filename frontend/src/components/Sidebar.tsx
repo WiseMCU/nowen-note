@@ -420,20 +420,20 @@ export default function Sidebar() {
                   state.tags.map((tag) => {
                     const isActive = state.viewMode === "tag" && state.selectedTagId === tag.id;
                     return (
-                      <button
+                      <div
                         key={tag.id}
+                        className={cn(
+                          "flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs transition-colors group/tag cursor-pointer",
+                          isActive
+                            ? "bg-app-active text-tx-primary"
+                            : "text-tx-secondary hover:bg-app-hover hover:text-tx-primary"
+                        )}
                         onClick={() => {
                           actions.setSelectedTag(tag.id);
                           actions.setSelectedNotebook(null);
                           actions.setViewMode("tag");
                           actions.setMobileSidebar(false);
                         }}
-                        className={cn(
-                          "flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs transition-colors group/tag",
-                          isActive
-                            ? "bg-app-active text-tx-primary"
-                            : "text-tx-secondary hover:bg-app-hover hover:text-tx-primary"
-                        )}
                       >
                         <span
                           className="w-2 h-2 rounded-full shrink-0"
@@ -441,9 +441,27 @@ export default function Sidebar() {
                         />
                         <span className="flex-1 truncate text-left">{tag.name}</span>
                         {tag.noteCount !== undefined && tag.noteCount > 0 && (
-                          <span className="text-[10px] text-tx-tertiary tabular-nums">{tag.noteCount}</span>
+                          <span className="text-[10px] text-tx-tertiary tabular-nums group-hover/tag:hidden">{tag.noteCount}</span>
                         )}
-                      </button>
+                        <button
+                          className="hidden group-hover/tag:flex items-center justify-center w-4 h-4 rounded hover:bg-red-500/20 hover:text-red-500 text-tx-tertiary shrink-0"
+                          title={t('common.delete')}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(t('sidebar.confirmDeleteTag', { name: tag.name }) || `确定删除标签「${tag.name}」吗？删除后将从所有笔记中移除该标签。`)) {
+                              api.deleteTag(tag.id).then(() => {
+                                api.getTags().then(actions.setTags).catch(console.error);
+                                if (state.selectedTagId === tag.id) {
+                                  actions.setSelectedTag(null);
+                                  actions.setViewMode("all");
+                                }
+                              }).catch(console.error);
+                            }
+                          }}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
                     );
                   })
                 )}

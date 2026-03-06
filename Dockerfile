@@ -4,8 +4,8 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm install
 COPY frontend/ .
-ENV NODE_OPTIONS="--max-old-space-size=4096"
-RUN npm run build
+ENV NODE_OPTIONS="--max-old-space-size=1536"
+RUN npx vite build
 
 # Stage 2: Build backend
 FROM node:20-alpine AS backend-build

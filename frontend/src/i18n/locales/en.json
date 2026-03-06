@@ -458,6 +458,12 @@
     "minutesAgo": "{{count}} min ago",
     "hoursAgo": "{{count}} hr ago",
     "daysAgo": "{{count}} days ago",
-    "dateFormat": "MMM d, HH:mm"
+    "dateFormat": "MMM d, HH:mm",
+    "loadMore": "Load more",
+    "loading": "Loading...",
+    "noMore": "No more moments",
+    "postSuccess": "Posted successfully",
+    "deleteFailed": "Failed to delete",
+    "updateFailed": "Failed to update"
   }
 }

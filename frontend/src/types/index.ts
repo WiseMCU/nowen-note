@@ -87,6 +87,12 @@ export interface DiaryEntry {
   updatedAt: string;
 }
 
+export interface DiaryPage {
+  items: DiaryEntry[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export type DocType = "word" | "cell";
 
 export interface DocumentItem {

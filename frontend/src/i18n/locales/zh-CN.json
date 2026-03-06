@@ -458,6 +458,12 @@
     "minutesAgo": "{{count}} 分钟前",
     "hoursAgo": "{{count}} 小时前",
     "daysAgo": "{{count}} 天前",
-    "dateFormat": "M月d日 HH:mm"
+    "dateFormat": "M月d日 HH:mm",
+    "loadMore": "加载更多",
+    "loading": "加载中...",
+    "noMore": "没有更多了",
+    "postSuccess": "发布成功",
+    "deleteFailed": "删除失败",
+    "updateFailed": "更新失败"
   }
 }

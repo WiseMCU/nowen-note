@@ -1,5 +1,30 @@
 import { api } from "./api";
 import i18n from "i18next";
+import { generateJSON } from "@tiptap/core";
+import StarterKit from "@tiptap/starter-kit";
+import Image from "@tiptap/extension-image";
+import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
+import Underline from "@tiptap/extension-underline";
+import Highlight from "@tiptap/extension-highlight";
+import TaskList from "@tiptap/extension-task-list";
+import TaskItem from "@tiptap/extension-task-item";
+import { common, createLowlight } from "lowlight";
+
+const lowlight = createLowlight(common);
+
+// TipTap 扩展列表（与编辑器保持一致）
+const tiptapExtensions = [
+  StarterKit.configure({
+    codeBlock: false,
+    heading: { levels: [1, 2, 3] },
+  }),
+  Image.configure({ inline: false, allowBase64: true }),
+  CodeBlockLowlight.configure({ lowlight }),
+  Underline,
+  Highlight.configure({ multicolor: true }),
+  TaskList,
+  TaskItem.configure({ nested: true }),
+];
 
 export interface ImportFileInfo {
   name: string;
@@ -213,55 +238,152 @@ function extractFrontmatterDates(md: string): { createdAt?: string; updatedAt?: 
   return { createdAt, updatedAt };
 }
 
-// 将 Markdown 转为简单的 HTML（用于存储到 Tiptap 格式）
+// 将 Markdown 转为 HTML（用于存储到 Tiptap 格式）
 function markdownToSimpleHtml(md: string): string {
   // 去除 YAML frontmatter
-  let content = md.replace(/^---[\s\S]*?---\n*/m, "");
+  const content = md.replace(/^---[\s\S]*?---\n*/m, "");
+  const lines = content.split("\n");
+  const htmlParts: string[] = [];
 
-  // 基本的 Markdown → HTML 转换
-  content = content
-    // 标题
-    .replace(/^######\s+(.+)$/gm, "<h6>$1</h6>")
-    .replace(/^#####\s+(.+)$/gm, "<h5>$1</h5>")
-    .replace(/^####\s+(.+)$/gm, "<h4>$1</h4>")
-    .replace(/^###\s+(.+)$/gm, "<h3>$1</h3>")
-    .replace(/^##\s+(.+)$/gm, "<h2>$1</h2>")
-    .replace(/^#\s+(.+)$/gm, "<h1>$1</h1>")
-    // 粗体和斜体
-    .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    // 删除线
-    .replace(/~~(.+?)~~/g, "<s>$1</s>")
-    // 高亮
-    .replace(/==(.+?)==/g, "<mark>$1</mark>")
-    // 行内代码
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    // 待办列表
-    .replace(/^- \[x\]\s+(.+)$/gm, '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><div>$1</div></li></ul>')
-    .replace(/^- \[ \]\s+(.+)$/gm, '<ul data-type="taskList"><li data-type="taskItem" data-checked="false"><div>$1</div></li></ul>')
-    // 无序列表
-    .replace(/^[-*]\s+(.+)$/gm, "<li>$1</li>")
-    // 有序列表
-    .replace(/^\d+\.\s+(.+)$/gm, "<li>$1</li>")
-    // 链接
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-    // 图片
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" />')
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // 空行 → 跳过
+    if (!trimmed) {
+      i++;
+      continue;
+    }
+
+    // 代码块（``` 或 ~~~）
+    const codeBlockMatch = trimmed.match(/^(`{3,}|~{3,})(\w*)/);
+    if (codeBlockMatch) {
+      const fence = codeBlockMatch[1];
+      const lang = codeBlockMatch[2] || "";
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length) {
+        if (lines[i].trim().startsWith(fence)) {
+          i++;
+          break;
+        }
+        codeLines.push(
+          lines[i]
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+        );
+        i++;
+      }
+      const langAttr = lang ? ` class="language-${lang}"` : "";
+      htmlParts.push(`<pre><code${langAttr}>${codeLines.join("\n")}</code></pre>`);
+      continue;
+    }
+
+    // 引用块（> ...）
+    if (trimmed.startsWith(">")) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && lines[i].trim().startsWith(">")) {
+        quoteLines.push(lines[i].trim().replace(/^>\s?/, ""));
+        i++;
+      }
+      const quotedContent = quoteLines
+        .join("\n")
+        .split("\n")
+        .map((l) => (l.trim() ? `<p>${inlineMarkdown(l)}</p>` : ""))
+        .filter(Boolean)
+        .join("");
+      htmlParts.push(`<blockquote>${quotedContent}</blockquote>`);
+      continue;
+    }
+
     // 水平线
-    .replace(/^---$/gm, "<hr />")
-    // 段落（将非 HTML 行包裹在 <p> 中）
-    .split("\n")
-    .map((line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return "";
-      if (trimmed.startsWith("<")) return trimmed;
-      return `<p>${trimmed}</p>`;
-    })
-    .filter(Boolean)
-    .join("\n");
+    if (/^(---|\*\*\*|___)$/.test(trimmed)) {
+      htmlParts.push("<hr />");
+      i++;
+      continue;
+    }
 
-  return content;
+    // 标题
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      htmlParts.push(`<h${level}>${inlineMarkdown(headingMatch[2])}</h${level}>`);
+      i++;
+      continue;
+    }
+
+    // 待办列表（- [x] / - [ ]）
+    if (/^[-*]\s+\[[ xX]\]\s+/.test(trimmed)) {
+      const taskItems: string[] = [];
+      while (i < lines.length && /^[-*]\s+\[[ xX]\]\s+/.test(lines[i].trim())) {
+        const taskMatch = lines[i].trim().match(/^[-*]\s+\[([xX ])\]\s+(.+)$/);
+        if (taskMatch) {
+          const checked = taskMatch[1].toLowerCase() === "x";
+          taskItems.push(
+            `<li data-type="taskItem" data-checked="${checked}"><label><input type="checkbox" ${checked ? "checked" : ""}><span></span></label><div><p>${inlineMarkdown(taskMatch[2])}</p></div></li>`
+          );
+        }
+        i++;
+      }
+      htmlParts.push(`<ul data-type="taskList">${taskItems.join("")}</ul>`);
+      continue;
+    }
+
+    // 无序列表（- / * / +）
+    if (/^[-*+]\s+/.test(trimmed)) {
+      const listItems: string[] = [];
+      while (i < lines.length && /^[-*+]\s+/.test(lines[i].trim())) {
+        const itemText = lines[i].trim().replace(/^[-*+]\s+/, "");
+        listItems.push(`<li><p>${inlineMarkdown(itemText)}</p></li>`);
+        i++;
+      }
+      htmlParts.push(`<ul>${listItems.join("")}</ul>`);
+      continue;
+    }
+
+    // 有序列表（1. / 2. ...）
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const listItems: string[] = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+        const itemText = lines[i].trim().replace(/^\d+\.\s+/, "");
+        listItems.push(`<li><p>${inlineMarkdown(itemText)}</p></li>`);
+        i++;
+      }
+      htmlParts.push(`<ol>${listItems.join("")}</ol>`);
+      continue;
+    }
+
+    // 普通段落
+    htmlParts.push(`<p>${inlineMarkdown(trimmed)}</p>`);
+    i++;
+  }
+
+  return htmlParts.join("\n");
+}
+
+// 处理行内 Markdown 语法
+function inlineMarkdown(text: string): string {
+  return (
+    text
+      // 图片（必须在链接之前处理）
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" />')
+      // 链接
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+      // 粗斜体
+      .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
+      // 粗体
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      // 斜体
+      .replace(/\*(.+?)\*/g, "<em>$1</em>")
+      // 删除线
+      .replace(/~~(.+?)~~/g, "<s>$1</s>")
+      // 高亮
+      .replace(/==(.+?)==/g, "<mark>$1</mark>")
+      // 行内代码
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+  );
 }
 
 // 将纯文本转为 HTML
@@ -282,22 +404,35 @@ function textToHtml(text: string): string {
     .join("\n");
 }
 
-// 根据来源转换内容为 HTML
-function convertToHtml(fileInfo: ImportFileInfo): string {
+// 根据来源转换内容为 TipTap JSON 字符串
+function convertToTiptapJson(fileInfo: ImportFileInfo): string {
   const { content, source } = fileInfo;
 
+  let html: string;
   switch (source) {
     case "html":
     case "xiaomi":
     case "oppo":
     case "vivo":
     case "oneplus":
-      return cleanHtmlContent(content);
+      html = cleanHtmlContent(content);
+      break;
     case "txt":
-      return textToHtml(content);
+      html = textToHtml(content);
+      break;
     case "md":
     default:
-      return markdownToSimpleHtml(content);
+      html = markdownToSimpleHtml(content);
+      break;
+  }
+
+  // 将 HTML 转为 TipTap JSON 格式（与编辑器保存格式一致）
+  try {
+    const json = generateJSON(html, tiptapExtensions);
+    return JSON.stringify(json);
+  } catch {
+    // 转换失败时回退为 HTML 字符串（Tiptap 编辑器也能解析）
+    return html;
   }
 }
 
@@ -345,7 +480,7 @@ export async function importNotes(
     const notes = selected.map((f) => {
       const note: { title: string; content: string; contentText: string; createdAt?: string; updatedAt?: string } = {
         title: f.title,
-        content: convertToHtml(f),
+        content: convertToTiptapJson(f),
         contentText: extractPlainText(f),
       };
       // 对 Markdown 文件尝试提取 frontmatter 中的日期

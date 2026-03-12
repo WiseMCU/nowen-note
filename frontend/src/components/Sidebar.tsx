@@ -596,11 +596,10 @@ export default function Sidebar() {
         <AnimatePresence initial={false}>
           {tagsExpanded && (
             <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
+              initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+              animate={{ height: "auto", opacity: 1, overflow: "visible", transitionEnd: { overflow: "visible" } }}
+              exit={{ height: 0, opacity: 0, overflow: "hidden" }}
               transition={{ duration: 0.2 }}
-              className="overflow-hidden"
             >
               <div className="px-2 pb-2 space-y-0.5">
                 {state.tags.length === 0 ? (

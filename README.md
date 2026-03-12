@@ -10,7 +10,7 @@ A self-hosted private knowledge base, inspired by Synology Note Station.
 
 ### 简介
 
-nowen-note 是一款自托管的私有化知识管理应用，采用现代前后端分离架构，支持 Docker 一键部署。集成 Tiptap 富文本编辑器、AI 智能写作助手（支持 6 大 AI 服务商 + 本地 Ollama）、思维导图、任务管理中心、FTS5 全文搜索、数据导入导出等功能，打造一体化知识管理平台。
+nowen-note 是一款自托管的私有化知识管理应用，采用现代前后端分离架构，支持 Docker 一键部署、Electron 桌面客户端、Android 移动端（Capacitor）。集成 Tiptap 富文本编辑器、AI 智能写作助手（支持 6 大 AI 服务商 + 本地 Ollama）、思维导图、任务管理中心、FTS5 全文搜索、多平台数据导入（小米/OPPO/iCloud）、数据导出等功能，打造一体化知识管理平台。
 
 ### 技术栈
 
@@ -25,10 +25,11 @@ nowen-note 是一款自托管的私有化知识管理应用，采用现代前后
 | 数据库   | SQLite（better-sqlite3）+ FTS5 全文搜索                      |
 | 认证     | JWT（jsonwebtoken）+ bcryptjs 密码哈希                       |
 | 数据校验 | Zod                                                          |
-
 | AI 引擎  | 通义千问 / OpenAI / Google Gemini / DeepSeek / 豆包 / Ollama |
 | 数据处理 | JSZip（压缩打包）、Turndown（HTML→Markdown）、FileSaver      |
 | Markdown | react-markdown + remark-gfm（AI 聊天渲染）                   |
+| 桌面端   | Electron 33（NSIS / DMG / AppImage 打包）                    |
+| 移动端   | Capacitor 8（Android 原生壳）                                 |
 
 ### 项目结构
 
@@ -46,27 +47,36 @@ nowen-note/
 │   │   │   ├── AISettingsPanel.tsx    # AI 服务配置（6 大 Provider 卡片）
 │   │   │   ├── TaskCenter.tsx         # 任务管理中心
 │   │   │   ├── MindMapEditor.tsx      # 思维导图编辑器
+│   │   │   ├── DiaryCenter.tsx        # 日记中心（开发中）
 │   │   │   ├── LoginPage.tsx          # 登录页
+│   │   │   ├── ServerConnect.tsx      # 服务器连接配置（客户端模式）
 │   │   │   ├── ContextMenu.tsx        # 通用右键菜单组件
 │   │   │   ├── SettingsModal.tsx      # 设置中心（外观/AI/安全/数据）
 │   │   │   ├── SecuritySettings.tsx   # 账号安全设置
 │   │   │   ├── DataManager.tsx        # 数据管理（导入导出 + 恢复出厂）
 │   │   │   ├── MiCloudImport.tsx      # 小米云笔记导入
-│   │   │   └── OppoCloudImport.tsx    # OPPO 云便签导入
+│   │   │   ├── OppoCloudImport.tsx    # OPPO 云便签导入
+│   │   │   ├── iCloudImport.tsx       # iPhone/iCloud 备忘录导入
+│   │   │   ├── TagInput.tsx           # 标签输入组件
+│   │   │   ├── ThemeProvider.tsx      # 主题 Provider
+│   │   │   └── ThemeToggle.tsx        # 主题切换
 │   │   ├── hooks/         # 自定义 Hooks
 │   │   │   ├── useContextMenu.ts      # 右键菜单状态管理 + 边缘碰撞检测
 │   │   │   └── useSiteSettings.tsx    # 站点设置 Context（标题/图标/字体）
 │   │   ├── store/         # 状态管理（useReducer + Context）
 │   │   ├── lib/           # 工具函数 & API 封装
 │   │   │   ├── api.ts              # API 客户端（含 AI 流式接口）
+│   │   │   ├── exportService.ts    # 导出服务
+│   │   │   ├── importService.ts    # 导入服务
 │   │   │   └── miNoteService.ts    # 小米云笔记服务封装
 │   │   ├── i18n/          # 国际化配置 & 语言包（中/英）
 │   │   └── types/         # 类型定义
-│   └── ...
+│   ├── capacitor.config.ts # Capacitor 移动端配置
+│   └── android/           # Android 原生壳
 ├── backend/               # 后端 Hono 应用
 │   └── src/
 │       ├── db/            # 数据库 Schema & 迁移（9 张表 + FTS5）
-│       ├── routes/        # API 路由（14 个模块）
+│       ├── routes/        # API 路由（15 个模块）
 │       │   ├── auth.ts        # 认证（登录/改密/恢复出厂）
 │       │   ├── notebooks.ts   # 笔记本 CRUD（无限层级）
 │       │   ├── notes.ts       # 笔记 CRUD（锁定/置顶/收藏）
@@ -79,8 +89,13 @@ nowen-note/
 │       │   ├── settings.ts    # 站点配置（标题/图标/字体）
 │       │   ├── fonts.ts       # 自定义字体管理（上传/下载/删除）
 │       │   ├── micloud.ts     # 小米云笔记导入 API
-│       │   └── oppocloud.ts   # OPPO 云便签导入 API
+│       │   ├── oppocloud.ts   # OPPO 云便签导入 API
+│       │   └── icloud.ts      # iPhone/iCloud 备忘录导入 API
 │       └── index.ts       # 入口文件（JWT 中间件 + 路由注册 + 静态文件托管）
+├── electron/              # Electron 桌面端
+│   ├── main.js            # 主进程（fork 后端 + 创建窗口）
+│   ├── builder.config.js  # electron-builder 打包配置
+│   └── icon.png           # 应用图标
 ├── Dockerfile             # 多阶段构建（3 阶段）
 ├── docker-compose.yml     # 容器编排（单服务 + 持久化卷）
 └── package.json           # 根级脚本
@@ -172,7 +187,42 @@ docker run -d \
 
 ---
 
-#### 方式三：群晖 Synology NAS 安装
+#### 方式三：Electron 桌面客户端
+
+支持 Windows（NSIS 安装程序）、macOS（DMG）、Linux（AppImage）。
+
+```bash
+# 开发运行
+npm run electron:dev
+
+# 打包发布
+npm run electron:build
+```
+
+打包产物输出到 `release/` 目录。桌面端自动 fork 后端进程，数据库存储在用户目录 `nowen-data/` 下。
+
+---
+
+#### 方式四：Android 移动端（Capacitor）
+
+基于 Capacitor 8 构建 Android 原生应用，连接远程服务器使用。
+
+```bash
+# 1. 构建前端
+npm run build:frontend
+
+# 2. 同步到 Android 项目
+npx cap sync android
+
+# 3. 用 Android Studio 打开并构建
+npx cap open android
+```
+
+移动端首次启动需配置服务器地址（IP:端口 或域名），通过 HTTP 连接到已部署的 nowen-note 后端。
+
+---
+
+#### 方式五：群晖 Synology NAS 安装
 
 **前提：** 已安装 Container Manager（DSM 7.2+）或 Docker 套件（DSM 7.0 / 7.1）。
 
@@ -198,7 +248,7 @@ docker run -d \
 
 ---
 
-#### 方式四：绿联 UGOS NAS 安装
+#### 方式六：绿联 UGOS NAS 安装
 
 **前提：** 已开启 Docker 功能（绿联 UGOS Pro / UGOS）。
 
@@ -222,7 +272,7 @@ docker run -d \
 
 ---
 
-#### 方式五：飞牛 fnOS 安装
+#### 方式七：飞牛 fnOS 安装
 
 **前提：** 飞牛 fnOS 已开启 Docker 功能。
 
@@ -245,7 +295,7 @@ docker run -d \
 
 ---
 
-#### 方式六：威联通 QNAP 安装
+#### 方式八：威联通 QNAP 安装
 
 **前提：** 已安装 Container Station（QTS 5.0+ / QuTS hero）。
 
@@ -270,7 +320,7 @@ docker run -d \
 
 ---
 
-#### 方式七：极空间 NAS 安装
+#### 方式九：极空间 NAS 安装
 
 **前提：** 极空间 ZOS 已开启 Docker 功能（极空间 Z4S / Z4 Pro / Z2 Pro 等）。
 
@@ -308,6 +358,7 @@ docker run -d \
 - 登录页面（带动画与默认账号提示）
 - 修改用户名 / 密码（需验证当前密码）
 - SHA256 → bcrypt 密码哈希自动升级
+- 客户端模式支持服务器地址配置（Electron / Android / file:// 协议）
 
 #### 笔记管理
 - **三栏布局**：侧边栏 + 笔记列表 + 编辑器（均支持拖拽调整宽度，双击恢复默认）
@@ -317,6 +368,7 @@ docker run -d \
 - **字数统计**：实时显示词数和字符数（中文按字计数，英文按空格分词）
 - **笔记大纲**：自动提取 H1-H3 标题生成大纲面板，点击标题跳转定位
 - **乐观锁**：version 字段防止编辑冲突
+- **快捷键**：`Alt+N` 快速新建笔记
 
 #### 笔记本
 - 支持无限层级嵌套（树形结构）
@@ -383,9 +435,12 @@ docker run -d \
 
 #### 数据管理
 - **导出备份**：全量导出为 ZIP 压缩包（Markdown + YAML frontmatter），含进度条
-- **导入笔记**：支持拖拽上传 `.md` / `.txt` / `.zip` 文件，可选择目标笔记本
+- **导入笔记**：支持拖拽上传 `.md` / `.txt` / `.html` / `.zip` 文件，可选择目标笔记本
 - **小米云笔记导入**：通过 Cookie 认证连接小米云服务，自动获取笔记列表并批量导入
 - **OPPO 云便签导入**：提供浏览器控制台提取脚本（OPPO 便签内容 AES 加密，仅页面端解密），一键复制脚本 → 粘贴 JSON → 选择导入
+- **iPhone/iCloud 备忘录导入**：提供两种导入方式
+  - 方式一：通过 Mac/iPhone 直接导出为 .txt / .md / .html 文件后导入（推荐）
+  - 方式二：通过 iCloud 网页端控制台脚本自动提取，支持自动逐条点击 → 提取内容 → 复制到剪贴板 → 粘贴 JSON → 选择导入。自动转换 Apple Notes Checklist 为 Tiptap taskList 格式
 - **恢复出厂设置**：清空所有数据并重置管理员账户，二次确认防误触（需输入 `RESET`）
 
 #### 设置中心
@@ -401,6 +456,26 @@ docker run -d \
 - 国际化支持：中英文双语切换
 - 移动端响应式布局，触摸手势支持
 - Framer Motion 丝滑动画
+- 全局快捷键：`Alt+N` 快速新建笔记
+
+#### 多端支持
+- **Web 端**：浏览器直接访问，响应式布局适配桌面和移动端
+- **Electron 桌面端**：Windows（NSIS）/ macOS（DMG）/ Linux（AppImage），自动管理后端进程，数据存储在用户目录
+- **Android 移动端**：基于 Capacitor 构建原生应用，连接远程服务器使用
+- **客户端模式**：Electron 和 Android 端支持配置服务器地址，通过 HTTP 连接到已部署的后端
+
+### NPM 脚本
+
+| 命令 | 说明 |
+|------|------|
+| `npm run install:all` | 一键安装前后端所有依赖 |
+| `npm run dev:backend` | 开发模式启动后端（端口 3001） |
+| `npm run dev:frontend` | 开发模式启动前端（端口 5173） |
+| `npm run build:all` | 全量构建前后端 |
+| `npm run build:frontend` | 仅构建前端 |
+| `npm run build:backend` | 仅构建后端 |
+| `npm run electron:dev` | Electron 开发运行 |
+| `npm run electron:build` | Electron 打包发布 |
 
 ### Docker Compose 架构
 
@@ -447,13 +522,36 @@ docker run -d \
 | `custom_fonts` | 自定义字体 |
 | `notes_fts` | FTS5 全文搜索虚拟表（通过触发器自动同步） |
 
+### API 路由一览
+
+| 路径 | 认证 | 说明 |
+|------|------|------|
+| `/api/auth` | ✗ | 登录 / 改密 / 恢复出厂 |
+| `/api/health` | ✗ | 健康检查 |
+| `GET /api/settings` | ✗ | 站点设置（品牌信息） |
+| `GET /api/fonts` | ✗ | 字体列表 / 字体文件 |
+| `/api/notebooks` | ✓ | 笔记本 CRUD |
+| `/api/notes` | ✓ | 笔记 CRUD |
+| `/api/tags` | ✓ | 标签管理 |
+| `/api/search` | ✓ | FTS5 全文搜索 |
+| `/api/tasks` | ✓ | 待办任务 |
+| `/api/mindmaps` | ✓ | 思维导图 CRUD |
+| `/api/ai` | ✓ | AI 聊天 + 写作助手 + RAG |
+| `/api/export` | ✓ | 数据导入导出 |
+| `/api/settings` | ✓ | 站点配置（写操作） |
+| `/api/fonts` | ✓ | 字体上传 / 删除 |
+| `/api/micloud` | ✓ | 小米云笔记导入 |
+| `/api/oppocloud` | ✓ | OPPO 云便签导入 |
+| `/api/icloud` | ✓ | iCloud 备忘录导入 |
+| `/api/me` | ✓ | 当前用户信息 |
+
 ---
 
 ## English Documentation
 
 ### Introduction
 
-nowen-note is a self-hosted private knowledge management application with a modern frontend-backend separated architecture. It supports one-click Docker deployment, featuring a Tiptap rich-text editor, AI-powered writing assistant (supporting 6 major AI providers + local Ollama), mind mapping, task management, FTS5 full-text search, data import/export, and more — an all-in-one knowledge management platform.
+nowen-note is a self-hosted private knowledge management application with a modern frontend-backend separated architecture. It supports one-click Docker deployment, Electron desktop client, and Android mobile app (Capacitor). Featuring a Tiptap rich-text editor, AI-powered writing assistant (supporting 6 major AI providers + local Ollama), mind mapping, task management, FTS5 full-text search, multi-platform data import (Xiaomi / OPPO / iCloud), data export, and more — an all-in-one knowledge management platform.
 
 ### Tech Stack
 
@@ -471,6 +569,8 @@ nowen-note is a self-hosted private knowledge management application with a mode
 | AI Engine     | Qwen / OpenAI / Google Gemini / DeepSeek / Doubao / Ollama                   |
 | Data Utils    | JSZip (compression), Turndown (HTML→Markdown), FileSaver                      |
 | Markdown      | react-markdown + remark-gfm (AI chat rendering)                              |
+| Desktop       | Electron 33 (NSIS / DMG / AppImage packaging)                                |
+| Mobile        | Capacitor 8 (Android native shell)                                            |
 
 ### Installation & Deployment
 
@@ -547,7 +647,38 @@ Visit `http://<your-ip>:3001` in your browser.
 | `NODE_ENV` | `production` | Runtime environment |
 | `OLLAMA_URL` | (not set) | Ollama service URL (deploy Ollama yourself if local AI is needed) |
 
-#### Option 3: NAS Deployment (Synology / QNAP / UGREEN / fnOS / Zspace)
+#### Option 3: Electron Desktop Client
+
+Supports Windows (NSIS installer), macOS (DMG), and Linux (AppImage).
+
+```bash
+# Development run
+npm run electron:dev
+
+# Build for release
+npm run electron:build
+```
+
+Output goes to the `release/` directory. The desktop client automatically forks the backend process and stores data in the user's `nowen-data/` directory.
+
+#### Option 4: Android Mobile (Capacitor)
+
+Built with Capacitor 8 as a native Android app, connecting to a remote server.
+
+```bash
+# 1. Build frontend
+npm run build:frontend
+
+# 2. Sync to Android project
+npx cap sync android
+
+# 3. Open and build in Android Studio
+npx cap open android
+```
+
+On first launch, configure the server address (IP:port or domain) to connect to your deployed nowen-note backend via HTTP.
+
+#### Option 5: NAS Deployment (Synology / QNAP / UGREEN / fnOS / Zspace)
 
 All NAS platforms with Docker support follow the same general steps:
 
@@ -568,6 +699,7 @@ All NAS platforms with Docker support follow the same general steps:
 - Login page with animation and default credential hints
 - Change username / password (requires current password verification)
 - Automatic SHA256 → bcrypt password hash upgrade
+- Client mode: server address configuration for Electron / Android / file:// protocol
 
 #### Note Management
 - **Three-column layout**: Sidebar + Note List + Editor (all resizable via drag, double-click to reset)
@@ -577,6 +709,7 @@ All NAS platforms with Docker support follow the same general steps:
 - **Word count**: Real-time word and character count (CJK characters counted individually, English by whitespace)
 - **Note outline**: Auto-extract H1-H3 headings into outline panel with click-to-scroll navigation
 - **Optimistic locking**: Version field to prevent edit conflicts
+- **Keyboard shortcut**: `Alt+N` for quick note creation
 
 #### Notebooks
 - Unlimited nested hierarchy (tree structure)
@@ -643,9 +776,12 @@ All NAS platforms with Docker support follow the same general steps:
 
 #### Data Management
 - **Export backup**: Full export as ZIP archive (Markdown + YAML frontmatter) with progress bar
-- **Import notes**: Drag-and-drop `.md` / `.txt` / `.zip` files, choose target notebook
+- **Import notes**: Drag-and-drop `.md` / `.txt` / `.html` / `.zip` files, choose target notebook
 - **Mi Cloud import**: Connect to Xiaomi Cloud via cookie authentication, auto-fetch and batch import
 - **OPPO Cloud import**: Browser console extraction script (AES-encrypted, client-side only), copy script → paste JSON → import
+- **iPhone/iCloud import**: Two import methods
+  - Method 1: Export from Mac/iPhone as .txt / .md / .html files and import directly (recommended)
+  - Method 2: Browser console script for iCloud web — auto-clicks notes one by one → extracts content → copies JSON to clipboard → paste and import. Automatically converts Apple Notes Checklist to Tiptap taskList format
 - **Factory reset**: Wipe all data and reset admin account, requires typing `RESET` to confirm
 
 #### Settings Center
@@ -661,6 +797,26 @@ All NAS platforms with Docker support follow the same general steps:
 - Internationalization: Chinese/English language switching
 - Mobile responsive layout with touch gesture support
 - Smooth Framer Motion animations
+- Global keyboard shortcut: `Alt+N` for quick note creation
+
+#### Multi-platform Support
+- **Web**: Browser access with responsive layout for desktop and mobile
+- **Electron Desktop**: Windows (NSIS) / macOS (DMG) / Linux (AppImage), automatic backend process management, data stored in user directory
+- **Android Mobile**: Native app built with Capacitor, connects to remote server
+- **Client Mode**: Electron and Android clients support server address configuration via HTTP
+
+### NPM Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run install:all` | Install all frontend and backend dependencies |
+| `npm run dev:backend` | Start backend in development mode (port 3001) |
+| `npm run dev:frontend` | Start frontend in development mode (port 5173) |
+| `npm run build:all` | Build both frontend and backend |
+| `npm run build:frontend` | Build frontend only |
+| `npm run build:backend` | Build backend only |
+| `npm run electron:dev` | Run Electron in development mode |
+| `npm run electron:build` | Build Electron for release |
 
 ### Docker Compose Architecture
 
@@ -689,3 +845,26 @@ All NAS platforms with Docker support follow the same general steps:
 | Service | Image | Port | Volumes | Description |
 |---------|-------|------|---------|-------------|
 | nowen-note | Self-built | 3001 | nowen-note-data | Main app (frontend + backend + SQLite) |
+
+### API Routes
+
+| Path | Auth | Description |
+|------|------|-------------|
+| `/api/auth` | ✗ | Login / change password / factory reset |
+| `/api/health` | ✗ | Health check |
+| `GET /api/settings` | ✗ | Site settings (branding) |
+| `GET /api/fonts` | ✗ | Font list / font files |
+| `/api/notebooks` | ✓ | Notebook CRUD |
+| `/api/notes` | ✓ | Note CRUD |
+| `/api/tags` | ✓ | Tag management |
+| `/api/search` | ✓ | FTS5 full-text search |
+| `/api/tasks` | ✓ | Task management |
+| `/api/mindmaps` | ✓ | Mind map CRUD |
+| `/api/ai` | ✓ | AI chat + writing assistant + RAG |
+| `/api/export` | ✓ | Data import/export |
+| `/api/settings` | ✓ | Site configuration (write) |
+| `/api/fonts` | ✓ | Font upload / delete |
+| `/api/micloud` | ✓ | Mi Cloud notes import |
+| `/api/oppocloud` | ✓ | OPPO Cloud notes import |
+| `/api/icloud` | ✓ | iCloud notes import |
+| `/api/me` | ✓ | Current user info |

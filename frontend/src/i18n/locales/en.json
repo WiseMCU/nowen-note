@@ -16,7 +16,9 @@
     "daysAgo": "{{count}} days ago",
     "secondsAgo": "{{count}}s ago",
     "noteCount": "{{count}} notes",
-    "noNotes": "No notes"
+    "noNotes": "No notes",
+    "noNotesHint": "Click the button below to create your first note",
+    "newNote": "New Note"
   },
   "auth": {
     "verifying": "Verifying identity...",

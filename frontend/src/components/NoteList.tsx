@@ -490,14 +490,14 @@ export default function NoteList() {
               </div>
               <p className="text-sm font-medium text-tx-secondary mb-1">{t('common.noNotes')}</p>
               <p className="text-xs text-tx-tertiary mb-5 max-w-[200px] leading-relaxed">
-                {t('common.noNotesHint') || '点击下方按钮创建你的第一篇笔记'}
+                {t('common.noNotesHint')}
               </p>
               <button
                 onClick={handleCreateNote}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent-primary text-white text-xs font-medium hover:bg-accent-primary/90 active:scale-95 transition-all shadow-sm"
               >
                 <Plus size={14} />
-                {t('common.newNote') || '新建笔记'}
+                {t('common.newNote')}
               </button>
             </div>
           )}

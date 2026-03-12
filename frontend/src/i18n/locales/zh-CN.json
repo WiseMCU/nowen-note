@@ -16,7 +16,9 @@
     "daysAgo": "{{count}} 天前",
     "secondsAgo": "{{count}}秒前",
     "noteCount": "{{count}} 条笔记",
-    "noNotes": "暂无笔记"
+    "noNotes": "暂无笔记",
+    "noNotesHint": "点击下方按钮创建你的第一篇笔记",
+    "newNote": "新建笔记"
   },
   "auth": {
     "verifying": "正在验证身份...",

@@ -7,3 +7,7 @@ data/
 .vite/
 .codebuddy/
 release/
+release2/
+dist-electron/
+electron/node/
+$null

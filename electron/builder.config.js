@@ -11,8 +11,14 @@ module.exports = {
   files: [
     "electron/**/*",
     "!electron/builder.config.js",
+    "!electron/node/**/*",
   ],
   extraResources: [
+    {
+      from: "electron/node",
+      to: "node",
+      filter: ["**/*"],
+    },
     {
       from: "backend/dist",
       to: "backend/dist",

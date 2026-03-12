@@ -1,6 +1,7 @@
 const { app, BrowserWindow, shell } = require("electron");
 const path = require("path");
-const { fork } = require("child_process");
+const { spawn } = require("child_process");
+const fs = require("fs");
 
 let mainWindow = null;
 let backendProcess = null;
@@ -27,6 +28,19 @@ function getFrontendDist() {
   return path.join(__dirname, "..", "frontend", "dist");
 }
 
+// 查找可用的 Node.js 可执行文件
+function findNodeExecutable() {
+  // 打包后优先使用内嵌的 node
+  if (app.isPackaged) {
+    const embeddedNode = path.join(process.resourcesPath, "node", "node.exe");
+    if (fs.existsSync(embeddedNode)) {
+      return embeddedNode;
+    }
+  }
+  // 降级使用系统 node
+  return "node";
+}
+
 // 启动后端服务
 function startBackend() {
   return new Promise((resolve, reject) => {
@@ -39,11 +53,13 @@ function startBackend() {
       ? path.join(process.resourcesPath)
       : path.join(__dirname, "..");
 
+    const nodeExe = findNodeExecutable();
     console.log("[Electron] Starting backend:", backendEntry);
+    console.log("[Electron] Using node:", nodeExe);
     console.log("[Electron] DB path:", dbPath);
     console.log("[Electron] Backend CWD:", backendCwd);
 
-    backendProcess = fork(backendEntry, [], {
+    backendProcess = spawn(nodeExe, [backendEntry], {
       cwd: backendCwd,
       env: {
         ...process.env,
@@ -53,7 +69,8 @@ function startBackend() {
         ELECTRON_USER_DATA: userDataPath,
         FRONTEND_DIST: getFrontendDist(),
       },
-      silent: true,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     backendProcess.stdout.on("data", (data) => {

@@ -1,5 +1,4 @@
 import { serve } from "@hono/node-server";
-import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
@@ -136,20 +135,52 @@ const port = Number(process.env.PORT) || 3001;
 // 生产模式：服务前端静态文件
 if (process.env.NODE_ENV === "production") {
   const frontendDist = process.env.FRONTEND_DIST || path.resolve(process.cwd(), "frontend/dist");
-  // 静态资源（排除 /api 路径）
-  app.use("/*", async (c, next) => {
-    if (c.req.path.startsWith("/api")) {
-      return next();
-    }
-    const mw = serveStatic({ root: frontendDist });
-    return mw(c, next);
-  });
-  // SPA fallback（排除 /api 路径）
+  console.log("[Static] Serving frontend from:", frontendDist);
+
+  // MIME 类型映射
+  const mimeTypes: Record<string, string> = {
+    ".html": "text/html",
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".eot": "application/vnd.ms-fontobject",
+    ".webp": "image/webp",
+    ".map": "application/json",
+  };
+
+  // 静态资源 + SPA fallback（排除 /api 路径）
   app.get("*", (c) => {
     if (c.req.path.startsWith("/api")) {
       return c.json({ error: "Not Found" }, 404);
     }
-    return c.html(fs.readFileSync(path.join(frontendDist, "index.html"), "utf-8"));
+    // 尝试提供静态文件
+    const reqPath = c.req.path === "/" ? "/index.html" : c.req.path;
+    const filePath = path.join(frontendDist, reqPath);
+    // 安全检查：防止路径遍历
+    if (!filePath.startsWith(frontendDist)) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      const ext = path.extname(filePath).toLowerCase();
+      const contentType = mimeTypes[ext] || "application/octet-stream";
+      const content = fs.readFileSync(filePath);
+      return c.body(content, 200, { "Content-Type": contentType });
+    }
+    // SPA fallback：返回 index.html
+    const indexPath = path.join(frontendDist, "index.html");
+    if (fs.existsSync(indexPath)) {
+      return c.html(fs.readFileSync(indexPath, "utf-8"));
+    }
+    return c.json({ error: "Not Found" }, 404);
   });
 }
 

@@ -18,6 +18,7 @@ import micloudRouter from "./routes/micloud";
 import oppoCloudRouter from "./routes/oppocloud";
 import icloudRouter from "./routes/icloud";
 import mindmapsRouter from "./routes/mindmaps";
+import diaryRouter from "./routes/diary";
 
 import aiRouter from "./routes/ai";
 import authRouter, { JWT_SECRET } from "./routes/auth";

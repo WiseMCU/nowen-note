@@ -1,4 +1,4 @@
-import { Notebook, Note, NoteListItem, Tag, SearchResult, User, Task, TaskStats, TaskFilter, CustomFont, MindMap, MindMapListItem } from "@/types";
+import { Notebook, Note, NoteListItem, Tag, SearchResult, User, Task, TaskStats, TaskFilter, CustomFont, MindMap, MindMapListItem, Diary, DiaryTimeline, DiaryStats } from "@/types";
 
 // 服务器地址管理
 const SERVER_URL_KEY = "nowen-server-url";
@@ -190,15 +190,18 @@ export const api = {
     request<MindMap>(`/mindmaps/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteMindMap: (id: string) => request(`/mindmaps/${id}`, { method: "DELETE" }),
 
-  // Diary
-  getDiaryMonth: (year: number, month: number) =>
-    request<DiaryListItem[]>(`/diary/month/${year}/${String(month).padStart(2, "0")}`),
-  getDiaryByDate: (date: string) =>
-    request<Diary | null>(`/diary/date/${date}`),
-  saveDiary: (date: string, data: { content?: string; contentText?: string; mood?: string; weather?: string }) =>
-    request<Diary>(`/diary/date/${date}`, { method: "PUT", body: JSON.stringify(data) }),
+  // Diary (说说/动态)
+  postDiary: (data: { contentText: string; mood?: string }) =>
+    request<Diary>("/diary", { method: "POST", body: JSON.stringify(data) }),
+  getDiaryTimeline: (cursor?: string, limit?: number) => {
+    const params = new URLSearchParams();
+    if (cursor) params.set("cursor", cursor);
+    if (limit) params.set("limit", String(limit));
+    const qs = params.toString();
+    return request<DiaryTimeline>(`/diary/timeline${qs ? `?${qs}` : ""}`);
+  },
   deleteDiary: (id: string) => request(`/diary/${id}`, { method: "DELETE" }),
-  getDiaryStats: () => request<DiaryStats>("/diary/stats/summary"),
+  getDiaryStats: () => request<DiaryStats>("/diary/stats"),
 
   // AI
   getAISettings: () =>

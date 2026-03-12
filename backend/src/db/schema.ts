@@ -141,23 +141,17 @@ function initSchema(db: Database.Database) {
       createdAt TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    -- 日记表（一天一篇）
+    -- 说说/动态表
     CREATE TABLE IF NOT EXISTS diaries (
       id TEXT PRIMARY KEY,
       userId TEXT NOT NULL,
-      date TEXT NOT NULL,
-      content TEXT DEFAULT '{}',
       contentText TEXT DEFAULT '',
       mood TEXT DEFAULT '',
-      weather TEXT DEFAULT '',
-      wordCount INTEGER DEFAULT 0,
       createdAt TEXT NOT NULL DEFAULT (datetime('now')),
-      updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
-      UNIQUE(userId, date)
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
     );
 
-    CREATE INDEX IF NOT EXISTS idx_diaries_user_date ON diaries(userId, date);
+    CREATE INDEX IF NOT EXISTS idx_diaries_user_created ON diaries(userId, createdAt DESC);
 
     -- 全文搜索虚拟表
     CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -201,5 +195,25 @@ function initSchema(db: Database.Database) {
     db.prepare("SELECT isLocked FROM notes LIMIT 1").get();
   } catch {
     db.prepare("ALTER TABLE notes ADD COLUMN isLocked INTEGER DEFAULT 0").run();
+  }
+
+  // 迁移：如果旧版 diaries 表有 date 列，删掉重建
+  try {
+    db.prepare("SELECT date FROM diaries LIMIT 1").get();
+    // 旧表存在 date 列 → 重建
+    db.exec("DROP TABLE IF EXISTS diaries");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS diaries (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        contentText TEXT DEFAULT '',
+        mood TEXT DEFAULT '',
+        createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_diaries_user_created ON diaries(userId, createdAt DESC);
+    `);
+  } catch {
+    // 新表或表不存在，跳过
   }
 }

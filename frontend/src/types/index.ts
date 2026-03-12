@@ -152,30 +152,18 @@ export interface MindMapListItem {
 export interface Diary {
   id: string;
   userId: string;
-  date: string; // YYYY-MM-DD
-  content: string;
   contentText: string;
   mood: string;
-  weather: string;
-  wordCount: number;
   createdAt: string;
-  updatedAt: string;
 }
 
-export interface DiaryListItem {
-  id: string;
-  date: string;
-  mood: string;
-  weather: string;
-  wordCount: number;
-  preview: string;
-  createdAt: string;
-  updatedAt: string;
+export interface DiaryTimeline {
+  items: Diary[];
+  hasMore: boolean;
+  nextCursor: string | null;
 }
 
 export interface DiaryStats {
   total: number;
-  totalWords: number;
-  streak: number;
-  monthCount: number;
+  todayCount: number;
 }

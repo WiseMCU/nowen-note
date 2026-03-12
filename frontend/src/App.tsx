@@ -195,6 +195,11 @@ function AppLayout() {
           <MobileTopBar />
           <AIChatPanel onClose={() => actions.setViewMode("all")} />
         </div>
+      ) : isDiaryView ? (
+        <div className="flex-1 flex flex-col">
+          <MobileTopBar />
+          <DiaryCenter />
+        </div>
       ) : (
         <div className="flex-1 flex relative overflow-hidden">
           {/* 笔记列表 — 桌面端动态宽度，移动端全宽 */}

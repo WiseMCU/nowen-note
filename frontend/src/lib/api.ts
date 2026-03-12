@@ -190,6 +190,16 @@ export const api = {
     request<MindMap>(`/mindmaps/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteMindMap: (id: string) => request(`/mindmaps/${id}`, { method: "DELETE" }),
 
+  // Diary
+  getDiaryMonth: (year: number, month: number) =>
+    request<DiaryListItem[]>(`/diary/month/${year}/${String(month).padStart(2, "0")}`),
+  getDiaryByDate: (date: string) =>
+    request<Diary | null>(`/diary/date/${date}`),
+  saveDiary: (date: string, data: { content?: string; contentText?: string; mood?: string; weather?: string }) =>
+    request<Diary>(`/diary/date/${date}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteDiary: (id: string) => request(`/diary/${id}`, { method: "DELETE" }),
+  getDiaryStats: () => request<DiaryStats>("/diary/stats/summary"),
+
   // AI
   getAISettings: () =>
     request<{ ai_provider: string; ai_api_url: string; ai_api_key: string; ai_api_key_set: boolean; ai_model: string }>("/ai/settings"),

@@ -116,6 +116,7 @@ app.route("/api/micloud", micloudRouter);
 app.route("/api/oppocloud", oppoCloudRouter);
 app.route("/api/icloud", icloudRouter);
 app.route("/api/mindmaps", mindmapsRouter);
+app.route("/api/diary", diaryRouter);
 app.route("/api/ai", aiRouter);
 
 app.route("/api/settings", settingsRouter);

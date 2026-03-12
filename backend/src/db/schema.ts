@@ -141,6 +141,24 @@ function initSchema(db: Database.Database) {
       createdAt TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- 日记表（一天一篇）
+    CREATE TABLE IF NOT EXISTS diaries (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
+      date TEXT NOT NULL,
+      content TEXT DEFAULT '{}',
+      contentText TEXT DEFAULT '',
+      mood TEXT DEFAULT '',
+      weather TEXT DEFAULT '',
+      wordCount INTEGER DEFAULT 0,
+      createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+      updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(userId, date)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_diaries_user_date ON diaries(userId, date);
+
     -- 全文搜索虚拟表
     CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
       title,

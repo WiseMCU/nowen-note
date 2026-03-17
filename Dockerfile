@@ -3,6 +3,8 @@ FROM node:20-slim AS frontend-build
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
+# 补装当前平台(Linux)的 rollup 原生绑定，因为 lock 文件可能来自其他平台(Windows/Mac)
+RUN npm install @rollup/rollup-linux-x64-gnu --save-optional 2>/dev/null || true
 COPY frontend/ .
 RUN npx vite build
 

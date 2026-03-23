@@ -491,6 +491,26 @@ export const api = {
     return res.json();
   },
 
+  // Pipelines (批处理管道)
+  getPipelines: () => request<any[]>("/pipelines"),
+  createPipeline: (data: { name: string; description?: string; icon?: string; steps: any[] }) =>
+    request<any>("/pipelines", { method: "POST", body: JSON.stringify(data) }),
+  updatePipeline: (id: string, data: { name?: string; description?: string; icon?: string; steps?: any[] }) =>
+    request<any>(`/pipelines/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deletePipeline: (id: string) => request(`/pipelines/${id}`, { method: "DELETE" }),
+  runPipeline: (id: string, noteIds: string[]) =>
+    request<{
+      runId: string;
+      pipelineId: string;
+      pipelineName: string;
+      total: number;
+      success: number;
+      failed: number;
+      results: { noteId: string; title: string; success: boolean; steps: { type: string; success: boolean; error?: string }[] }[];
+    }>(`/pipelines/${id}/run`, { method: "POST", body: JSON.stringify({ noteIds }) }),
+  getPipelineRuns: () => request<any[]>("/pipelines/runs"),
+  getPipelineStepTypes: () => request<{ type: string; name: string; icon: string; description: string }[]>("/pipelines/step-types"),
+
 };
 
 // 测试服务器连接（不需要 token）

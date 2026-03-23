@@ -10,7 +10,7 @@ A self-hosted private knowledge base, inspired by Synology Note Station.
 
 ### 简介
 
-nowen-note 是一款自托管的私有化知识管理应用，采用现代前后端分离架构，支持 Docker 一键部署、Electron 桌面客户端、Android 移动端（Capacitor）。集成 Tiptap 富文本编辑器、AI 智能写作助手（支持 6 大 AI 服务商 + 本地 Ollama）、思维导图、任务管理中心、FTS5 全文搜索、多平台数据导入（小米/OPPO/iCloud）、数据导出等功能，打造一体化知识管理平台。
+nowen-note 是一款自托管的私有化知识管理应用，采用现代前后端分离架构，支持 Docker 一键部署、Electron 桌面客户端、Android 移动端（Capacitor）。集成 Tiptap 富文本编辑器、AI 智能写作助手（支持 6 大 AI 服务商 + 本地 Ollama）、思维导图、任务管理中心、FTS5 全文搜索、笔记分享协作（密码保护/有效期/评论批注）、版本历史回溯、批处理管道（AI 增强）、插件系统、Webhook 事件推送、审计日志、数据备份恢复、多平台数据导入（小米/OPPO/iCloud）、数据导出等功能，打造一体化知识管理平台。同时提供 MCP Server（22 个 AI 工具）、TypeScript SDK 和命令行工具（CLI），构建完整的开发者生态系统。
 
 ### 技术栈
 
@@ -30,6 +30,7 @@ nowen-note 是一款自托管的私有化知识管理应用，采用现代前后
 | Markdown | react-markdown + remark-gfm（AI 聊天渲染）                   |
 | 桌面端   | Electron 33（NSIS / DMG / AppImage 打包）                    |
 | 移动端   | Capacitor 8（Android 原生壳）                                 |
+| 开发者工具 | MCP Server + TypeScript SDK + CLI                           |
 
 ### 项目结构
 
@@ -37,10 +38,10 @@ nowen-note 是一款自托管的私有化知识管理应用，采用现代前后
 nowen-note/
 ├── frontend/              # 前端 React 应用
 │   ├── src/
-│   │   ├── components/    # 组件
+│   │   ├── components/    # 组件（28 个）
 │   │   │   ├── Sidebar.tsx            # 侧边栏（笔记本树 + 导航 + 标签）
 │   │   │   ├── NoteList.tsx           # 笔记列表（多视图 + 右键菜单）
-│   │   │   ├── EditorPane.tsx         # 编辑器面板（AI 标题/标签 + 大纲 + 锁定）
+│   │   │   ├── EditorPane.tsx         # 编辑器面板（AI 标题/标签 + 大纲 + 锁定 + 分享 + 版本历史）
 │   │   │   ├── TiptapEditor.tsx       # Tiptap 富文本编辑器
 │   │   │   ├── AIChatPanel.tsx        # AI 知识库问答面板（RAG + Markdown 渲染）
 │   │   │   ├── AIWritingAssistant.tsx # AI 写作助手（10 种文本操作）
@@ -48,6 +49,12 @@ nowen-note/
 │   │   │   ├── TaskCenter.tsx         # 任务管理中心
 │   │   │   ├── MindMapEditor.tsx      # 思维导图编辑器
 │   │   │   ├── DiaryCenter.tsx        # 说说/动态（微博风格时间线）
+│   │   │   ├── CodexPanel.tsx         # 批处理管道面板（Codex 可视化流水线）
+│   │   │   ├── ShareModal.tsx         # 分享弹窗（链接生成 + 密码 + 有效期 + 权限）
+│   │   │   ├── SharedNoteView.tsx     # 公开分享笔记查看页
+│   │   │   ├── CommentPanel.tsx       # 评论批注面板（行内锚点 + 回复 + 解决）
+│   │   │   ├── VersionHistoryPanel.tsx # 版本历史面板（版本对比 + 回滚）
+│   │   │   ├── TagColorPicker.tsx     # 标签颜色选择器
 │   │   │   ├── LoginPage.tsx          # 登录页
 │   │   │   ├── ServerConnect.tsx      # 服务器连接配置（客户端模式）
 │   │   │   ├── ContextMenu.tsx        # 通用右键菜单组件
@@ -76,11 +83,11 @@ nowen-note/
 │   └── android/           # Android 原生壳
 ├── backend/               # 后端 Hono 应用
 │   └── src/
-│       ├── db/            # 数据库 Schema & 迁移（9 张表 + FTS5）
-│       ├── routes/        # API 路由（15 个模块）
+│       ├── db/            # 数据库 Schema & 迁移（16 张表 + FTS5）
+│       ├── routes/        # API 路由（21 个模块）
 │       │   ├── auth.ts        # 认证（登录/改密/恢复出厂）
 │       │   ├── notebooks.ts   # 笔记本 CRUD（无限层级）
-│       │   ├── notes.ts       # 笔记 CRUD（锁定/置顶/收藏）
+│       │   ├── notes.ts       # 笔记 CRUD（锁定/置顶/收藏 + Webhook/审计集成）
 │       │   ├── tags.ts        # 标签管理
 │       │   ├── tasks.ts       # 待办任务（子任务/优先级/截止日期）
 │       │   ├── mindmaps.ts    # 思维导图 CRUD
@@ -88,12 +95,47 @@ nowen-note/
 │       │   ├── ai.ts          # AI 聊天 + 写作助手 + RAG 知识问答
 │       │   ├── search.ts      # FTS5 全文搜索
 │       │   ├── export.ts      # 数据导入导出
+│       │   ├── shares.ts      # 笔记分享（链接/密码/权限/评论/版本历史）
+│       │   ├── pipelines.ts   # 批处理管道引擎（5 种步骤类型）
+│       │   ├── plugins.ts     # 插件管理与执行
+│       │   ├── webhooks.ts    # Webhook 管理（CRUD + 测试 + 投递日志）
+│       │   ├── audit.ts       # 审计日志（查询/统计/清理）
+│       │   ├── backups.ts     # 数据备份与恢复
 │       │   ├── settings.ts    # 站点配置（标题/图标/字体）
 │       │   ├── fonts.ts       # 自定义字体管理（上传/下载/删除）
 │       │   ├── micloud.ts     # 小米云笔记导入 API
 │       │   ├── oppocloud.ts   # OPPO 云便签导入 API
 │       │   └── icloud.ts      # iPhone/iCloud 备忘录导入 API
-│       └── index.ts       # 入口文件（JWT 中间件 + 路由注册 + 静态文件托管）
+│       ├── services/      # 服务层
+│       │   ├── webhook.ts     # Webhook 事件分发（HMAC-SHA256 签名 + 重试）
+│       │   ├── audit.ts       # 审计日志记录器
+│       │   ├── backup.ts      # 备份管理器（全量/增量 + 自动定时）
+│       │   └── openapi.ts     # OpenAPI 3.0 规范生成
+│       ├── plugins/       # 插件系统
+│       │   └── plugin-loader.ts  # 插件加载器（热加载 + 沙箱执行）
+│       └── index.ts       # 入口文件（JWT 中间件 + 速率限制 + 路由注册 + 静态文件托管）
+├── packages/              # 开发者工具包
+│   ├── nowen-mcp/         # MCP Server（22 个 AI 工具 + 资源）
+│   │   └── src/
+│   │       ├── index.ts       # MCP 工具注册
+│   │       └── api-client.ts  # API 客户端
+│   ├── nowen-sdk/         # TypeScript SDK（60+ API 方法）
+│   │   └── src/
+│   │       ├── client.ts      # NowenClient 完整 API
+│   │       ├── types.ts       # 类型定义
+│   │       └── index.ts       # 导出入口
+│   └── nowen-cli/         # 命令行工具（8 组命令）
+│       └── src/
+│           ├── cli.ts         # CLI 入口 + Commander 注册
+│           └── commands/      # 命令模块
+│               ├── notes.ts       # 笔记命令
+│               ├── notebooks.ts   # 笔记本命令
+│               ├── tags.ts        # 标签命令
+│               ├── tasks.ts       # 任务命令
+│               ├── search.ts      # 搜索命令
+│               ├── ai.ts          # AI 命令
+│               ├── pipelines.ts   # 管道命令
+│               └── config.ts      # 配置命令
 ├── electron/              # Electron 桌面端
 │   ├── main.js            # 主进程（fork 后端 + 创建窗口）
 │   ├── builder.config.js  # electron-builder 打包配置
@@ -267,7 +309,7 @@ storeFile=你的keystore路径
 3. **访问使用**
    - 浏览器访问 `http://<群晖IP>:3001`
 
-> **提示：** 数据备份只需复制 `/docker/nowen-note/data/nowen-note.db` 文件。可使用群晖 Hyper Backup 定期备份该目录。
+> **提示：** 数据备份只需复制 `/docker/nowen-note/data/nowen-note.db` 文件。可使用群晖 Hyper Backup 定期备份该目录。也可通过 API `/api/backups` 进行在线备份管理。
 
 ---
 
@@ -369,7 +411,8 @@ storeFile=你的keystore路径
 #### 通用注意事项
 
 - **数据持久化**：务必将容器内的 `/app/data` 目录映射到宿主机，否则容器删除后数据丢失
-- **数据备份**：只需备份映射目录中的 `nowen-note.db` 文件
+- **数据备份**：支持两种方式 — 直接备份 `nowen-note.db` 文件，或通过 API `/api/backups` 在线创建/下载备份
+- **自动备份**：服务启动后自动开启每 24 小时数据库备份，保留最近 10 个自动备份
 - **端口冲突**：如 3001 端口被占用，可修改主机端口映射（如 `8080:3001`）
 - **安全建议**：首次登录后请立即修改默认密码；如需外网访问，建议搭配反向代理（Nginx / Caddy）并启用 HTTPS
 - **Ollama**：如需本地 AI 推理，请自行部署 Ollama 服务并配置 `OLLAMA_URL` 环境变量
@@ -427,6 +470,23 @@ storeFile=你的keystore路径
 - **卡片式 Provider 选择**：渐变色图标、配置状态指示、自动填充 URL 和模型
 - **连接测试 & 模型列表拉取**：实时验证配置可用性
 
+#### 笔记分享协作
+- **链接分享**：一键生成分享链接，支持复制短链接
+- **密码保护**：可选设置访问密码，前端密码验证页面
+- **有效期控制**：支持 1 小时 / 1 天 / 7 天 / 30 天 / 永久
+- **最大访问次数**：可限制分享链接的查看次数
+- **权限管理**：只读 / 可评论两种权限模式
+- **评论批注**：支持行内锚点批注、回复、标记已解决
+- **分享管理**：查看所有分享链接、访问统计、一键禁用/删除
+- **安全防护**：速率限制（每分钟 60 次访问 + 密码验证每分钟 10 次）、安全响应头
+
+#### 版本历史
+- **自动记录**：笔记每次保存自动创建版本快照
+- **版本列表**：按时间倒序展示所有历史版本
+- **版本对比**：查看任意版本的标题和内容
+- **版本回滚**：一键恢复到历史版本
+- **变更摘要**：自动记录变更类型（编辑/创建/回滚）
+
 #### 思维导图
 - 可视化脑图编辑器，自研树形布局算法
 - 节点操作：新增子节点、编辑、删除、折叠/展开
@@ -450,6 +510,58 @@ storeFile=你的keystore路径
 - **动态卡片**：内容 + 心情 emoji + 相对时间显示 + 删除（二次确认）
 - **时间线分组**：按日期自动分组（今天/昨天/具体日期），游标分页加载更多
 - **统计概览**：总动态数 + 今日发布数
+
+#### 批处理管道（Codex）
+- **可视化流水线编辑器**：拖拽式步骤排列，实时预览执行结果
+- **5 种步骤类型**：
+  - AI 摘要 — 自动为笔记生成摘要
+  - AI 翻译 — 批量翻译笔记内容
+  - AI 标签 — 智能推荐并关联标签
+  - 内容格式化 — 自动优化排版
+  - 导出 — 批量导出为 Markdown/HTML/JSON
+- **内置管道模板**：预置常用管道（周报生成、知识整理、翻译管线等）
+- **批量选择笔记**：支持多选笔记作为管道输入
+- **执行进度**：实时展示每个步骤的执行状态和结果
+
+#### 插件系统
+- **热加载**：自动扫描 `data/plugins/` 目录加载插件
+- **沙箱执行**：隔离运行插件代码，防止系统影响
+- **标准化接口**：插件声明 `manifest.json`（名称/版本/能力）
+- **能力注册**：`note-processor`（笔记处理）、`exporter`（导出器）等
+- **API 管理**：列出插件 / 重新加载 / 执行指定插件
+
+#### Webhook 事件系统
+- **12 种事件类型**：
+  - `note.created` / `note.updated` / `note.deleted` / `note.trashed`
+  - `notebook.created` / `notebook.deleted`
+  - `tag.created`
+  - `task.created` / `task.completed`
+  - `pipeline.completed`
+  - `plugin.executed`
+  - `*`（通配：接收所有事件）
+- **HMAC-SHA256 签名**：`X-Nowen-Signature` 请求头，防止伪造
+- **自动重试**：最多 3 次，指数退避（1s → 2s → 4s）
+- **10 秒超时**：防止回调卡住
+- **投递日志**：完整记录每次推送的状态码、响应体、尝试次数
+- **测试发送**：一键发送测试事件验证 Webhook 配置
+
+#### 审计日志
+- **10 大分类**：auth / note / notebook / tag / task / share / ai / pipeline / plugin / system
+- **3 个级别**：info / warn / error
+- **自动记录**：笔记创建/删除等关键操作自动写入审计日志
+- **多维查询**：按用户/分类/级别/目标/日期范围/分页查询
+- **统计看板**：总记录数、今日操作数、按分类/级别统计
+- **自动清理**：支持配置保留天数（默认 90 天），定期清理过期日志
+
+#### 数据备份与恢复
+- **两种备份模式**：
+  - `db-only` — 仅备份数据库文件（SQLite 在线备份）
+  - `full` — 全量备份（JSON 导出所有表数据）
+- **自动备份**：服务启动后每 24 小时自动创建数据库备份，保留最近 10 个
+- **SHA256 校验**：每个备份文件自动生成校验和
+- **在线下载**：通过 API 直接下载备份文件
+- **一键恢复**：从全量备份事务恢复，显示每张表恢复的行数
+- **备份管理**：列出 / 创建 / 下载 / 删除备份
 
 #### 全文搜索
 - 基于 SQLite FTS5 虚拟表
@@ -506,6 +618,185 @@ storeFile=你的keystore路径
 - **Android 移动端**：基于 Capacitor 构建原生应用，自定义品牌图标，支持 Release 签名打包，连接远程服务器使用
 - **客户端模式**：Electron 和 Android 端支持配置服务器地址，通过 HTTP 连接到已部署的后端
 
+### 开发者工具
+
+#### MCP Server（`nowen-mcp`）
+
+为 AI 助手（Claude、Cursor、Windsurf 等）提供 22 个可调用的工具和资源，实现 AI 直接操作笔记系统。
+
+**安装与配置：**
+```json
+{
+  "mcpServers": {
+    "nowen-note": {
+      "command": "npx",
+      "args": ["tsx", "packages/nowen-mcp/src/index.ts"],
+      "env": {
+        "NOWEN_API_URL": "http://localhost:3001",
+        "NOWEN_TOKEN": "你的JWT Token"
+      }
+    }
+  }
+}
+```
+
+**工具列表（22 个）：**
+
+| 工具 | 说明 |
+|------|------|
+| `nowen_list_notebooks` | 获取笔记本列表（树形） |
+| `nowen_create_notebook` | 创建笔记本 |
+| `nowen_list_notes` | 获取笔记列表 |
+| `nowen_get_note` | 获取笔记详情 |
+| `nowen_create_note` | 创建笔记 |
+| `nowen_update_note` | 更新笔记 |
+| `nowen_delete_note` | 删除笔记 |
+| `nowen_search_notes` | 全文搜索 |
+| `nowen_list_tags` | 获取标签列表 |
+| `nowen_create_tag` | 创建标签 |
+| `nowen_list_tasks` | 获取任务列表 |
+| `nowen_create_task` | 创建任务 |
+| `nowen_toggle_task` | 切换任务完成状态 |
+| `nowen_ai_chat` | AI 知识库问答 |
+| `nowen_list_pipelines` | 获取管道列表 |
+| `nowen_run_pipeline` | 执行批处理管道 |
+| `nowen_list_webhooks` | 获取 Webhook 列表 |
+| `nowen_create_webhook` | 创建 Webhook |
+| `nowen_audit_stats` | 审计统计 |
+| `nowen_list_backups` | 获取备份列表 |
+| `nowen_create_backup` | 创建数据备份 |
+| `nowen_list_plugins` | 获取插件列表 |
+
+#### TypeScript SDK（`@nowen/sdk`）
+
+提供 60+ 类型安全的 API 方法，完整覆盖所有后端能力。
+
+**安装：**
+```bash
+npm install @nowen/sdk
+```
+
+**使用示例：**
+```typescript
+import { NowenClient } from "@nowen/sdk";
+
+const client = new NowenClient({
+  baseUrl: "http://localhost:3001",
+  token: "your-jwt-token",
+});
+
+// 获取笔记列表
+const notes = await client.listNotes({ notebookId: "xxx" });
+
+// 创建笔记
+const note = await client.createNote({
+  notebookId: "xxx",
+  title: "新笔记",
+  content: "...",
+});
+
+// AI 知识问答
+const answer = await client.askAI("项目有哪些新功能？");
+
+// 创建 Webhook
+const webhook = await client.createWebhook({
+  url: "https://your-server.com/hook",
+  events: ["note.created", "note.updated"],
+});
+
+// 创建备份
+const backup = await client.createBackup("full");
+```
+
+**API 分组：**
+
+| 分组 | 方法数 | 能力 |
+|------|--------|------|
+| 认证 | 3 | 登录 / 验证 / 改密 |
+| 笔记本 | 4 | CRUD |
+| 笔记 | 8 | CRUD + 收藏/置顶/锁定/移动 |
+| 标签 | 4 | CRUD + 笔记关联 |
+| 任务 | 5 | CRUD + 切换状态 + 统计 |
+| 搜索 | 1 | 全文搜索 |
+| AI | 5 | 聊天/问答/设置/模型/知识统计 |
+| 导出 | 2 | 导出/导入 |
+| 管道 | 4 | 列表/创建/执行/步骤类型 |
+| 插件 | 3 | 列表/重新加载/执行 |
+| 分享 | 4 | 创建/列表/删除/更新 |
+| 思维导图 | 4 | CRUD |
+| Webhook | 6 | CRUD + 测试 + 投递日志 |
+| 审计 | 3 | 查询/统计/清理 |
+| 备份 | 5 | 列表/创建/恢复/删除/自动备份 |
+| 系统 | 3 | 健康检查/设置/用户信息 |
+
+#### 命令行工具（`nowen-cli`）
+
+终端中管理笔记系统，支持 8 组命令。
+
+**安装与配置：**
+```bash
+# 安装依赖
+cd packages/nowen-cli && npm install
+
+# 配置服务器
+npx nowen config set-url http://localhost:3001
+npx nowen config set-token <your-jwt-token>
+
+# 查看配置
+npx nowen config show
+```
+
+**命令列表：**
+
+```bash
+# 笔记操作
+nowen notes list [--notebook <id>]        # 列出笔记
+nowen notes get <id>                       # 查看笔记
+nowen notes create --notebook <id> --title "标题"  # 创建笔记
+nowen notes update <id> --title "新标题"   # 更新笔记
+nowen notes delete <id>                    # 删除笔记
+nowen notes search <关键词>                # 搜索笔记
+
+# 笔记本操作
+nowen notebooks list                       # 列出笔记本
+nowen notebooks create --name "名称"       # 创建笔记本
+
+# 标签操作
+nowen tags list                            # 列出标签
+nowen tags create --name "标签名"          # 创建标签
+
+# 任务操作
+nowen tasks list [--status <状态>]         # 列出任务
+nowen tasks create --title "任务名"        # 创建任务
+nowen tasks toggle <id>                    # 切换完成状态
+
+# 搜索
+nowen search <关键词>                      # 全文搜索
+
+# AI
+nowen ai ask "你的问题"                    # 知识库问答
+nowen ai chat "对话内容"                   # AI 对话
+
+# 管道
+nowen pipelines list                       # 列出管道
+nowen pipelines run <id> --notes <id1,id2> # 执行管道
+
+# 配置
+nowen config show                          # 显示配置
+nowen config set-url <url>                 # 设置服务器地址
+nowen config set-token <token>             # 设置 JWT Token
+```
+
+#### OpenAPI 规范
+
+提供完整的 OpenAPI 3.0 规范文档，可供 Swagger UI、Postman 等工具消费。
+
+```
+GET http://localhost:3001/api/openapi.json
+```
+
+覆盖 16 个 API 分组、50+ 端点，包含完整的请求/响应 Schema 定义。
+
 ### NPM 脚本
 
 | 命令 | 说明 |
@@ -549,7 +840,7 @@ storeFile=你的keystore路径
 
 ### 数据库设计
 
-10 张数据表 + 1 张 FTS5 全文搜索虚拟表：
+16 张数据表 + 1 张 FTS5 全文搜索虚拟表：
 
 | 表名 | 说明 |
 |------|------|
@@ -563,6 +854,12 @@ storeFile=你的keystore路径
 | `diaries` | 说说/动态（内容 + 心情 + 时间戳） |
 | `system_settings` | 系统设置键值对（含 AI 配置） |
 | `custom_fonts` | 自定义字体 |
+| `shares` | 分享记录（链接/密码/权限/有效期/访问统计） |
+| `note_versions` | 笔记版本历史 |
+| `share_comments` | 评论批注（行内锚点 + 回复 + 已解决标记） |
+| `webhooks` | Webhook 配置（URL/事件/密钥/状态） |
+| `webhook_deliveries` | Webhook 投递日志（响应状态/重试次数） |
+| `audit_logs` | 审计日志（10 分类 + 3 级别 + 操作详情） |
 | `notes_fts` | FTS5 全文搜索虚拟表（通过触发器自动同步） |
 
 ### API 路由一览
@@ -571,8 +868,10 @@ storeFile=你的keystore路径
 |------|------|------|
 | `/api/auth` | ✗ | 登录 / 改密 / 恢复出厂 |
 | `/api/health` | ✗ | 健康检查 |
+| `/api/openapi.json` | ✗ | OpenAPI 3.0 规范文档 |
 | `GET /api/settings` | ✗ | 站点设置（品牌信息） |
 | `GET /api/fonts` | ✗ | 字体列表 / 字体文件 |
+| `/api/shared` | ✗ | 分享公开访问（速率限制） |
 | `/api/notebooks` | ✓ | 笔记本 CRUD |
 | `/api/notes` | ✓ | 笔记 CRUD |
 | `/api/tags` | ✓ | 标签管理 |
@@ -581,6 +880,12 @@ storeFile=你的keystore路径
 | `/api/mindmaps` | ✓ | 思维导图 CRUD |
 | `/api/diary` | ✓ | 说说/动态（发布/时间线/删除/统计） |
 | `/api/ai` | ✓ | AI 聊天 + 写作助手 + RAG |
+| `/api/shares` | ✓ | 分享管理（创建/列表/更新/删除） |
+| `/api/pipelines` | ✓ | 批处理管道（列表/创建/执行/步骤类型） |
+| `/api/plugins` | ✓ | 插件（列表/重新加载/执行） |
+| `/api/webhooks` | ✓ | Webhook（CRUD + 测试 + 投递日志） |
+| `/api/audit` | ✓ | 审计日志（查询/统计/清理） |
+| `/api/backups` | ✓ | 备份恢复（列表/创建/下载/恢复/自动） |
 | `/api/export` | ✓ | 数据导入导出 |
 | `/api/settings` | ✓ | 站点配置（写操作） |
 | `/api/fonts` | ✓ | 字体上传 / 删除 |
@@ -595,7 +900,7 @@ storeFile=你的keystore路径
 
 ### Introduction
 
-nowen-note is a self-hosted private knowledge management application with a modern frontend-backend separated architecture. It supports one-click Docker deployment, Electron desktop client, and Android mobile app (Capacitor). Featuring a Tiptap rich-text editor, AI-powered writing assistant (supporting 6 major AI providers + local Ollama), mind mapping, task management, moments/status updates, FTS5 full-text search, calendar filtering, multi-platform data import (Xiaomi / OPPO / iCloud), data export, and more — an all-in-one knowledge management platform.
+nowen-note is a self-hosted private knowledge management application with a modern frontend-backend separated architecture. It supports one-click Docker deployment, Electron desktop client, and Android mobile app (Capacitor). Featuring a Tiptap rich-text editor, AI-powered writing assistant (supporting 6 major AI providers + local Ollama), mind mapping, task management, moments/status updates, FTS5 full-text search, note sharing & collaboration (password protection / expiry / comments), version history, batch processing pipelines (AI-enhanced), plugin system, Webhook event notifications, audit logging, data backup & restore, multi-platform data import (Xiaomi / OPPO / iCloud), data export, and more — an all-in-one knowledge management platform. It also provides an MCP Server (22 AI tools), TypeScript SDK, and CLI, forming a complete developer ecosystem.
 
 ### Tech Stack
 
@@ -615,6 +920,7 @@ nowen-note is a self-hosted private knowledge management application with a mode
 | Markdown      | react-markdown + remark-gfm (AI chat rendering)                              |
 | Desktop       | Electron 33 (NSIS / DMG / AppImage packaging)                                |
 | Mobile        | Capacitor 8 (Android native shell)                                            |
+| Dev Tools     | MCP Server + TypeScript SDK + CLI                                             |
 
 ### Installation & Deployment
 
@@ -724,7 +1030,6 @@ On first launch, configure the server address (IP:port or domain) to connect to 
 
 **Android Icon:** Custom-designed Nowen Note brand icon — dark background (#0D1117) + white note paper + blue brand letter N + pencil decoration, supporting Android Adaptive Icons.
 
-#### Option 5
 #### Option 5: NAS Deployment (Synology / QNAP / UGREEN / fnOS / Zspace)
 
 All NAS platforms with Docker support follow the same general steps:
@@ -737,7 +1042,7 @@ All NAS platforms with Docker support follow the same general steps:
    - Restart policy: always / unless-stopped
 4. Visit `http://<nas-ip>:3001`
 
-> **Important:** Always map the `/app/data` directory to persist your database. Back up the `nowen-note.db` file for data safety.
+> **Important:** Always map the `/app/data` directory to persist your database. Back up the `nowen-note.db` file for data safety, or use the built-in backup API at `/api/backups`.
 
 ### Key Features
 
@@ -792,6 +1097,23 @@ All NAS platforms with Docker support follow the same general steps:
 - **Card-style provider selection**: Gradient icons, config status indicators, auto-fill URL & model
 - **Connection test & model list fetch**: Real-time configuration validation
 
+#### Note Sharing & Collaboration
+- **Link sharing**: One-click shareable link generation with short URL copy
+- **Password protection**: Optional access password with frontend verification page
+- **Expiry control**: 1 hour / 1 day / 7 days / 30 days / permanent options
+- **Max view count**: Limit the number of views for a shared link
+- **Permission management**: Read-only / commentable permission modes
+- **Inline comments**: Anchor-based inline annotations, replies, and resolved marks
+- **Share management**: View all shares, access statistics, one-click disable/delete
+- **Security**: Rate limiting (60 req/min for access + 10 req/min for password verification), security headers
+
+#### Version History
+- **Auto-snapshot**: Every save automatically creates a version snapshot
+- **Version list**: All historical versions displayed in reverse chronological order
+- **Version comparison**: View title and content of any historical version
+- **Rollback**: One-click restore to any previous version
+- **Change summary**: Automatic change type recording (edit/create/rollback)
+
 #### Mind Mapping
 - Visual mind map editor with custom tree layout algorithm
 - Node operations: add child, edit, delete, collapse/expand
@@ -815,6 +1137,58 @@ All NAS platforms with Docker support follow the same general steps:
 - **Moment cards**: Content + mood emoji + relative time display + delete (with confirmation)
 - **Timeline grouping**: Auto-grouped by date (today/yesterday/specific date), cursor-based pagination
 - **Stats overview**: Total moments count + today's post count
+
+#### Batch Processing Pipelines (Codex)
+- **Visual pipeline editor**: Drag-and-drop step arrangement with real-time preview
+- **5 step types**:
+  - AI Summary — Auto-generate note summaries
+  - AI Translation — Batch translate note content
+  - AI Tags — Smart tag recommendation and association
+  - Content Formatting — Auto optimize layout
+  - Export — Batch export as Markdown/HTML/JSON
+- **Built-in templates**: Pre-configured pipelines (weekly report, knowledge organization, translation, etc.)
+- **Batch note selection**: Multi-select notes as pipeline input
+- **Execution progress**: Real-time status and results for each step
+
+#### Plugin System
+- **Hot reload**: Auto-scan `data/plugins/` directory for plugins
+- **Sandboxed execution**: Isolated plugin code execution for safety
+- **Standardized interface**: Plugin `manifest.json` declaration (name/version/capabilities)
+- **Capability registration**: `note-processor` (note processing), `exporter` (export), etc.
+- **API management**: List plugins / reload / execute specific plugin
+
+#### Webhook Event System
+- **12 event types**:
+  - `note.created` / `note.updated` / `note.deleted` / `note.trashed`
+  - `notebook.created` / `notebook.deleted`
+  - `tag.created`
+  - `task.created` / `task.completed`
+  - `pipeline.completed`
+  - `plugin.executed`
+  - `*` (wildcard: receive all events)
+- **HMAC-SHA256 signature**: `X-Nowen-Signature` header for tamper prevention
+- **Auto-retry**: Up to 3 attempts with exponential backoff (1s → 2s → 4s)
+- **10-second timeout**: Prevents blocking on slow callbacks
+- **Delivery logs**: Complete record of each delivery (status code, response body, attempt count)
+- **Test delivery**: One-click test event to verify Webhook configuration
+
+#### Audit Logging
+- **10 categories**: auth / note / notebook / tag / task / share / ai / pipeline / plugin / system
+- **3 levels**: info / warn / error
+- **Auto-logging**: Key operations (note create/delete, etc.) automatically recorded
+- **Multi-dimensional query**: By user / category / level / target / date range / pagination
+- **Statistics dashboard**: Total records, today's operations, by-category/level breakdown
+- **Auto-cleanup**: Configurable retention period (default 90 days)
+
+#### Data Backup & Restore
+- **Two backup modes**:
+  - `db-only` — Database file backup (SQLite online backup)
+  - `full` — Full backup (JSON export of all table data)
+- **Auto-backup**: Database backup every 24 hours on startup, retains latest 10
+- **SHA256 checksum**: Auto-generated checksum for each backup file
+- **Online download**: Download backup files directly via API
+- **One-click restore**: Transactional restore from full backup, showing row counts per table
+- **Backup management**: List / create / download / delete backups
 
 #### Full-text Search
 - Based on SQLite FTS5 virtual tables
@@ -871,6 +1245,185 @@ All NAS platforms with Docker support follow the same general steps:
 - **Android Mobile**: Native app built with Capacitor, custom brand icon, Release signing support, connects to remote server
 - **Client Mode**: Electron and Android clients support server address configuration via HTTP
 
+### Developer Tools
+
+#### MCP Server (`nowen-mcp`)
+
+Provides 22 callable tools and resources for AI assistants (Claude, Cursor, Windsurf, etc.) to directly interact with the note system.
+
+**Setup:**
+```json
+{
+  "mcpServers": {
+    "nowen-note": {
+      "command": "npx",
+      "args": ["tsx", "packages/nowen-mcp/src/index.ts"],
+      "env": {
+        "NOWEN_API_URL": "http://localhost:3001",
+        "NOWEN_TOKEN": "your-jwt-token"
+      }
+    }
+  }
+}
+```
+
+**Tool List (22 tools):**
+
+| Tool | Description |
+|------|-------------|
+| `nowen_list_notebooks` | List notebooks (tree structure) |
+| `nowen_create_notebook` | Create notebook |
+| `nowen_list_notes` | List notes |
+| `nowen_get_note` | Get note details |
+| `nowen_create_note` | Create note |
+| `nowen_update_note` | Update note |
+| `nowen_delete_note` | Delete note |
+| `nowen_search_notes` | Full-text search |
+| `nowen_list_tags` | List tags |
+| `nowen_create_tag` | Create tag |
+| `nowen_list_tasks` | List tasks |
+| `nowen_create_task` | Create task |
+| `nowen_toggle_task` | Toggle task completion |
+| `nowen_ai_chat` | AI knowledge Q&A |
+| `nowen_list_pipelines` | List pipelines |
+| `nowen_run_pipeline` | Run batch pipeline |
+| `nowen_list_webhooks` | List Webhooks |
+| `nowen_create_webhook` | Create Webhook |
+| `nowen_audit_stats` | Audit statistics |
+| `nowen_list_backups` | List backups |
+| `nowen_create_backup` | Create data backup |
+| `nowen_list_plugins` | List plugins |
+
+#### TypeScript SDK (`@nowen/sdk`)
+
+Provides 60+ type-safe API methods with complete coverage of all backend capabilities.
+
+**Installation:**
+```bash
+npm install @nowen/sdk
+```
+
+**Usage Example:**
+```typescript
+import { NowenClient } from "@nowen/sdk";
+
+const client = new NowenClient({
+  baseUrl: "http://localhost:3001",
+  token: "your-jwt-token",
+});
+
+// List notes
+const notes = await client.listNotes({ notebookId: "xxx" });
+
+// Create note
+const note = await client.createNote({
+  notebookId: "xxx",
+  title: "New Note",
+  content: "...",
+});
+
+// AI knowledge Q&A
+const answer = await client.askAI("What are the new features?");
+
+// Create Webhook
+const webhook = await client.createWebhook({
+  url: "https://your-server.com/hook",
+  events: ["note.created", "note.updated"],
+});
+
+// Create backup
+const backup = await client.createBackup("full");
+```
+
+**API Groups:**
+
+| Group | Methods | Capabilities |
+|-------|---------|-------------|
+| Auth | 3 | Login / verify / change password |
+| Notebooks | 4 | CRUD |
+| Notes | 8 | CRUD + favorite/pin/lock/move |
+| Tags | 4 | CRUD + note association |
+| Tasks | 5 | CRUD + toggle status + stats |
+| Search | 1 | Full-text search |
+| AI | 5 | Chat / Q&A / settings / models / knowledge stats |
+| Export | 2 | Export / import |
+| Pipelines | 4 | List / create / run / step types |
+| Plugins | 3 | List / reload / execute |
+| Shares | 4 | Create / list / delete / update |
+| Mind Maps | 4 | CRUD |
+| Webhooks | 6 | CRUD + test + delivery logs |
+| Audit | 3 | Query / stats / cleanup |
+| Backups | 5 | List / create / restore / delete / auto-backup |
+| System | 3 | Health check / settings / user info |
+
+#### CLI (`nowen-cli`)
+
+Manage your note system from the terminal with 8 command groups.
+
+**Setup:**
+```bash
+# Install dependencies
+cd packages/nowen-cli && npm install
+
+# Configure server
+npx nowen config set-url http://localhost:3001
+npx nowen config set-token <your-jwt-token>
+
+# View config
+npx nowen config show
+```
+
+**Commands:**
+
+```bash
+# Notes
+nowen notes list [--notebook <id>]        # List notes
+nowen notes get <id>                       # View note
+nowen notes create --notebook <id> --title "Title"  # Create note
+nowen notes update <id> --title "New Title" # Update note
+nowen notes delete <id>                    # Delete note
+nowen notes search <keyword>               # Search notes
+
+# Notebooks
+nowen notebooks list                       # List notebooks
+nowen notebooks create --name "Name"       # Create notebook
+
+# Tags
+nowen tags list                            # List tags
+nowen tags create --name "Tag Name"        # Create tag
+
+# Tasks
+nowen tasks list [--status <status>]       # List tasks
+nowen tasks create --title "Task Name"     # Create task
+nowen tasks toggle <id>                    # Toggle completion
+
+# Search
+nowen search <keyword>                     # Full-text search
+
+# AI
+nowen ai ask "Your question"               # Knowledge Q&A
+nowen ai chat "Chat message"               # AI conversation
+
+# Pipelines
+nowen pipelines list                       # List pipelines
+nowen pipelines run <id> --notes <id1,id2> # Run pipeline
+
+# Config
+nowen config show                          # Show config
+nowen config set-url <url>                 # Set server URL
+nowen config set-token <token>             # Set JWT token
+```
+
+#### OpenAPI Specification
+
+Complete OpenAPI 3.0 specification document, consumable by Swagger UI, Postman, and other tools.
+
+```
+GET http://localhost:3001/api/openapi.json
+```
+
+Covers 16 API groups, 50+ endpoints, with full request/response schema definitions.
+
 ### NPM Scripts
 
 | Command | Description |
@@ -912,24 +1465,56 @@ All NAS platforms with Docker support follow the same general steps:
 |---------|-------|------|---------|-------------|
 | nowen-note | Self-built | 3001 | nowen-note-data | Main app (frontend + backend + SQLite) |
 
+### Database Design
+
+16 data tables + 1 FTS5 full-text search virtual table:
+
+| Table | Description |
+|-------|-------------|
+| `users` | Users (username / password hash / avatar) |
+| `notebooks` | Notebooks (parentId for unlimited nesting) |
+| `notes` | Notes (JSON content + plain text + lock/pin/favorite/archive/trash) |
+| `tags` | Tags (colored tags) |
+| `note_tags` | Note-Tag many-to-many association |
+| `attachments` | Attachments |
+| `tasks` | Tasks (subtasks via parentId + priority + due date) |
+| `diaries` | Moments (content + mood + timestamp) |
+| `system_settings` | System settings key-value store (includes AI config) |
+| `custom_fonts` | Custom fonts |
+| `shares` | Share records (link / password / permission / expiry / view stats) |
+| `note_versions` | Note version history |
+| `share_comments` | Comments (inline anchors + replies + resolved marks) |
+| `webhooks` | Webhook configuration (URL / events / secret / status) |
+| `webhook_deliveries` | Webhook delivery logs (response status / retry count) |
+| `audit_logs` | Audit logs (10 categories + 3 levels + operation details) |
+| `notes_fts` | FTS5 full-text search virtual table (auto-synced via triggers) |
+
 ### API Routes
 
 | Path | Auth | Description |
 |------|------|-------------|
 | `/api/auth` | ✗ | Login / change password / factory reset |
 | `/api/health` | ✗ | Health check |
+| `/api/openapi.json` | ✗ | OpenAPI 3.0 specification |
 | `GET /api/settings` | ✗ | Site settings (branding) |
 | `GET /api/fonts` | ✗ | Font list / font files |
+| `/api/shared` | ✗ | Public share access (rate-limited) |
 | `/api/notebooks` | ✓ | Notebook CRUD |
 | `/api/notes` | ✓ | Note CRUD |
 | `/api/tags` | ✓ | Tag management |
 | `/api/search` | ✓ | FTS5 full-text search |
 | `/api/tasks` | ✓ | Task management |
 | `/api/mindmaps` | ✓ | Mind map CRUD |
-| `/api/diary` | ✓ | Moments (post/timeline/delete/stats) |
+| `/api/diary` | ✓ | Moments (post / timeline / delete / stats) |
 | `/api/ai` | ✓ | AI chat + writing assistant + RAG |
-| `/api/export` | ✓ | Data import/export |
-| `/api/settings` | ✓ | Site configuration (write) |
+| `/api/shares` | ✓ | Share management (create / list / update / delete) |
+| `/api/pipelines` | ✓ | Batch pipelines (list / create / run / step types) |
+| `/api/plugins` | ✓ | Plugins (list / reload / execute) |
+| `/api/webhooks` | ✓ | Webhooks (CRUD + test + delivery logs) |
+| `/api/audit` | ✓ | Audit logs (query / stats / cleanup) |
+| `/api/backups` | ✓ | Backup & restore (list / create / download / restore / auto) |
+| `/api/export` | ✓ | Data import / export |
+| `/api/settings` | ✓ | Site configuration (write operations) |
 | `/api/fonts` | ✓ | Font upload / delete |
 | `/api/micloud` | ✓ | Mi Cloud notes import |
 | `/api/oppocloud` | ✓ | OPPO Cloud notes import |

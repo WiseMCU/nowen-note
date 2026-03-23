@@ -8,6 +8,7 @@ import EditorPane from "@/components/EditorPane";
 import TaskCenter from "@/components/TaskCenter";
 import MindMapCenter from "@/components/MindMapEditor";
 import AIChatPanel from "@/components/AIChatPanel";
+import CodexPanel from "@/components/CodexPanel";
 import DiaryCenter from "@/components/DiaryCenter";
 import SharedNoteView from "@/components/SharedNoteView";
 import LoginPage from "@/components/LoginPage";
@@ -177,6 +178,7 @@ function AppLayout() {
   const isMindMapView = state.viewMode === "mindmaps";
   const isAIChatView = state.viewMode === "ai-chat";
   const isDiaryView = state.viewMode === "diary";
+  const isCodexView = state.viewMode === "codex";
 
   // P0: Android 返回键处理
   const handleBackToList = useCallback(() => {
@@ -306,6 +308,11 @@ function AppLayout() {
         <div className="flex-1 flex flex-col">
           <MobileTopBar />
           <DiaryCenter />
+        </div>
+      ) : isCodexView ? (
+        <div className="flex-1 flex flex-col">
+          <MobileTopBar />
+          <CodexPanel onClose={() => actions.setViewMode("all")} />
         </div>
       ) : (
         <div className="flex-1 flex relative overflow-hidden">

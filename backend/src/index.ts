@@ -20,10 +20,17 @@ import mindmapsRouter from "./routes/mindmaps";
 import diaryRouter from "./routes/diary";
 
 import aiRouter from "./routes/ai";
+import pipelinesRouter from "./routes/pipelines";
+import pluginsRouter from "./routes/plugins";
+import webhooksRouter from "./routes/webhooks";
+import auditRouter from "./routes/audit";
+import backupsRouter from "./routes/backups";
 import { sharesRouter, sharedRouter } from "./routes/shares";
 import authRouter, { JWT_SECRET } from "./routes/auth";
 import { seedDatabase } from "./db/seed";
 import { getDb } from "./db/schema";
+import { generateOpenAPISpec } from "./services/openapi";
+import { getBackupManager } from "./services/backup";
 
 const app = new Hono();
 
@@ -105,6 +112,9 @@ app.route("/api/shared", sharedRouter);
 // 健康检查（无需 JWT）
 app.get("/api/health", (c) => c.json({ status: "ok", version: "1.0.0" }));
 
+// OpenAPI 规范（无需 JWT）
+app.get("/api/openapi.json", (c) => c.json(generateOpenAPISpec()));
+
 // 站点设置（GET 无需 JWT，允许未登录时加载品牌信息）
 app.get("/api/settings", (c) => {
   const db = getDb();
@@ -179,6 +189,11 @@ app.route("/api/icloud", icloudRouter);
 app.route("/api/mindmaps", mindmapsRouter);
 app.route("/api/diary", diaryRouter);
 app.route("/api/ai", aiRouter);
+app.route("/api/pipelines", pipelinesRouter);
+app.route("/api/plugins", pluginsRouter);
+app.route("/api/webhooks", webhooksRouter);
+app.route("/api/audit", auditRouter);
+app.route("/api/backups", backupsRouter);
 app.route("/api/shares", sharesRouter);
 
 app.route("/api/settings", settingsRouter);
@@ -246,5 +261,11 @@ if (process.env.NODE_ENV === "production") {
   });
 }
 
+// 启动自动备份（每24小时）
+try {
+  getBackupManager().startAutoBackup(24);
+} catch { /* 备份启动失败不阻塞服务 */ }
+
 console.log(`🚀 nowen-note API running on http://localhost:${port}`);
+console.log(`📖 OpenAPI 文档: http://localhost:${port}/api/openapi.json`);
 serve({ fetch: app.fetch, port });

@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { getDb } from "../db/schema";
 import { v4 as uuid } from "uuid";
+import { emitWebhook } from "../services/webhook";
+import { logAudit } from "../services/audit";
 
 const app = new Hono();
 
@@ -83,6 +85,11 @@ app.post("/", async (c) => {
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(id, userId, body.notebookId, body.title || "无标题笔记", body.content || "{}", body.contentText || "");
   const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(id);
+
+  // 触发 Webhook 和审计日志
+  emitWebhook("note.created", userId, { noteId: id, title: body.title || "无标题笔记" });
+  logAudit(userId, "note", "create", { noteId: id, title: body.title }, { targetType: "note", targetId: id });
+
   return c.json({ ...note as any, tags: [] }, 201);
 });
 
@@ -172,6 +179,12 @@ app.delete("/:id", (c) => {
   }
 
   db.prepare("DELETE FROM notes WHERE id = ?").run(id);
+
+  // 触发 Webhook 和审计日志
+  const userId = c.req.header("X-User-Id") || "demo";
+  emitWebhook("note.deleted", userId, { noteId: id });
+  logAudit(userId, "note", "delete", { noteId: id }, { targetType: "note", targetId: id });
+
   return c.json({ success: true });
 });
 

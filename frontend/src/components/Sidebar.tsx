@@ -4,7 +4,7 @@ import {
   BookOpen, Plus, Star, Trash2, Search, ChevronRight,
   ChevronDown, Hash, PanelLeftClose, PanelLeft, ListTodo,
   Settings, LogOut, FilePlus, FolderPlus, Edit2, X, BrainCircuit,
-  FileSpreadsheet, Bot, CalendarDays, Smile
+  FileSpreadsheet, Bot, CalendarDays, Smile, Workflow
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -467,6 +467,7 @@ export default function Sidebar() {
     { icon: <ListTodo size={16} />, label: t('sidebar.tasks'), mode: "tasks", active: state.viewMode === "tasks" },
     { icon: <BrainCircuit size={16} />, label: t('sidebar.mindMaps'), mode: "mindmaps", active: state.viewMode === "mindmaps" },
     { icon: <Bot size={16} />, label: t('sidebar.aiChat'), mode: "ai-chat", active: state.viewMode === "ai-chat" },
+    { icon: <Workflow size={16} />, label: t('sidebar.codex'), mode: "codex", active: state.viewMode === "codex" },
 
     { icon: <Star size={16} />, label: t('sidebar.favorites'), mode: "favorites", active: state.viewMode === "favorites" },
     { icon: <Trash2 size={16} />, label: t('sidebar.trash'), mode: "trash", active: state.viewMode === "trash" },

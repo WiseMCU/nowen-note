@@ -423,7 +423,7 @@ function PullToRefresh({
 
       {/* 内容区域 */}
       <div
-        className="flex-1 flex flex-col transition-transform"
+        className="flex-1 flex flex-col min-h-0 transition-transform"
         style={{
           transform: pullDistance > 0 ? `translateY(${pullDistance}px)` : undefined,
           transition: pulling ? "none" : "transform 0.3s ease-out",
@@ -810,7 +810,7 @@ export default function NoteList() {
 
       {/* List - 包裹下拉刷新（仅移动端生效，桌面端不影响） */}
       <PullToRefresh onRefresh={fetchNotes}>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 min-h-0">
         <div className="px-2 pb-2 space-y-1">
           <AnimatePresence mode="popLayout">
             {state.notes.map((note) => (

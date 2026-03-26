@@ -133,10 +133,12 @@ export function useKeyboardLayout() {
     if (!isNativePlatform()) return;
 
     // 键盘弹出时，缩小 body 高度使编辑区可滚动
+    // 使用 window.innerHeight 替代 100vh，避免 Android 上 100vh 包含系统导航栏导致计算偏差产生多余空白
     const showHandler = Keyboard.addListener("keyboardWillShow", (info) => {
       const height = info.keyboardHeight;
+      const visualHeight = window.innerHeight;
       document.documentElement.style.setProperty("--keyboard-height", `${height}px`);
-      document.body.style.height = `calc(100vh - ${height}px)`;
+      document.body.style.height = `${visualHeight - height}px`;
       document.body.style.overflow = "hidden";
 
       // 让光标所在元素滚动到可视区域

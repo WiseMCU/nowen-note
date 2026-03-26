@@ -143,15 +143,22 @@ body {
   color: var(--pm-text);
 }
 
-.ProseMirror ul,
+.ProseMirror ul {
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+  list-style-type: disc;
+}
+
 .ProseMirror ol {
   padding-left: 1.5rem;
   margin: 0.5rem 0;
+  list-style-type: decimal;
 }
 
 .ProseMirror li {
   margin: 0.2rem 0;
   color: var(--pm-text);
+  display: list-item;
 }
 
 .ProseMirror li p {
@@ -260,7 +267,7 @@ body {
 
 /* 待办项容器 */
 .ProseMirror li[data-type="taskItem"] {
-  display: flex;
+  display: flex !important;
   flex-direction: row;
   align-items: flex-start;
   gap: 0.5rem;
@@ -268,6 +275,7 @@ body {
   border-radius: 6px;
   padding: 2px 4px;
   transition: background-color 0.15s ease;
+  list-style: none;
 }
 
 .ProseMirror li[data-type="taskItem"]:hover {

@@ -435,7 +435,7 @@ function PullToRefresh({
   );
 }
 
-const NoteCard = React.forwardRef<HTMLDivElement, {
+const NoteCard = React.memo(React.forwardRef<HTMLDivElement, {
   note: NoteListItem; isActive: boolean; onClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
   isContextTarget: boolean;
@@ -511,7 +511,79 @@ const NoteCard = React.forwardRef<HTMLDivElement, {
       </div>
     </motion.div>
   );
-});
+}));
+
+/* ===== 虚拟滚动笔记列表 ===== */
+const ITEM_HEIGHT = 90; // 每个笔记卡片的估算高度（px）
+const OVERSCAN = 8; // 上下额外渲染的条目数
+
+function VirtualNoteList({
+  notes,
+  activeNoteId,
+  menuState,
+  sharedNoteIds,
+  onSelectNote,
+  onContextMenu,
+}: {
+  notes: NoteListItem[];
+  activeNoteId: string | undefined;
+  menuState: { isOpen: boolean; targetId: string | null };
+  sharedNoteIds: Set<string>;
+  onSelectNote: (noteId: string) => void;
+  onContextMenu: (e: React.MouseEvent, noteId: string) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(600);
+
+  // 监听容器尺寸变化
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerHeight(entry.contentRect.height);
+      }
+    });
+    observer.observe(container);
+    setContainerHeight(container.clientHeight);
+    return () => observer.disconnect();
+  }, []);
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
+  const totalHeight = notes.length * ITEM_HEIGHT;
+  const startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
+  const endIndex = Math.min(notes.length, Math.ceil((scrollTop + containerHeight) / ITEM_HEIGHT) + OVERSCAN);
+  const visibleNotes = notes.slice(startIndex, endIndex);
+  const offsetY = startIndex * ITEM_HEIGHT;
+
+  return (
+    <div
+      ref={containerRef}
+      className="flex-1 min-h-0 overflow-auto"
+      onScroll={handleScroll}
+    >
+      <div style={{ height: totalHeight, position: "relative" }}>
+        <div className="px-2 space-y-1" style={{ position: "absolute", top: offsetY, left: 0, right: 0 }}>
+          {visibleNotes.map((note) => (
+            <NoteCard
+              key={note.id}
+              note={note}
+              isActive={activeNoteId === note.id}
+              isContextTarget={menuState.isOpen && menuState.targetId === note.id}
+              isShared={sharedNoteIds.has(note.id)}
+              onClick={() => onSelectNote(note.id)}
+              onContextMenu={(e) => onContextMenu(e, note.id)}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function NoteList() {
   const { state } = useApp();
@@ -810,6 +882,17 @@ export default function NoteList() {
 
       {/* List - 包裹下拉刷新（仅移动端生效，桌面端不影响） */}
       <PullToRefresh onRefresh={fetchNotes}>
+        {/* 笔记数量较少时使用普通渲染，较多时使用虚拟滚动 */}
+        {state.notes.length > 100 ? (
+          <VirtualNoteList
+            notes={state.notes}
+            activeNoteId={state.activeNote?.id}
+            menuState={{ isOpen: menu.isOpen, targetId: menu.targetId }}
+            sharedNoteIds={sharedNoteIds}
+            onSelectNote={handleSelectNote}
+            onContextMenu={(e, noteId) => openMenu(e, noteId, "note")}
+          />
+        ) : (
         <ScrollArea className="flex-1 min-h-0">
         <div className="px-2 pb-2 space-y-1">
           <AnimatePresence mode="popLayout">
@@ -864,6 +947,7 @@ export default function NoteList() {
           )}
         </div>
       </ScrollArea>
+        )}
       </PullToRefresh>
 
       {/* Mobile FAB - 新建笔记 */}

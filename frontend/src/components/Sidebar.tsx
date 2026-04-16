@@ -314,7 +314,43 @@ export default function Sidebar() {
   const { t } = useTranslation();
   const [searchInput, setSearchInput] = useState("");
   const [showSettings, setShowSettings] = useState(false);
-  const [tagsExpanded, setTagsExpanded] = useState(true);
+  // 标签区域折叠状态 - 从 localStorage 恢复
+  const [tagsExpanded, setTagsExpanded] = useState(() => {
+    try {
+      const saved = localStorage.getItem("nowen-tags-expanded");
+      return saved === null ? true : saved === "true";
+    } catch {
+      return true;
+    }
+  });
+
+  // 笔记本区域折叠状态 - 从 localStorage 恢复
+  const [notebooksExpanded, setNotebooksExpanded] = useState(() => {
+    try {
+      const saved = localStorage.getItem("nowen-notebooks-expanded");
+      return saved === null ? true : saved === "true";
+    } catch {
+      return true;
+    }
+  });
+
+  // 切换标签折叠状态时持久化到 localStorage
+  const toggleTagsExpanded = useCallback(() => {
+    setTagsExpanded((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("nowen-tags-expanded", String(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  // 切换笔记本折叠状态时持久化到 localStorage
+  const toggleNotebooksExpanded = useCallback(() => {
+    setNotebooksExpanded((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("nowen-notebooks-expanded", String(next)); } catch {}
+      return next;
+    });
+  }, []);
 
   const notebookMenuItems: ContextMenuItem[] = [
     { id: "new_note", label: t('sidebar.newNote'), icon: <FilePlus size={14} /> },
@@ -551,12 +587,33 @@ export default function Sidebar() {
 
       {/* Notebooks */}
       <div className="px-3 flex items-center justify-between mb-1">
-        <span className="text-xs font-medium text-tx-tertiary uppercase tracking-wider">{t('sidebar.notebooks')}</span>
+        <button
+          onClick={() => toggleNotebooksExpanded()}
+          className="flex items-center gap-1 hover:text-tx-secondary transition-colors"
+        >
+          <ChevronDown
+            size={12}
+            className={cn(
+              "text-tx-tertiary transition-transform duration-200",
+              !notebooksExpanded && "-rotate-90"
+            )}
+          />
+          <span className="text-xs font-medium text-tx-tertiary uppercase tracking-wider">{t('sidebar.notebooks')}</span>
+        </button>
         <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleCreateNotebook}>
           <Plus size={14} />
         </Button>
       </div>
 
+      <AnimatePresence initial={false}>
+        {notebooksExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+            animate={{ height: "auto", opacity: 1, overflow: "visible", transitionEnd: { overflow: "visible" } }}
+            exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+            transition={{ duration: 0.2 }}
+            className="flex-1 min-h-0"
+          >
       <ScrollArea className="flex-1 px-1">
         <div className="space-y-0.5 pb-2">
           {tree.map((nb) => (
@@ -578,11 +635,14 @@ export default function Sidebar() {
           ))}
         </div>
       </ScrollArea>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Tags */}
       <div className="border-t border-app-border">
         <button
-          onClick={() => setTagsExpanded(!tagsExpanded)}
+          onClick={() => toggleTagsExpanded()}
           className="w-full flex items-center justify-between px-3 py-2 hover:bg-app-hover transition-colors"
         >
           <span className="text-xs font-medium text-tx-tertiary uppercase tracking-wider">{t('sidebar.tags')}</span>

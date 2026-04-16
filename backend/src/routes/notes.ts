@@ -151,8 +151,15 @@ app.put("/:id", async (c) => {
     if (body.isTrashed) { fields.push("trashedAt = datetime('now')"); }
   }
 
+  // 仅在内容字段（标题、正文、笔记本）变更时更新 updatedAt
+  // 元数据操作（收藏、置顶、锁定、归档、回收站）不应修改 updatedAt
+  const contentFieldNames = ["title", "content", "contentText", "notebookId"];
+  const hasContentFieldChange = contentFieldNames.some((f) => body[f] !== undefined);
+
   fields.push("version = version + 1");
-  fields.push("updatedAt = datetime('now')");
+  if (hasContentFieldChange) {
+    fields.push("updatedAt = datetime('now')");
+  }
   params.push(id);
 
   db.prepare(`UPDATE notes SET ${fields.join(", ")} WHERE id = ?`).run(...params);

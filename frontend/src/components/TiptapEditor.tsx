@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
-import { AnimatePresence } from "framer-motion";
-import StarterKit from "@tiptap/starter-kit";
+import { AnimatePresence, motion } from "framer-motion";import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Image from "@tiptap/extension-image";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
@@ -18,12 +17,13 @@ import {
   Bold, Italic, Underline as UnderlineIcon, Strikethrough,
   Code, List, ListOrdered, Heading1, Heading2, Heading3,
   Quote, ImagePlus, CheckSquare, Highlighter, Minus, Undo, Redo,
-  FileCode, Sparkles
+  FileCode, Sparkles, X, ZoomIn, ZoomOut, RotateCcw
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Note, Tag } from "@/types";
 import TagInput from "@/components/TagInput";
 import AIWritingAssistant from "@/components/AIWritingAssistant";
+import { SlashCommandsMenu, getDefaultSlashCommands, createSlashExtension, createSlashEventHandlers } from "@/components/SlashCommands";
 import { useTranslation } from "react-i18next";
 
 const lowlight = createLowlight(common);
@@ -100,7 +100,35 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
   const [showAI, setShowAI] = useState(false);
   const [aiSelectedText, setAiSelectedText] = useState("");
   const [aiPosition, setAiPosition] = useState<{ top: number; left: number } | undefined>();
+  // 图片预览状态
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [imageZoom, setImageZoom] = useState(1);
+  const [imageDrag, setImageDrag] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStart = useRef({ x: 0, y: 0, imgX: 0, imgY: 0 });
   const { t, i18n } = useTranslation();
+
+  // 斜杠命令事件处理器（稳定引用）
+  const slashHandlers = useRef(createSlashEventHandlers());
+  const slashExtension = useRef(
+    createSlashExtension(
+      slashHandlers.current.onActivate,
+      slashHandlers.current.onDeactivate,
+      slashHandlers.current.onQueryChange,
+    )
+  );
+
+  // Markdown 粘贴提示 toast
+  const [pasteToast, setPasteToast] = useState<{ type: "converting" | "success" | "error"; message: string } | null>(null);
+  const pasteToastTimer = useRef<NodeJS.Timeout | null>(null);
+
+  const showPasteToast = useCallback((type: "converting" | "success" | "error", message: string, duration = 2500) => {
+    if (pasteToastTimer.current) clearTimeout(pasteToastTimer.current);
+    setPasteToast({ type, message });
+    if (type !== "converting") {
+      pasteToastTimer.current = setTimeout(() => setPasteToast(null), duration);
+    }
+  }, []);
 
   const editorScrollRef = useRef<HTMLDivElement | null>(null);
   // 防止 setContent 触发 onUpdate 导致无限循环
@@ -161,6 +189,7 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
       TableRow,
       TableHeader,
       TableCell,
+      slashExtension.current,
     ],
     content: parseContent(note.content),
     editable,
@@ -180,15 +209,28 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
         // 检测是否包含 Markdown 格式标记
         if (looksLikeMarkdown(text)) {
           event.preventDefault();
-          const convertedHtml = markdownToSimpleHtml(text);
-          // 使用 ProseMirror 的 API 插入 HTML 片段
-          const { state, dispatch } = view;
-          const parser = ProseMirrorDOMParser.fromSchema(state.schema);
-          const tempDiv = document.createElement("div");
-          tempDiv.innerHTML = convertedHtml;
-          const slice = parser.parseSlice(tempDiv);
-          const tr = state.tr.replaceSelection(slice);
-          dispatch(tr);
+          // 显示转换中提示
+          showPasteToast("converting", t("tiptap.markdownConverting"));
+          try {
+            const convertedHtml = markdownToSimpleHtml(text);
+            // 使用 ProseMirror 的 API 插入 HTML 片段
+            const { state, dispatch } = view;
+            const parser = ProseMirrorDOMParser.fromSchema(state.schema);
+            const tempDiv = document.createElement("div");
+            tempDiv.innerHTML = convertedHtml;
+            const slice = parser.parseSlice(tempDiv);
+            const tr = state.tr.replaceSelection(slice);
+            dispatch(tr);
+            // 显示转换成功提示
+            showPasteToast("success", t("tiptap.markdownConvertSuccess"));
+          } catch (err) {
+            console.error("Markdown paste conversion failed:", err);
+            // 转换失败时回退为纯文本插入
+            showPasteToast("error", t("tiptap.markdownConvertError"));
+            const { state, dispatch } = view;
+            const tr = state.tr.insertText(text);
+            dispatch(tr);
+          }
           return true;
         }
 
@@ -249,6 +291,54 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
         debounceTimer.current = null;
       }
     };
+  }, []);
+
+  // 图片点击预览事件监听
+  useEffect(() => {
+    if (!editor) return;
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "IMG" && target.closest(".ProseMirror")) {
+        const src = (target as HTMLImageElement).src;
+        if (src) {
+          setPreviewImage(src);
+          setImageZoom(1);
+          setImageDrag({ x: 0, y: 0 });
+        }
+      }
+    };
+    const editorDom = editor.view.dom;
+    editorDom.addEventListener("click", handleClick);
+    return () => editorDom.removeEventListener("click", handleClick);
+  }, [editor]);
+
+  // 图片预览滚轮缩放
+  const handlePreviewWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    setImageZoom(prev => {
+      const delta = e.deltaY > 0 ? -0.1 : 0.1;
+      return Math.max(0.1, Math.min(5, prev + delta));
+    });
+  }, []);
+
+  // 图片预览拖拽
+  const handlePreviewMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    setIsDragging(true);
+    dragStart.current = { x: e.clientX, y: e.clientY, imgX: imageDrag.x, imgY: imageDrag.y };
+  }, [imageDrag]);
+
+  const handlePreviewMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isDragging) return;
+    setImageDrag({
+      x: dragStart.current.imgX + (e.clientX - dragStart.current.x),
+      y: dragStart.current.imgY + (e.clientY - dragStart.current.y),
+    });
+  }, [isDragging]);
+
+  const handlePreviewMouseUp = useCallback(() => {
+    setIsDragging(false);
   }, []);
 
   // 动态切换编辑器的可编辑状态
@@ -540,6 +630,106 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
       <div className="flex-1 overflow-auto px-4 md:px-8 pb-12">
         <EditorContent editor={editor} />
       </div>
+
+      {/* Markdown 粘贴转换提示 Toast */}
+      <AnimatePresence>
+        {pasteToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
+            className={cn(
+              "fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-xl shadow-lg border text-sm font-medium backdrop-blur-sm",
+              pasteToast.type === "converting" && "bg-accent-primary/10 border-accent-primary/20 text-accent-primary",
+              pasteToast.type === "success" && "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400",
+              pasteToast.type === "error" && "bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400"
+            )}
+          >
+            {pasteToast.type === "converting" && (
+              <FileType size={16} className="animate-pulse" />
+            )}
+            {pasteToast.type === "success" && <Check size={16} />}
+            {pasteToast.type === "error" && <AlertCircle size={16} />}
+            <span>{pasteToast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 斜杠命令菜单 */}
+      <SlashCommandsMenu
+        editor={editor}
+        items={getDefaultSlashCommands(t, handleImageUpload, openAIAssistant)}
+      />
+
+      {/* 图片预览 Lightbox */}
+      <AnimatePresence>
+        {previewImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+            onClick={(e) => { if (e.target === e.currentTarget) { setPreviewImage(null); } }}
+            onWheel={handlePreviewWheel}
+            onMouseMove={handlePreviewMouseMove}
+            onMouseUp={handlePreviewMouseUp}
+            onMouseLeave={handlePreviewMouseUp}
+          >
+            {/* 工具栏 */}
+            <div className="absolute top-4 right-4 flex items-center gap-2 z-10">
+              <button
+                onClick={() => setImageZoom(prev => Math.min(5, prev + 0.25))}
+                className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+                title="放大"
+              >
+                <ZoomIn size={18} />
+              </button>
+              <button
+                onClick={() => setImageZoom(prev => Math.max(0.1, prev - 0.25))}
+                className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+                title="缩小"
+              >
+                <ZoomOut size={18} />
+              </button>
+              <button
+                onClick={() => { setImageZoom(1); setImageDrag({ x: 0, y: 0 }); }}
+                className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+                title="重置"
+              >
+                <RotateCcw size={18} />
+              </button>
+              <span className="text-white/70 text-xs font-mono min-w-[3rem] text-center">
+                {Math.round(imageZoom * 100)}%
+              </span>
+              <button
+                onClick={() => setPreviewImage(null)}
+                className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+                title="关闭"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            {/* 图片 */}
+            <motion.img
+              src={previewImage}
+              alt="preview"
+              initial={{ scale: 0.9 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.9 }}
+              transition={{ duration: 0.2 }}
+              className="max-w-[90vw] max-h-[90vh] object-contain select-none"
+              style={{
+                transform: `scale(${imageZoom}) translate(${imageDrag.x / imageZoom}px, ${imageDrag.y / imageZoom}px)`,
+                cursor: isDragging ? 'grabbing' : 'grab',
+              }}
+              onMouseDown={handlePreviewMouseDown}
+              draggable={false}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* AI Writing Assistant */}
       <AnimatePresence>

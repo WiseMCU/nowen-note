@@ -173,6 +173,16 @@ function buildTree(notebooks: Notebook[]): Notebook[] {
       roots.push(node);
     }
   });
+  // 按 sortOrder 稳定排序，确保拖拽后的新顺序立即反映到 UI
+  const byOrder = (a: Notebook, b: Notebook) =>
+    (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+  const sortRecursive = (list: Notebook[]) => {
+    list.sort(byOrder);
+    list.forEach((n) => {
+      if (n.children && n.children.length > 0) sortRecursive(n.children);
+    });
+  };
+  sortRecursive(roots);
   return roots;
 }
 

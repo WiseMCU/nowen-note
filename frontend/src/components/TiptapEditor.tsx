@@ -24,6 +24,7 @@ import {
   FileType, Check, AlertCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toast } from "@/lib/toast";
 import { Note, Tag } from "@/types";
 import TagInput from "@/components/TagInput";
 import AIWritingAssistant from "@/components/AIWritingAssistant";
@@ -34,12 +35,26 @@ import { useTranslation } from "react-i18next";
 const lowlight = createLowlight(common);
 
 // 自定义缩进扩展
+// 支持段落、标题、列表（bullet / ordered / task）、引用、代码块整体做"手动缩进"调整。
+// 通过 data-indent 属性 + CSS 的 padding-left 实现纯视觉缩进，不破坏文档结构。
+const INDENT_MIN = 0;
+const INDENT_MAX = 8;
+const INDENTABLE_TYPES = [
+  "paragraph",
+  "heading",
+  "blockquote",
+  "codeBlock",
+  "bulletList",
+  "orderedList",
+  "taskList",
+] as const;
+
 const IndentExtension = Extension.create({
   name: "indent",
   addGlobalAttributes() {
     return [
       {
-        types: ["paragraph", "heading"],
+        types: [...INDENTABLE_TYPES],
         attributes: {
           indent: {
             default: 0,
@@ -53,7 +68,95 @@ const IndentExtension = Extension.create({
       },
     ];
   },
+  addCommands() {
+    return {
+      // 对选区覆盖的可缩进块按 delta 调整 indent（限制 0..INDENT_MAX）
+      changeIndent: (delta: number) => ({ state, tr, dispatch }: any) => {
+        const { from, to } = state.selection;
+        let changed = false;
+        state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+          if (!(INDENTABLE_TYPES as readonly string[]).includes(node.type.name)) return;
+          const current = (node.attrs as any).indent || 0;
+          const next = Math.max(INDENT_MIN, Math.min(INDENT_MAX, current + delta));
+          if (next === current) return;
+          tr.setNodeMarkup(pos, undefined, { ...node.attrs, indent: next });
+          changed = true;
+        });
+        if (changed && dispatch) dispatch(tr);
+        return changed;
+      },
+    } as any;
+  },
 });
+
+/**
+ * 键盘扩展：
+ *   - Tab / Shift-Tab：智能缩进 —— 代码块内插空格；列表内 sink/lift；表格内由 tiptap-table 处理；其余调块级 indent。
+ *   - Mod-s：立即保存（由外部通过 ref 注入 flush 函数）。
+ */
+function createKeyboardExtension(flushSaveRef: React.MutableRefObject<() => void>) {
+  return Extension.create({
+    name: "nowenKeyboard",
+    addKeyboardShortcuts() {
+      const editor = this.editor as any;
+
+      const isInCodeBlock = () => editor.isActive("codeBlock");
+      const isInTable = () => editor.isActive("table");
+      const isInTaskList = () => editor.isActive("taskList") || editor.isActive("taskItem");
+      const isInBulletOrOrdered = () =>
+        editor.isActive("bulletList") || editor.isActive("orderedList") || editor.isActive("listItem");
+
+      const handleTab = (delta: 1 | -1) => {
+        // 表格：交给 tiptap-table 默认的 goToNextCell/goToPreviousCell
+        if (isInTable()) return false;
+
+        // 代码块：插入 / 删除 2 个空格
+        if (isInCodeBlock()) {
+          if (delta === 1) {
+            editor.chain().focus().insertContent("  ").run();
+            return true;
+          } else {
+            // Shift+Tab：若光标前有至多 2 个空格则删掉
+            const { state } = editor;
+            const { from, empty } = state.selection;
+            if (!empty) return false;
+            const before = state.doc.textBetween(Math.max(0, from - 2), from, "\n", "\n");
+            const strip = before.endsWith("  ") ? 2 : before.endsWith(" ") ? 1 : 0;
+            if (strip === 0) return true; // 阻止默认行为但不删
+            editor.chain().focus().deleteRange({ from: from - strip, to: from }).run();
+            return true;
+          }
+        }
+
+        // 任务列表 / 普通列表：sink / lift
+        if (isInTaskList()) {
+          const ok = delta === 1
+            ? editor.chain().focus().sinkListItem("taskItem").run()
+            : editor.chain().focus().liftListItem("taskItem").run();
+          if (ok) return true;
+          // 若无法 sink/lift（例如已是最外层），退化为块级 indent
+        } else if (isInBulletOrOrdered()) {
+          const ok = delta === 1
+            ? editor.chain().focus().sinkListItem("listItem").run()
+            : editor.chain().focus().liftListItem("listItem").run();
+          if (ok) return true;
+        }
+
+        // 其余：调整块级 indent 属性
+        return editor.chain().focus().changeIndent(delta).run();
+      };
+
+      return {
+        Tab: () => handleTab(1),
+        "Shift-Tab": () => handleTab(-1),
+        "Mod-s": () => {
+          flushSaveRef.current?.();
+          return true; // 返回 true 阻止浏览器默认的"保存网页"对话框
+        },
+      };
+    },
+  });
+}
 
 export interface HeadingItem {
   id: string;
@@ -167,6 +270,12 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
 
+  // 立即保存（Ctrl/Cmd+S 使用）：清掉 debounce 并立刻调用 onUpdate
+  const flushSaveRef = useRef<() => void>(() => {});
+
+  // 稳定的键盘扩展引用（Tab/Shift-Tab/Mod-s）
+  const keyboardExtension = useRef(createKeyboardExtension(flushSaveRef));
+
   const computeStats = useCallback((text: string) => {
     const chars = text.length;
     const charsNoSpace = text.replace(/\s/g, "").length;
@@ -228,6 +337,7 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
         types: ['heading', 'paragraph'],
       }),
       IndentExtension,
+      keyboardExtension.current,
       slashExtension.current,
     ],
     content: parseContent(note.content),
@@ -409,6 +519,22 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
       }, 500);
     },
   });
+
+  // 实现 flushSave：Ctrl/Cmd+S 触发，绕过 500ms debounce 立即保存
+  flushSaveRef.current = () => {
+    if (!editor) return;
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+      debounceTimer.current = null;
+    }
+    const json = JSON.stringify(editor.getJSON());
+    const text = editor.getText();
+    const title = titleRef.current?.value || noteRef.current.title;
+    onUpdateRef.current({ content: json, contentText: text, title });
+    try {
+      toast.success(t('tiptap.saved') || 'Saved');
+    } catch {}
+  };
 
   // 切换笔记时同步编辑器内容
   useEffect(() => {
@@ -838,26 +964,15 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
 
         <ToolbarDivider />
 
-        {/* 缩进控制 */}
+        {/* 缩进控制 —— 逻辑与 Tab/Shift-Tab 键盘快捷键完全一致 */}
         <ToolbarButton
           onClick={() => {
             if (editor.isActive("taskList")) {
-              editor.chain().focus().sinkListItem("taskItem").run();
+              if (editor.chain().focus().sinkListItem("taskItem").run()) return;
             } else if (editor.isActive("bulletList") || editor.isActive("orderedList")) {
-              editor.chain().focus().sinkListItem("listItem").run();
-            } else {
-              // 对非列表内容，增加缩进级别
-              const { from, to } = editor.state.selection;
-              editor.chain().focus().command(({ tr }) => {
-                tr.doc.nodesBetween(from, to, (node, pos) => {
-                  if (node.isBlock && node.type.name !== "doc") {
-                    const currentIndent = (node.attrs as any).indent || 0;
-                    tr.setNodeMarkup(pos, undefined, { ...node.attrs, indent: Math.min(currentIndent + 1, 8) });
-                  }
-                });
-                return true;
-              }).run();
+              if (editor.chain().focus().sinkListItem("listItem").run()) return;
             }
+            (editor.chain().focus() as any).changeIndent(1).run();
           }}
           title={t('tiptap.indent')}
         >
@@ -866,21 +981,11 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
         <ToolbarButton
           onClick={() => {
             if (editor.isActive("taskList")) {
-              editor.chain().focus().liftListItem("taskItem").run();
+              if (editor.chain().focus().liftListItem("taskItem").run()) return;
             } else if (editor.isActive("bulletList") || editor.isActive("orderedList")) {
-              editor.chain().focus().liftListItem("listItem").run();
-            } else {
-              const { from, to } = editor.state.selection;
-              editor.chain().focus().command(({ tr }) => {
-                tr.doc.nodesBetween(from, to, (node, pos) => {
-                  if (node.isBlock && node.type.name !== "doc") {
-                    const currentIndent = (node.attrs as any).indent || 0;
-                    tr.setNodeMarkup(pos, undefined, { ...node.attrs, indent: Math.max(currentIndent - 1, 0) });
-                  }
-                });
-                return true;
-              }).run();
+              if (editor.chain().focus().liftListItem("listItem").run()) return;
             }
+            (editor.chain().focus() as any).changeIndent(-1).run();
           }}
           title={t('tiptap.outdent')}
         >

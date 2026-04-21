@@ -105,7 +105,11 @@ export default function VersionHistoryPanel({ noteId, noteTitle, onRestore, onCl
   };
 
   const formatTime = (date: string) => {
-    const d = new Date(date);
+    // 后端 SQLite datetime('now') 存的是 UTC 字符串但不带 Z 后缀（形如 "2025-04-21 07:30:12"）。
+    // 若直接 new Date(date)，浏览器会按本地时区解析，东八区下会多算 8 小时（"1 分钟前"显示成"8 小时前"）。
+    // 这里统一补 "Z" 让 JS 按 UTC 解析。与 NoteList.tsx 的做法保持一致。
+    const normalized = /Z$|[+-]\d{2}:?\d{2}$/.test(date) ? date : date.replace(" ", "T") + "Z";
+    const d = new Date(normalized);
     const now = new Date();
     const diffMs = now.getTime() - d.getTime();
     const diffMin = Math.floor(diffMs / 60000);

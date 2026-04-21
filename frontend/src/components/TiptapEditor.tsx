@@ -444,14 +444,24 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
           //    通常同时带 text/html（每行一个 <div> 或 <pre><br>），
           //    若走 HTML 解析会被拆成多块，导致"每行一个代码块"。
           if (text && text.includes("\n") && !looksLikeMarkdown(text)) {
-            const { state, dispatch, schema } = view as any;
-            const codeBlockType = schema.nodes.codeBlock;
-            if (codeBlockType) {
-              const codeNode = codeBlockType.create({}, schema.text(text));
-              const tr = state.tr.replaceSelectionWith(codeNode, false);
-              dispatch(tr);
-              return true;
-            }
+            // 把纯文本包在 <pre><code> 中，通过 PM 的 DOMParser.parseSlice → replaceSelection
+            // 让 PM 自己处理块级节点（codeBlock）的嵌套与光标定位。
+            // 之前的做法是手动 codeBlockType.create() + replaceSelectionWith()，
+            // 但在光标位于段落内等场景下 PM 无法正确 fit 块级节点到行内位置，
+            // 导致文档结构损坏 → 后续 DOM mutation 时 resolveSelection 报
+            // "Position -12 out of range"。
+            const { state, dispatch } = view;
+            const parser = ProseMirrorDOMParser.fromSchema(state.schema);
+            const wrapper = document.createElement("div");
+            const pre = document.createElement("pre");
+            const code = document.createElement("code");
+            code.textContent = text;
+            pre.appendChild(code);
+            wrapper.appendChild(pre);
+            const slice = parser.parseSlice(wrapper);
+            const tr = state.tr.replaceSelection(slice).scrollIntoView();
+            dispatch(tr);
+            return true;
           }
 
           // 4) Markdown 纯文本：转 HTML 后插入
@@ -570,7 +580,24 @@ export default function TiptapEditor({ note, onUpdate, onTagsChange, onHeadingsC
     if (titleRef.current) {
       titleRef.current.value = note.title;
     }
-  }, [note.id]);
+  }, [note.id, note.content]);
+  //   ^^^^^^^^^^^^^^^^^^^^^^
+  //   依赖为什么是 content 而不是 version：
+  //
+  //   父组件（EditorPane.handleUpdate）在保存成功后，为了避免打断用户输入，
+  //   只回填 version/updatedAt/title，**不回填 content**。因此：
+  //
+  //   1) 正常打字保存：note.version 会 +1 但 note.content 不变
+  //      → 若依赖 version，此 effect 会被触发，用 旧 note.content 去 setContent，
+  //        把用户刚输入的文本覆盖回退（这就是"输入任何文本都自动回退"的 bug）。
+  //      → 改用 content 依赖后，content 没变，effect 不跑，用户输入不被回退。
+  //
+  //   2) 恢复历史版本：VersionHistoryPanel.onRestore → setActiveNote(updated)，
+  //      updated.content 是新的（老版本内容） → content 变化 → effect 触发 → setContent。
+  //
+  //   3) 切换笔记：note.id 变化 → effect 触发。
+  //
+  //   内部仍保留 currentJson !== newJson 护栏，避免同一 JSON 重复 setContent 抖动光标。
 
   // 组件卸载时清理 debounce timer
   useEffect(() => {

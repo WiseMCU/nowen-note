@@ -621,6 +621,7 @@ const NoteCard = React.memo(React.forwardRef<HTMLDivElement, {
     </motion.div>
   );
 }));
+NoteCard.displayName = "NoteCard";
 
 /* ===== 虚拟滚动笔记列表 ===== */
 const ITEM_HEIGHT = 90; // 每个笔记卡片的估算高度（px）
@@ -1485,7 +1486,7 @@ export default function NoteList() {
         ) : (
         <ScrollArea className="flex-1 min-h-0">
         <div className="px-2 pb-2 space-y-1">
-          <AnimatePresence mode="popLayout">
+          <AnimatePresence>
             {state.notes.map((note) => (
               <NoteCard
                 key={note.id}

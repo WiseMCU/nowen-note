@@ -102,14 +102,15 @@ function NotebookTreeItem({
 }
 
 function MoveNoteModal({
-  isOpen, noteTitle, currentNotebookId, notebooks, onMove, onClose,
+  isOpen, noteTitle, count, currentNotebookId, notebooks, onMove, onClose,
 }: {
-  isOpen: boolean; noteTitle: string; currentNotebookId: string;
+  isOpen: boolean; noteTitle: string; count?: number; currentNotebookId: string;
   notebooks: Notebook[]; onMove: (notebookId: string) => void; onClose: () => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { t } = useTranslation();
   const tree = buildNotebookTree(notebooks);
+  const isBulk = (count || 1) > 1;
 
   useEffect(() => {
     if (isOpen) setSelectedId(null);
@@ -135,14 +136,18 @@ function MoveNoteModal({
         <div className="flex items-center justify-between px-4 py-3 border-b border-app-border">
           <div className="flex items-center gap-2 min-w-0">
             <FolderInput size={16} className="text-accent-primary shrink-0" />
-            <span className="text-sm font-medium text-tx-primary truncate">{t('noteList.moveNote')}</span>
+            <span className="text-sm font-medium text-tx-primary truncate">
+              {isBulk ? t('noteList.moveNotesTitle', { count }) : t('noteList.moveNote')}
+            </span>
           </div>
           <button onClick={onClose} className="p-1 rounded-md hover:bg-app-hover text-tx-tertiary">
             <X size={16} />
           </button>
         </div>
         <div className="px-4 py-2 text-xs text-tx-tertiary truncate border-b border-app-border">
-          {noteTitle || t('common.untitledNote')}
+          {isBulk
+            ? t('noteList.selectedCount', { count })
+            : (noteTitle || t('common.untitledNote'))}
         </div>
         <ScrollArea className="flex-1 max-h-[300px]">
           <div className="p-2">
@@ -514,10 +519,11 @@ function PullToRefresh({
 }
 
 const NoteCard = React.memo(React.forwardRef<HTMLDivElement, {
-  note: NoteListItem; isActive: boolean; onClick: () => void;
+  note: NoteListItem; isActive: boolean; onClick: (e: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent) => void;
   isContextTarget: boolean;
   isShared?: boolean;
+  isSelected?: boolean;
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent) => void;
   onDragOver?: (e: React.DragEvent) => void;
@@ -527,7 +533,7 @@ const NoteCard = React.memo(React.forwardRef<HTMLDivElement, {
   onTouchStart?: (e: React.TouchEvent) => void;
   onTouchMove?: (e: React.TouchEvent) => void;
   onTouchEnd?: () => void;
-}>(function NoteCard({ note, isActive, onClick, onContextMenu, isContextTarget, isShared, draggable, onDragStart, onDragOver, onDragEnd, onDrop, isDragOver, onTouchStart, onTouchMove, onTouchEnd }, ref) {
+}>(function NoteCard({ note, isActive, onClick, onContextMenu, isContextTarget, isShared, isSelected, draggable, onDragStart, onDragOver, onDragEnd, onDrop, isDragOver, onTouchStart, onTouchMove, onTouchEnd }, ref) {
   const preview = note.contentText?.slice(0, 100) || "";
   const { t } = useTranslation();
   const wordCount = note.contentText?.length || 0;
@@ -550,7 +556,9 @@ const NoteCard = React.memo(React.forwardRef<HTMLDivElement, {
       onTouchEnd={onTouchEnd}
       className={cn(
         "relative rounded-lg cursor-pointer border transition-all group overflow-hidden",
-        isActive
+        isSelected
+          ? "bg-accent-primary/10 border-accent-primary/40 shadow-sm"
+          : isActive
           ? "bg-app-active border-accent-primary/30 shadow-sm"
           : isContextTarget
           ? "bg-app-hover border-accent-primary/20"
@@ -561,7 +569,9 @@ const NoteCard = React.memo(React.forwardRef<HTMLDivElement, {
       {/* 左侧彩色指示条 */}
       <div className={cn(
         "absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg transition-colors",
-        isActive
+        isSelected
+          ? "bg-accent-primary"
+          : isActive
           ? "bg-accent-primary"
           : note.isFavorite === 1
           ? "bg-amber-400"
@@ -621,6 +631,7 @@ function VirtualNoteList({
   activeNoteId,
   menuState,
   sharedNoteIds,
+  selectedIds,
   onSelectNote,
   onContextMenu,
   canDragSort,
@@ -638,7 +649,8 @@ function VirtualNoteList({
   activeNoteId: string | undefined;
   menuState: { isOpen: boolean; targetId: string | null };
   sharedNoteIds: Set<string>;
-  onSelectNote: (noteId: string) => void;
+  selectedIds: Set<string>;
+  onSelectNote: (noteId: string, e: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent, noteId: string) => void;
   canDragSort?: boolean;
   dragOverNoteId?: string | null;
@@ -698,7 +710,8 @@ function VirtualNoteList({
               isActive={activeNoteId === note.id}
               isContextTarget={menuState.isOpen && menuState.targetId === note.id}
               isShared={sharedNoteIds.has(note.id)}
-              onClick={() => onSelectNote(note.id)}
+              isSelected={selectedIds.has(note.id)}
+              onClick={(e) => onSelectNote(note.id, e)}
               onContextMenu={(e) => onContextMenu(e, note.id)}
               draggable={canDragSort}
               onDragStart={(e) => onDragStart?.(e, note.id)}
@@ -721,13 +734,16 @@ export default function NoteList() {
   const { state } = useApp();
   const actions = useAppActions();
   const { menu, menuRef, openMenu, closeMenu } = useContextMenu();
-  const [moveModal, setMoveModal] = useState<{ noteId: string; noteTitle: string; notebookId: string } | null>(null);
+  const [moveModal, setMoveModal] = useState<{ noteIds: string[]; noteTitle: string; notebookId: string } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dateFilter, setDateFilter] = useState<string | null>(null); // YYYY-MM-DD
   const [showCalendar, setShowCalendar] = useState(false);
   const [sharedNoteIds, setSharedNoteIds] = useState<Set<string>>(new Set());
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
   const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
+  // 多选：Ctrl/Cmd+Click 切换、Shift+Click 范围；为空即未进入多选
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
   // 移动端触摸拖拽状态
   const touchDragRef = useRef<{
     noteId: string;
@@ -788,7 +804,8 @@ export default function NoteList() {
 
   useEffect(() => {
     fetchNotes().catch(console.error);
-  }, [fetchNotes]);
+    // 追加依赖：notesRefreshToken 递增时强制刷新当前视图
+  }, [fetchNotes, state.notesRefreshToken]);
 
   // viewMode 切换时自动收起日历并清除筛选
   useEffect(() => {
@@ -796,8 +813,68 @@ export default function NoteList() {
     setShowCalendar(false);
   }, [state.viewMode]);
 
-  const handleSelectNote = async (noteId: string) => {
+  // 切 viewMode / notebook / 搜索 / 日期 时清空多选
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setLastClickedId(null);
+  }, [state.viewMode, state.selectedNotebookId, state.searchQuery, state.selectedTagId, dateFilter]);
+
+  // 全局 ESC 清空多选（多选状态下）
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelectedIds(new Set());
+        setLastClickedId(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [selectedIds.size]);
+
+  const handleSelectNote = async (noteId: string, e?: React.MouseEvent) => {
+    const isCtrl = !!e && (e.ctrlKey || e.metaKey);
+    const isShift = !!e && e.shiftKey;
+
+    // Ctrl/Cmd 点击：切换此项在多选集合中的状态，不打开笔记
+    if (isCtrl) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(noteId)) next.delete(noteId);
+        else next.add(noteId);
+        return next;
+      });
+      setLastClickedId(noteId);
+      return;
+    }
+
+    // Shift 点击：以 lastClickedId → noteId 的可见范围全部选中
+    if (isShift && lastClickedId && lastClickedId !== noteId) {
+      const ids = state.notes.map((n) => n.id);
+      const a = ids.indexOf(lastClickedId);
+      const b = ids.indexOf(noteId);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          for (let i = lo; i <= hi; i++) next.add(ids[i]);
+          return next;
+        });
+        setLastClickedId(noteId);
+        return;
+      }
+    }
+
+    // 普通点击：如果当前在多选状态，仅清空多选而不打开笔记（避免误触打开被选的 50 条之一）
+    if (selectedIds.size > 0) {
+      setSelectedIds(new Set());
+      setLastClickedId(noteId);
+      // 若用户点击的是已选中的唯一一项以外的项目，继续打开
+      // 这里选择"先退出多选、再正常打开"：更直观
+    }
+
     haptic.selection();
+    setLastClickedId(noteId);
     const note = await api.getNote(noteId);
     actions.setActiveNote(note);
     actions.setMobileView("editor");
@@ -878,6 +955,9 @@ export default function NoteList() {
     if (!targetNote) return [];
 
     const isTrashView = state.viewMode === "trash";
+    // 若右键点击的是多选中的一员，批量操作；否则针对该条
+    const bulkMode = menu.targetId && selectedIds.has(menu.targetId) && selectedIds.size > 1;
+    const bulkCount = bulkMode ? selectedIds.size : 0;
 
     if (isTrashView) {
       return [
@@ -906,12 +986,20 @@ export default function NoteList() {
       { id: "sep1", label: "", separator: true },
       {
         id: "move",
-        label: t('noteList.moveTo'),
+        label: bulkMode ? t('noteList.moveNotesTitle', { count: bulkCount }) : t('noteList.moveTo'),
         icon: <FolderInput size={14} />,
-        disabled: !!targetNote.isLocked,
+        disabled: !bulkMode && !!targetNote.isLocked,
       },
       { id: "sep2", label: "", separator: true },
-      { id: "trash", label: t('noteList.moveToTrash'), icon: <Trash2 size={14} />, danger: true, disabled: !!targetNote.isLocked },
+      {
+        id: "trash",
+        label: bulkMode
+          ? `${t('noteList.moveToTrash')} (${bulkCount})`
+          : t('noteList.moveToTrash'),
+        icon: <Trash2 size={14} />,
+        danger: true,
+        disabled: !bulkMode && !!targetNote.isLocked,
+      },
     ];
   };
 
@@ -950,26 +1038,77 @@ export default function NoteList() {
       }
       case "trash": {
         haptic.heavy();
+        // 若右键目标在多选中且多选 >1，批量移入回收站
+        if (selectedIds.has(targetId) && selectedIds.size > 1) {
+          const ids = Array.from(selectedIds);
+          // 过滤掉已锁定的笔记（不允许操作）
+          const movable = ids.filter((id) => {
+            const n = state.notes.find((x) => x.id === id);
+            return n && !n.isLocked;
+          });
+          if (movable.length === 0) {
+            toast.warning(t('common.noteLockedCannotEdit') || t('editor.lockedBanner'));
+            break;
+          }
+          if (state.activeNote && movable.includes(state.activeNote.id)) actions.setActiveNote(null);
+          for (const id of movable) actions.removeNoteFromList(id);
+          setSelectedIds(new Set());
+          setLastClickedId(null);
+          Promise.all(movable.map((id) => api.updateNote(id, { isTrashed: 1 } as any)))
+            .then(() => {
+              actions.refreshNotebooks();
+              actions.refreshNotes();
+              toast.success(t('noteList.bulkTrashSuccess', { count: movable.length }));
+            })
+            .catch((err) => {
+              console.error(err);
+              actions.refreshNotes();
+            });
+          break;
+        }
         if (state.activeNote?.id === targetId) actions.setActiveNote(null);
         actions.removeNoteFromList(targetId);
         api.updateNote(targetId, { isTrashed: 1 } as any)
-          .then(() => actions.refreshNotebooks())
+          .then(() => {
+            actions.refreshNotebooks();
+            actions.refreshNotes();
+          })
           .catch(console.error);
         break;
       }
       case "move": {
-        setMoveModal({
-          noteId: targetId,
-          noteTitle: targetNote.title,
-          notebookId: targetNote.notebookId,
-        });
+        // 多选批量移动
+        if (selectedIds.has(targetId) && selectedIds.size > 1) {
+          const ids = Array.from(selectedIds).filter((id) => {
+            const n = state.notes.find((x) => x.id === id);
+            return n && !n.isLocked;
+          });
+          if (ids.length === 0) {
+            toast.warning(t('common.noteLockedCannotEdit') || t('editor.lockedBanner'));
+            break;
+          }
+          setMoveModal({
+            noteIds: ids,
+            noteTitle: targetNote.title,
+            notebookId: targetNote.notebookId,
+          });
+        } else {
+          setMoveModal({
+            noteIds: [targetId],
+            noteTitle: targetNote.title,
+            notebookId: targetNote.notebookId,
+          });
+        }
         break;
       }
       case "restore": {
         haptic.success();
         actions.removeNoteFromList(targetId);
         api.updateNote(targetId, { isTrashed: 0 } as any)
-          .then(() => actions.refreshNotebooks())
+          .then(() => {
+            actions.refreshNotebooks();
+            actions.refreshNotes();
+          })
           .catch(console.error);
         break;
       }
@@ -978,7 +1117,10 @@ export default function NoteList() {
         if (state.activeNote?.id === targetId) actions.setActiveNote(null);
         actions.removeNoteFromList(targetId);
         api.deleteNote(targetId)
-          .then(() => actions.refreshNotebooks())
+          .then(() => {
+            actions.refreshNotebooks();
+            actions.refreshNotes();
+          })
           .catch(console.error);
         break;
       }
@@ -987,13 +1129,33 @@ export default function NoteList() {
 
   const handleMoveNote = async (targetNotebookId: string) => {
     if (!moveModal) return;
-    await api.updateNote(moveModal.noteId, { notebookId: targetNotebookId } as any);
-    if (state.activeNote?.id === moveModal.noteId) {
+    const ids = moveModal.noteIds;
+    const results = await Promise.allSettled(
+      ids.map((id) => api.updateNote(id, { notebookId: targetNotebookId } as any))
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    const success = ids.length - failed;
+
+    // 同步 activeNote（若它也在被移动的列表里）
+    if (state.activeNote && ids.includes(state.activeNote.id)) {
       actions.setActiveNote({ ...state.activeNote, notebookId: targetNotebookId });
     }
+
     setMoveModal(null);
+    setSelectedIds(new Set());
+    setLastClickedId(null);
     await fetchNotes();
     actions.refreshNotebooks();
+
+    if (ids.length === 1) {
+      if (failed) toast.error(t('noteList.bulkMoveFailed', { error: '' }));
+    } else if (failed === 0) {
+      toast.success(t('noteList.bulkMoveSuccess', { count: success }));
+    } else if (success === 0) {
+      toast.error(t('noteList.bulkMoveFailed', { error: '' }));
+    } else {
+      toast.warning(t('noteList.bulkMovePartial', { success, failed }));
+    }
   };
 
   // 是否允许拖拽排序（仅在笔记本视图且非搜索/回收站时）
@@ -1218,6 +1380,85 @@ export default function NoteList() {
         <span className="text-[10px] text-tx-tertiary">{t('common.noteCount', { count: state.notes.length })}</span>
       </div>
 
+      {/* 多选操作栏 */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between gap-2 px-3 py-2 bg-accent-primary/10 border-y border-accent-primary/20">
+          <span className="text-xs font-medium text-accent-primary truncate">
+            {t('noteList.selectedCount', { count: selectedIds.size })}
+          </span>
+          <div className="flex items-center gap-1 shrink-0">
+            {state.viewMode !== "trash" && (
+              <>
+                <button
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-accent-primary text-white hover:bg-accent-primary/90 transition-colors"
+                  onClick={() => {
+                    const ids = Array.from(selectedIds).filter((id) => {
+                      const n = state.notes.find((x) => x.id === id);
+                      return n && !n.isLocked;
+                    });
+                    if (ids.length === 0) {
+                      toast.warning(t('editor.lockedBanner'));
+                      return;
+                    }
+                    const first = state.notes.find((n) => n.id === ids[0]);
+                    setMoveModal({
+                      noteIds: ids,
+                      noteTitle: first?.title || "",
+                      notebookId: first?.notebookId || "",
+                    });
+                  }}
+                  title={t('noteList.moveSelected')}
+                >
+                  <FolderInput size={12} />
+                  <span>{t('noteList.moveSelected')}</span>
+                </button>
+                <button
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md text-red-500 hover:bg-red-500/10 transition-colors"
+                  onClick={() => {
+                    const ids = Array.from(selectedIds).filter((id) => {
+                      const n = state.notes.find((x) => x.id === id);
+                      return n && !n.isLocked;
+                    });
+                    if (ids.length === 0) {
+                      toast.warning(t('editor.lockedBanner'));
+                      return;
+                    }
+                    if (state.activeNote && ids.includes(state.activeNote.id)) actions.setActiveNote(null);
+                    for (const id of ids) actions.removeNoteFromList(id);
+                    setSelectedIds(new Set());
+                    setLastClickedId(null);
+                    haptic.heavy();
+                    Promise.all(ids.map((id) => api.updateNote(id, { isTrashed: 1 } as any)))
+                      .then(() => {
+                        actions.refreshNotebooks();
+                        actions.refreshNotes();
+                        toast.success(t('noteList.bulkTrashSuccess', { count: ids.length }));
+                      })
+                      .catch((err) => {
+                        console.error(err);
+                        actions.refreshNotes();
+                      });
+                  }}
+                  title={t('noteList.trashSelected')}
+                >
+                  <Trash2 size={12} />
+                </button>
+              </>
+            )}
+            <button
+              className="inline-flex items-center p-1 rounded-md text-tx-secondary hover:bg-app-hover transition-colors"
+              onClick={() => {
+                setSelectedIds(new Set());
+                setLastClickedId(null);
+              }}
+              title={t('noteList.clearSelection')}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* List - 包裹下拉刷新（仅移动端生效，桌面端不影响） */}
       <PullToRefresh onRefresh={fetchNotes}>
         {/* 笔记数量较少时使用普通渲染，较多时使用虚拟滚动 */}
@@ -1227,6 +1468,7 @@ export default function NoteList() {
             activeNoteId={state.activeNote?.id}
             menuState={{ isOpen: menu.isOpen, targetId: menu.targetId }}
             sharedNoteIds={sharedNoteIds}
+            selectedIds={selectedIds}
             onSelectNote={handleSelectNote}
             onContextMenu={(e, noteId) => openMenu(e, noteId, "note")}
             canDragSort={canDragSort}
@@ -1255,7 +1497,8 @@ export default function NoteList() {
                 isActive={state.activeNote?.id === note.id}
                 isContextTarget={menu.isOpen && menu.targetId === note.id}
                 isShared={sharedNoteIds.has(note.id)}
-                onClick={() => handleSelectNote(note.id)}
+                isSelected={selectedIds.has(note.id)}
+                onClick={(e) => handleSelectNote(note.id, e)}
                 onContextMenu={(e) => openMenu(e, note.id, "note")}
                 draggable={canDragSort}
                 onDragStart={(e) => handleDragStart(e, note.id)}
@@ -1334,6 +1577,7 @@ export default function NoteList() {
       <MoveNoteModal
         isOpen={!!moveModal}
         noteTitle={moveModal?.noteTitle || ""}
+        count={moveModal?.noteIds.length || 1}
         currentNotebookId={moveModal?.notebookId || ""}
         notebooks={state.notebooks}
         onMove={handleMoveNote}

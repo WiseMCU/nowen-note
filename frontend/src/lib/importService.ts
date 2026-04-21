@@ -223,12 +223,50 @@ function extractTitleFromHtml(html: string, fallbackTitle: string): string {
 }
 
 // 读取拖入的文件列表
+//
+// 增强：
+// 1. 同批次内的图片文件（png/jpg/gif/webp/svg/bmp/ico）会被读取为 base64 data URI，
+//    构建一个 imageMap 并附加到每个 md/txt/html 笔记上。
+//    这样用户"同时选中 md + 相对路径下的图片"即可恢复图片引用，不必先打成 zip。
+// 2. 若 File 带有 webkitRelativePath（来自 <input webkitdirectory> 或拖拽目录），
+//    会同时按相对路径与文件名建立两条索引，提高命中率。
 export async function readMarkdownFiles(
   files: FileList | File[]
 ): Promise<ImportFileInfo[]> {
   const result: ImportFileInfo[] = [];
   const fileArray = Array.from(files);
 
+  // —— 第一轮：扫描所有图片文件，构建 imageMap ——
+  const imageMap: Record<string, string> = {};
+  for (const file of fileArray) {
+    if (!isImageFile(file.name)) continue;
+    try {
+      // 读成 ArrayBuffer 再转 base64，避免 FileReader 的异步嵌套
+      const buf = await file.arrayBuffer();
+      const base64 = arrayBufferToBase64(buf);
+      const mime = getImageMime(file.name);
+      const dataUri = `data:${mime};base64,${base64}`;
+
+      // 键：文件名（不含路径），以及 webkitRelativePath 提供的相对路径
+      const relPath = (file as any).webkitRelativePath as string | undefined;
+      if (relPath) {
+        imageMap[relPath] = dataUri;
+        // 去掉顶层目录后的路径（与 md 里 `./images/a.png` 这种更接近）
+        const parts = relPath.split("/");
+        if (parts.length > 1) {
+          imageMap[parts.slice(1).join("/")] = dataUri;
+        }
+      }
+      if (!imageMap[file.name]) {
+        imageMap[file.name] = dataUri;
+      }
+    } catch (err) {
+      console.warn("读取本地图片失败:", file.name, err);
+    }
+  }
+  const hasImages = Object.keys(imageMap).length > 0;
+
+  // —— 第二轮：读取笔记文件 ——
   for (const file of fileArray) {
     if (!isSupportedFile(file.name)) continue;
 
@@ -245,6 +283,7 @@ export async function readMarkdownFiles(
         size: file.size,
         selected: true,
         source,
+        imageMap: hasImages ? imageMap : undefined,
       });
     } else {
       result.push({
@@ -254,11 +293,24 @@ export async function readMarkdownFiles(
         size: file.size,
         selected: true,
         source: file.name.endsWith(".txt") ? "txt" : "md",
+        imageMap: hasImages ? imageMap : undefined,
       });
     }
   }
 
   return result;
+}
+
+// 把 ArrayBuffer 编码成 base64（避免使用 FileReader 的链式回调）
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, Array.from(chunk));
+  }
+  return btoa(binary);
 }
 
 // 图片扩展名 → MIME 类型
@@ -458,13 +510,10 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
     const line = lines[i];
     const trimmed = line.trim();
 
-    // 空行 → 保留为空段落（避免空行被吞掉）
+    // 空行 → 保留为空段落（每个空行都产出一个空段落，保持与原文一致）
     if (!trimmed) {
-      // 连续多个空行合并为一个空段落，防止生成过多无意义节点
       htmlParts.push("<p></p>");
-      while (i < lines.length && !lines[i].trim()) {
-        i++;
-      }
+      i++;
       continue;
     }
 

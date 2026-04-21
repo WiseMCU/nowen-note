@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useCallback } from "react";
+import React, { createContext, useContext, useReducer, useMemo } from "react";
 import { Notebook, NoteListItem, Note, Tag, ViewMode } from "@/types";
 import { api } from "@/lib/api";
 
@@ -22,6 +22,8 @@ interface AppState {
   lastSyncedAt: string | null;
   mobileView: MobileView;
   mobileSidebarOpen: boolean;
+  /** 全局"笔记列表刷新"令牌：递增时 NoteList 会重新拉取当前视图的列表 */
+  notesRefreshToken: number;
 }
 
 type Action =
@@ -43,7 +45,8 @@ type Action =
   | { type: "SET_SYNC_STATUS"; payload: SyncStatus }
   | { type: "SET_LAST_SYNCED"; payload: string }
   | { type: "SET_MOBILE_VIEW"; payload: MobileView }
-  | { type: "SET_MOBILE_SIDEBAR"; payload: boolean };
+  | { type: "SET_MOBILE_SIDEBAR"; payload: boolean }
+  | { type: "TRIGGER_REFRESH_NOTES" };
 
 const DEFAULT_SIDEBAR_WIDTH = 260;
 const MIN_SIDEBAR_WIDTH = 200;
@@ -92,6 +95,7 @@ const initialState: AppState = {
   lastSyncedAt: null,
   mobileView: "list",
   mobileSidebarOpen: false,
+  notesRefreshToken: 0,
 };
 
 export { MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, DEFAULT_SIDEBAR_WIDTH, MIN_NOTELIST_WIDTH, MAX_NOTELIST_WIDTH, DEFAULT_NOTELIST_WIDTH };
@@ -153,6 +157,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, mobileView: action.payload };
     case "SET_MOBILE_SIDEBAR":
       return { ...state, mobileSidebarOpen: action.payload };
+    case "TRIGGER_REFRESH_NOTES":
+      return { ...state, notesRefreshToken: state.notesRefreshToken + 1 };
     default:
       return state;
   }
@@ -181,28 +187,33 @@ export function useApp() {
 export function useAppActions() {
   const { dispatch } = useApp();
 
-  return {
-    setNotebooks: useCallback((v: Notebook[]) => dispatch({ type: "SET_NOTEBOOKS", payload: v }), [dispatch]),
-    setNotes: useCallback((v: NoteListItem[]) => dispatch({ type: "SET_NOTES", payload: v }), [dispatch]),
-    setActiveNote: useCallback((v: Note | null) => dispatch({ type: "SET_ACTIVE_NOTE", payload: v }), [dispatch]),
-    setTags: useCallback((v: Tag[]) => dispatch({ type: "SET_TAGS", payload: v }), [dispatch]),
-    setSelectedNotebook: useCallback((v: string | null) => dispatch({ type: "SET_SELECTED_NOTEBOOK", payload: v }), [dispatch]),
-    setSelectedTag: useCallback((v: string | null) => dispatch({ type: "SET_SELECTED_TAG", payload: v }), [dispatch]),
-    setViewMode: useCallback((v: ViewMode) => dispatch({ type: "SET_VIEW_MODE", payload: v }), [dispatch]),
-    setSearchQuery: useCallback((v: string) => dispatch({ type: "SET_SEARCH_QUERY", payload: v }), [dispatch]),
-    toggleSidebar: useCallback(() => dispatch({ type: "TOGGLE_SIDEBAR" }), [dispatch]),
-    setSidebarWidth: useCallback((v: number) => dispatch({ type: "SET_SIDEBAR_WIDTH", payload: v }), [dispatch]),
-    setNoteListWidth: useCallback((v: number) => dispatch({ type: "SET_NOTELIST_WIDTH", payload: v }), [dispatch]),
-    setLoading: useCallback((v: boolean) => dispatch({ type: "SET_LOADING", payload: v }), [dispatch]),
-    updateNoteInList: useCallback((v: Partial<NoteListItem> & { id: string }) => dispatch({ type: "UPDATE_NOTE_IN_LIST", payload: v }), [dispatch]),
-    removeNoteFromList: useCallback((id: string) => dispatch({ type: "REMOVE_NOTE_FROM_LIST", payload: id }), [dispatch]),
-    addNoteToList: useCallback((v: NoteListItem) => dispatch({ type: "ADD_NOTE_TO_LIST", payload: v }), [dispatch]),
-    setSyncStatus: useCallback((v: SyncStatus) => dispatch({ type: "SET_SYNC_STATUS", payload: v }), [dispatch]),
-    setLastSynced: useCallback((v: string) => dispatch({ type: "SET_LAST_SYNCED", payload: v }), [dispatch]),
-    setMobileView: useCallback((v: MobileView) => dispatch({ type: "SET_MOBILE_VIEW", payload: v }), [dispatch]),
-    setMobileSidebar: useCallback((v: boolean) => dispatch({ type: "SET_MOBILE_SIDEBAR", payload: v }), [dispatch]),
-    refreshNotebooks: useCallback(() => {
+  // 用 useMemo 让返回对象保持稳定引用 —— 只要 dispatch 不变，整个 actions 对象也稳定。
+  // 这样依赖 `[actions]` 的 useCallback / useEffect 不会在每次 render 都失效，
+  // 从而避免保存期间频繁 dispatch 导致的编辑器状态抖动（如光标跳行）。
+  return useMemo(() => ({
+    setNotebooks: (v: Notebook[]) => dispatch({ type: "SET_NOTEBOOKS", payload: v }),
+    setNotes: (v: NoteListItem[]) => dispatch({ type: "SET_NOTES", payload: v }),
+    setActiveNote: (v: Note | null) => dispatch({ type: "SET_ACTIVE_NOTE", payload: v }),
+    setTags: (v: Tag[]) => dispatch({ type: "SET_TAGS", payload: v }),
+    setSelectedNotebook: (v: string | null) => dispatch({ type: "SET_SELECTED_NOTEBOOK", payload: v }),
+    setSelectedTag: (v: string | null) => dispatch({ type: "SET_SELECTED_TAG", payload: v }),
+    setViewMode: (v: ViewMode) => dispatch({ type: "SET_VIEW_MODE", payload: v }),
+    setSearchQuery: (v: string) => dispatch({ type: "SET_SEARCH_QUERY", payload: v }),
+    toggleSidebar: () => dispatch({ type: "TOGGLE_SIDEBAR" }),
+    setSidebarWidth: (v: number) => dispatch({ type: "SET_SIDEBAR_WIDTH", payload: v }),
+    setNoteListWidth: (v: number) => dispatch({ type: "SET_NOTELIST_WIDTH", payload: v }),
+    setLoading: (v: boolean) => dispatch({ type: "SET_LOADING", payload: v }),
+    updateNoteInList: (v: Partial<NoteListItem> & { id: string }) => dispatch({ type: "UPDATE_NOTE_IN_LIST", payload: v }),
+    removeNoteFromList: (id: string) => dispatch({ type: "REMOVE_NOTE_FROM_LIST", payload: id }),
+    addNoteToList: (v: NoteListItem) => dispatch({ type: "ADD_NOTE_TO_LIST", payload: v }),
+    setSyncStatus: (v: SyncStatus) => dispatch({ type: "SET_SYNC_STATUS", payload: v }),
+    setLastSynced: (v: string) => dispatch({ type: "SET_LAST_SYNCED", payload: v }),
+    setMobileView: (v: MobileView) => dispatch({ type: "SET_MOBILE_VIEW", payload: v }),
+    setMobileSidebar: (v: boolean) => dispatch({ type: "SET_MOBILE_SIDEBAR", payload: v }),
+    refreshNotebooks: () => {
       api.getNotebooks().then((v) => dispatch({ type: "SET_NOTEBOOKS", payload: v })).catch(console.error);
-    }, [dispatch]),
-  };
+    },
+    /** 触发 NoteList 重新拉取当前视图的笔记列表 */
+    refreshNotes: () => dispatch({ type: "TRIGGER_REFRESH_NOTES" }),
+  }), [dispatch]);
 }

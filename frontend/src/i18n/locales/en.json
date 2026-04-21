@@ -119,7 +119,17 @@
     "refreshing": "Refreshing...",
     "cannotCreateInTrash": "Cannot create notes in Trash. Please switch to another view first",
     "noteCreatedInNotebook": "New note created in \"{{name}}\"",
-    "createFailed": "Failed to create note"
+    "createFailed": "Failed to create note",
+    "selectedCount": "{{count}} selected",
+    "moveSelected": "Move selected",
+    "trashSelected": "Move to Trash",
+    "clearSelection": "Clear selection",
+    "moveNotesTitle": "Move {{count}} notes",
+    "bulkMoveSuccess": "Moved {{count}} notes",
+    "bulkMoveFailed": "Move failed: {{error}}",
+    "bulkMovePartial": "Moved {{success}}, {{failed}} failed",
+    "bulkTrashSuccess": "Moved {{count}} notes to Trash",
+    "multiSelectHint": "Ctrl/Cmd-click to multi-select, Shift-click for range"
   },
   "editor": {
     "selectNote": "Select a note to start editing",
@@ -302,6 +312,8 @@
     "exporting": "Exporting...",
     "exportSuccess": "Export successful",
     "exportAsZip": "Export All as ZIP",
+    "exportInlineImages": "Embed images as base64",
+    "exportInlineImagesHint": "Off by default: images are written to an assets/ folder so the .md files stay small and preview correctly in Typora/Obsidian. When on, images are inlined as base64 (self-contained .md, but much larger files).",
     "importNotes": "Import Notes",
     "importDescription": "Import Markdown (.md), plain text (.txt), HTML (.html) files or ZIP archives. Compatible with Xiaomi Notes, OPPO/OnePlus Memo, vivo Notes export formats.",
     "dropFilesHere": "Drop files here, or click to select",

@@ -37,13 +37,15 @@ export default function DataManager() {
   const [duplicateStrategy, setDuplicateStrategy] = useState<"merge" | "unique">("merge");
   // 当前导入批次是否包含 zip（zip 本身按目录派生笔记本，不需要 perFile 开关）
   const [hasZip, setHasZip] = useState(false);
+  // 导出时是否把图片内嵌为 base64（默认 false：外置到 assets/ 目录，体积小、可读性好）
+  const [exportInlineImages, setExportInlineImages] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 全量导出
   const handleExportAll = async () => {
     setIsExporting(true);
     setExportProgress(null);
-    await exportAllNotes((p) => setExportProgress(p));
+    await exportAllNotes((p) => setExportProgress(p), { inlineImages: exportInlineImages });
     setIsExporting(false);
   };
 
@@ -82,9 +84,13 @@ export default function DataManager() {
     if (zipFile) {
       result = await readMarkdownFromZip(zipFile);
       setHasZip(true);
+      // zip 由其内部目录/zip 文件名派生笔记本，关闭 per-file
+      setPerFileNotebook(false);
     } else {
       result = await readMarkdownFiles(files);
       setHasZip(false);
+      // 散文件默认开启 per-file：以文件名作为笔记本名，而非统一落到"导入的笔记"
+      setPerFileNotebook(true);
     }
 
     setImportFiles(result);
@@ -212,6 +218,25 @@ export default function DataManager() {
             </div>
           )}
 
+          {/* 导出选项：图片处理策略 */}
+          <label className="flex items-start gap-2 mb-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={exportInlineImages}
+              onChange={(e) => setExportInlineImages(e.target.checked)}
+              disabled={isExporting}
+              className="mt-0.5 w-4 h-4 accent-indigo-600 cursor-pointer"
+            />
+            <span className="text-sm">
+              <span className="text-zinc-700 dark:text-zinc-300">
+                {t('dataManager.exportInlineImages')}
+              </span>
+              <span className="block text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                {t('dataManager.exportInlineImagesHint')}
+              </span>
+            </span>
+          </label>
+
           <button
             onClick={handleExportAll}
             disabled={isExporting}
@@ -272,7 +297,7 @@ export default function DataManager() {
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".md,.txt,.markdown,.html,.htm,.zip"
+                accept=".md,.txt,.markdown,.html,.htm,.zip,.png,.jpg,.jpeg,.gif,.webp,.svg,.bmp"
                 onChange={handleFileSelect}
                 className="hidden"
               />

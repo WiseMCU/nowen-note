@@ -126,7 +126,17 @@
     "refreshing": "刷新中...",
     "cannotCreateInTrash": "回收站中不能新建笔记，请先切换到其他视图",
     "noteCreatedInNotebook": "已将新笔记归属到「{{name}}」",
-    "createFailed": "新建笔记失败"
+    "createFailed": "新建笔记失败",
+    "selectedCount": "已选 {{count}} 条",
+    "moveSelected": "移动选中",
+    "trashSelected": "放入回收站",
+    "clearSelection": "取消选择",
+    "moveNotesTitle": "移动 {{count}} 条笔记",
+    "bulkMoveSuccess": "已移动 {{count}} 条笔记",
+    "bulkMoveFailed": "移动失败：{{error}}",
+    "bulkMovePartial": "已移动 {{success}} 条，{{failed}} 条失败",
+    "bulkTrashSuccess": "已移入回收站 {{count}} 条",
+    "multiSelectHint": "Ctrl/Cmd 点击多选，Shift 点击范围选择"
   },
   "editor": {
     "selectNote": "选择一条笔记开始编辑",
@@ -309,6 +319,8 @@
     "exporting": "正在导出...",
     "exportSuccess": "导出成功",
     "exportAsZip": "全量导出为 ZIP",
+    "exportInlineImages": "图片内嵌为 base64",
+    "exportInlineImagesHint": "默认关闭：图片会单独放到 assets/ 目录，导出文件更小、可被 Typora/Obsidian 等编辑器直接预览。开启后图片以 base64 内嵌在 md 中（单文件自包含，但文件体积更大）。",
     "importNotes": "导入笔记",
     "importDescription": "支持导入 Markdown (.md)、纯文本 (.txt)、HTML (.html) 文件或 ZIP 压缩包。兼容小米笔记、OPPO/一加备忘录、vivo便签等手机导出格式。",
     "dropFilesHere": "拖拽文件到这里，或点击选择",

@@ -81,15 +81,15 @@ export default function EditorPane() {
       } as any);
       // 仅在保存的笔记仍是当前激活笔记时更新状态（防止快速切换时覆盖错误笔记）
       if (activeNoteRef.current?.id === updated.id) {
-        // 只合并服务端返回的元数据（version, updatedAt），保留编辑器内的 content
-        // 避免用服务端返回的 content 覆盖 activeNote，否则可能因微小 JSON 差异触发编辑器 setContent → onUpdate 死循环
+        // 只合并服务端返回的元数据（version, updatedAt, title），不覆盖 content / contentText。
+        // 原因：编辑器本身才是 content 的权威来源，此时用户可能还在继续输入，
+        // 若把 data.content 回塞到 activeNote，会让 activeNote 引用变化 → EditorPane re-render，
+        // 在极个别时序下可能引起光标定位抖动（跳行）。此处只保留元数据同步。
         actions.setActiveNote({
           ...activeNoteRef.current,
           version: updated.version,
           updatedAt: updated.updatedAt,
           title: data.title,
-          content: data.content,
-          contentText: data.contentText,
         });
         actions.updateNoteInList({ id: updated.id, title: updated.title, contentText: updated.contentText, updatedAt: updated.updatedAt });
         actions.setSyncStatus("saved");
@@ -156,7 +156,12 @@ export default function EditorPane() {
     actions.setActiveNote(null);
     actions.removeNoteFromList(noteId);
     api.updateNote(noteId, { isTrashed: 1 } as any)
-      .then(() => actions.refreshNotebooks())
+      .then(() => {
+        actions.refreshNotebooks();
+        // 刷新列表：若当前处于"回收站"视图，这条笔记需要立即出现；
+        // 其他视图也重新拉一下，保证与服务端一致。
+        actions.refreshNotes();
+      })
       .catch(console.error);
   }, [activeNote, actions]);
 

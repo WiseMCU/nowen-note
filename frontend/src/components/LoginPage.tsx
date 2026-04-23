@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader2, Lock, User, BookOpen, Globe, CheckCircle2, AlertCircle, Mail, UserPlus, ShieldCheck } from "lucide-react";
+import { Loader2, Lock, User, BookOpen, CheckCircle2, AlertCircle, Mail, UserPlus, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getServerUrl, setServerUrl, clearServerUrl, testServerConnection, fetchRegisterConfig, registerAccount } from "@/lib/api";
+import { buildServerUrl, parseServerUrl, type ServerAddressParts } from "@/lib/serverUrl";
+import ServerAddressInput from "@/components/ServerAddressInput";
 
 interface LoginPageProps {
   onLogin: (token: string, user: any) => void;
@@ -15,7 +17,13 @@ type Mode = "login" | "register";
 
 export default function LoginPage({ onLogin, isClientMode = false, onDisconnect }: LoginPageProps) {
   const [mode, setMode] = useState<Mode>("login");
-  const [serverAddress, setServerAddress] = useState("");
+  // 服务器地址拆成 (protocol, host, port) 三段，避免用户手填整串 URL 出错；
+  // 旧数据 localStorage 里是完整 URL，下方 useEffect 里用 parseServerUrl 回填
+  const [serverParts, setServerParts] = useState<ServerAddressParts>({
+    protocol: "http",
+    host: "",
+    port: "",
+  });
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -35,12 +43,12 @@ export default function LoginPage({ onLogin, isClientMode = false, onDisconnect 
   const [twoFactorCode, setTwoFactorCode] = useState("");
   const { t } = useTranslation();
 
-  // 回填上次的服务器地址
+  // 回填上次的服务器地址（兼容旧版：localStorage 里可能存的是完整 URL 字符串）
   useEffect(() => {
     if (isClientMode) {
       const saved = getServerUrl() || localStorage.getItem("nowen-server-url-last") || "";
       if (saved) {
-        setServerAddress(saved.replace(/^https?:\/\//, ""));
+        setServerParts(parseServerUrl(saved));
         setServerStatus("ok");
       }
     }
@@ -59,11 +67,9 @@ export default function LoginPage({ onLogin, isClientMode = false, onDisconnect 
   }, [isClientMode, serverStatus]);
 
   const handleServerBlur = async () => {
-    if (!isClientMode || !serverAddress.trim()) return;
-    let url = serverAddress.trim();
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      url = `http://${url}`;
-    }
+    if (!isClientMode) return;
+    const url = buildServerUrl(serverParts);
+    if (!url) return;
     setServerStatus("checking");
     const result = await testServerConnection(url);
     setServerStatus(result.ok ? "ok" : "fail");
@@ -75,12 +81,11 @@ export default function LoginPage({ onLogin, isClientMode = false, onDisconnect 
 
   const resolveBaseUrl = async (): Promise<string | null> => {
     if (!isClientMode) return "";
-    let url = serverAddress.trim();
+    const url = buildServerUrl(serverParts);
     if (!url) {
       setError(t("auth.serverRequired"));
       return null;
     }
-    if (!url.startsWith("http://") && !url.startsWith("https://")) url = `http://${url}`;
     setServerStatus("checking");
     const serverResult = await testServerConnection(url);
     if (!serverResult.ok) {
@@ -210,7 +215,7 @@ export default function LoginPage({ onLogin, isClientMode = false, onDisconnect 
   const handleDisconnect = () => {
     clearServerUrl();
     localStorage.removeItem("nowen-token");
-    setServerAddress("");
+    setServerParts({ protocol: "http", host: "", port: "" });
     setServerStatus("idle");
     setUsername("");
     setPassword("");
@@ -248,10 +253,17 @@ export default function LoginPage({ onLogin, isClientMode = false, onDisconnect 
       !username ||
       !password ||
       (isRegister && !confirmPassword) ||
-      (isClientMode && !serverAddress.trim());
+      (isClientMode && !serverParts.host.trim());
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 selection:bg-indigo-500/30 transition-colors">
+    <div
+      className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 selection:bg-indigo-500/30 transition-colors"
+      style={{
+        // 刘海屏 / Android 状态栏避让，保证登录卡片不会被状态栏/手势条遮挡
+        paddingTop: 'var(--safe-area-top)',
+        paddingBottom: 'var(--safe-area-bottom)',
+      }}
+    >
       {/* 背景装饰 */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-gradient-to-br from-indigo-500/5 via-transparent to-transparent rounded-full blur-3xl" />
@@ -359,7 +371,7 @@ export default function LoginPage({ onLogin, isClientMode = false, onDisconnect 
                 </button>
               </div>
             ) : (<>
-            {/* 服务器地址 — 仅客户端模式显示 */}
+            {/* 服务器地址 — 仅客户端模式显示（协议 + 主机 + 端口 三段式） */}
             <AnimatePresence>
               {isClientMode && (
                 <motion.div
@@ -371,26 +383,17 @@ export default function LoginPage({ onLogin, isClientMode = false, onDisconnect 
                   <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                     {t("auth.serverAddress")}
                   </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <Globe className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
-                    </div>
-                    <input
-                      type="text"
-                      value={serverAddress}
-                      onChange={(e) => {
-                        setServerAddress(e.target.value);
-                        if (serverStatus !== "idle") setServerStatus("idle");
-                      }}
-                      onBlur={handleServerBlur}
-                      className="block w-full pl-10 pr-10 py-2.5 border border-zinc-200 dark:border-zinc-700 rounded-xl bg-zinc-50/50 dark:bg-zinc-800/50 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 dark:focus:border-indigo-500 transition-all text-sm"
-                      placeholder={t("auth.serverPlaceholder")}
-                      autoFocus={isClientMode}
-                    />
-                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
-                      {serverStatusIcon()}
-                    </div>
-                  </div>
+                  <ServerAddressInput
+                    value={serverParts}
+                    onChange={(next) => {
+                      setServerParts(next);
+                      if (serverStatus !== "idle") setServerStatus("idle");
+                    }}
+                    onHostBlur={handleServerBlur}
+                    autoFocus={isClientMode}
+                    accent="indigo"
+                    rightSlot={serverStatusIcon()}
+                  />
                   <p className="text-xs text-zinc-400 dark:text-zinc-500">
                     {t("auth.serverHint")}
                   </p>

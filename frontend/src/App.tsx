@@ -353,7 +353,7 @@ function MobileTopBar() {
   const actions = useAppActions();
   const { siteConfig } = useSiteSettings();
   return (
-    <header className="flex items-center px-4 py-3 border-b border-app-border bg-app-surface/50 md:hidden" style={{ paddingTop: 'max(env(safe-area-inset-top, 0px), 12px)' }}>
+    <header className="flex items-center px-4 py-3 border-b border-app-border bg-app-surface/50 md:hidden" style={{ paddingTop: 'calc(var(--safe-area-top) + 12px)' }}>
       <button
         onClick={() => actions.setMobileSidebar(true)}
         className="p-2 -ml-2 rounded-lg text-tx-secondary hover:bg-app-hover active:bg-app-active"

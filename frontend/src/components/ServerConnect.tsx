@@ -1,53 +1,73 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Loader2, Server, Wifi, Globe } from "lucide-react";
+import { Loader2, Server, Wifi, CheckCircle2, AlertCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { setServerUrl, testServerConnection } from "@/lib/api";
+import { buildServerUrl, parseServerUrl, type ServerAddressParts } from "@/lib/serverUrl";
+import ServerAddressInput from "@/components/ServerAddressInput";
 
 interface ServerConnectProps {
   onConnected: () => void;
 }
 
 export default function ServerConnect({ onConnected }: ServerConnectProps) {
-  const [url, setUrl] = useState("");
+  // 协议/主机/端口 三段式（默认 http）。
+  // 旧版本可能把完整 URL 写进 localStorage，这里 parseServerUrl 会拆回三段回填。
+  const [parts, setParts] = useState<ServerAddressParts>({
+    protocol: "http",
+    host: "",
+    port: "",
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [status, setStatus] = useState<"idle" | "ok" | "fail">("idle");
   const { t } = useTranslation();
 
   // 尝试从 localStorage 恢复上次连接的地址
   useEffect(() => {
     const last = localStorage.getItem("nowen-server-url-last");
-    if (last) setUrl(last);
+    if (last) setParts(parseServerUrl(last));
   }, []);
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!url.trim()) return;
+    const serverUrl = buildServerUrl(parts);
+    if (!serverUrl) return;
 
     setIsLoading(true);
     setError("");
-
-    let serverUrl = url.trim();
-    // 自动补全协议
-    if (!serverUrl.startsWith("http://") && !serverUrl.startsWith("https://")) {
-      serverUrl = `http://${serverUrl}`;
-    }
+    setStatus("idle");
 
     const result = await testServerConnection(serverUrl);
 
     if (result.ok) {
+      setStatus("ok");
       setServerUrl(serverUrl);
       localStorage.setItem("nowen-server-url-last", serverUrl);
       onConnected();
     } else {
+      setStatus("fail");
       setError(result.error || t("server.connectFailed"));
     }
 
     setIsLoading(false);
   };
 
+  const statusIcon = () => {
+    if (isLoading) return <Loader2 className="w-4 h-4 animate-spin text-amber-500" />;
+    if (status === "ok") return <CheckCircle2 className="w-4 h-4 text-emerald-500" />;
+    if (status === "fail") return <AlertCircle className="w-4 h-4 text-red-500" />;
+    return null;
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 selection:bg-indigo-500/30 transition-colors">
+    <div
+      className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 selection:bg-indigo-500/30 transition-colors"
+      style={{
+        paddingTop: 'var(--safe-area-top)',
+        paddingBottom: 'var(--safe-area-bottom)',
+      }}
+    >
       {/* 背景装饰 */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-gradient-to-br from-indigo-500/5 via-transparent to-transparent rounded-full blur-3xl" />
@@ -58,7 +78,7 @@ export default function ServerConnect({ onConnected }: ServerConnectProps) {
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className="relative w-full max-w-[420px] mx-4"
+        className="relative w-full max-w-[460px] mx-4"
       >
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl dark:shadow-2xl dark:shadow-black/20 p-8">
           {/* Icon & Title */}
@@ -80,25 +100,21 @@ export default function ServerConnect({ onConnected }: ServerConnectProps) {
           </div>
 
           <form onSubmit={handleConnect} className="space-y-4">
-            {/* 服务器地址输入 */}
+            {/* 服务器地址输入（三段式） */}
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 {t("server.addressLabel")}
               </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Globe className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
-                </div>
-                <input
-                  type="text"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2.5 border border-zinc-200 dark:border-zinc-700 rounded-xl bg-zinc-50/50 dark:bg-zinc-800/50 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 dark:focus:border-emerald-500 transition-all text-sm"
-                  placeholder={t("server.addressPlaceholder")}
-                  autoFocus
-                  required
-                />
-              </div>
+              <ServerAddressInput
+                value={parts}
+                onChange={(next) => {
+                  setParts(next);
+                  if (status !== "idle") setStatus("idle");
+                }}
+                autoFocus
+                accent="emerald"
+                rightSlot={statusIcon()}
+              />
               <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1">
                 {t("server.addressHint")}
               </p>
@@ -119,7 +135,7 @@ export default function ServerConnect({ onConnected }: ServerConnectProps) {
             {/* 连接按钮 */}
             <button
               type="submit"
-              disabled={isLoading || !url.trim()}
+              disabled={isLoading || !parts.host.trim()}
               className="w-full flex items-center justify-center py-2.5 px-4 rounded-xl text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 dark:focus:ring-offset-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md"
             >
               {isLoading ? (

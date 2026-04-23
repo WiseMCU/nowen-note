@@ -456,7 +456,7 @@ const SettingsModal = React.forwardRef<HTMLDivElement, SettingsModalProps>(
         onClick={(e) => e.stopPropagation()}
       >
         {/* 移动端：顶部标签栏 + 关闭按钮 */}
-        <div className="md:hidden flex items-center border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50" style={{ paddingTop: 'max(env(safe-area-inset-top, 0px), 0px)' }}>
+        <div className="md:hidden flex items-center border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50" style={{ paddingTop: 'var(--safe-area-top)' }}>
           <div className="flex-1 flex items-center gap-1 px-3 py-2 overflow-x-auto no-scrollbar">
             {SETTING_TABS.map((tab) => {
               const Icon = tab.icon;

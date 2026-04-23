@@ -438,6 +438,39 @@ storeFile=你的keystore路径
 
 ---
 
+#### 方式十：ARM64 开发板 / 国产 SoC（A311D / RK3566 / OES / OECT）
+
+适用于把 aarch64 的开发板当作家庭/小型团队的笔记服务器。典型设备：
+Amlogic **A311D**（Cortex-A73+A53）、Rockchip **RK3566**（Cortex-A55），
+搭配 OES Linux / Armbian / OpenKylin 等 Debian 系发行版。
+
+**推荐流程（x86 开发机交叉构建 → 板子导入运行）：**
+
+```bash
+# 1. 在 x86 开发机上（一次性）注册 QEMU，使 buildx 能跨架构构建
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+
+# 2. 构建 arm64 镜像并打成 tar
+bash scripts/build-arm64.sh --tar
+# 产物：nowen-note-arm64.tar
+
+# 3. 把 tar 文件传到板子（scp / U 盘都行），然后在板子上：
+docker load -i nowen-note-arm64.tar
+docker run -d \
+  --name nowen-note \
+  --restart unless-stopped \
+  -p 3001:3001 \
+  -v nowen-note-data:/app/data \
+  nowen-note:arm64
+```
+
+访问 `http://<板子 IP>:3001` 即可。
+
+更多细节（多架构 manifest、推送到 registry、板子原生构建、常见坑）见
+[docs/deploy-arm64.md](docs/deploy-arm64.md)。
+
+---
+
 #### 通用注意事项
 
 - **数据持久化**：务必将容器内的 `/app/data` 目录映射到宿主机，否则容器删除后数据丢失

@@ -1,236 +1,418 @@
 #!/usr/bin/env bash
-# -----------------------------------------------------------------------------
-# nowen-note Docker 发布脚本
-# -----------------------------------------------------------------------------
-# 用途：
-#   1. 拉取最新代码（git pull --ff-only）
-#   2. 交互输入版本号（或命令行 -v 传入），做基础合法性校验
-#   3. 一次性 docker build 同时打两个 tag：
-#        cropflre/nowen-note:vX.Y.Z
-#        cropflre/nowen-note:latest
-#   4. 依次 docker push 两个 tag
-#   5. 打印最终摘要（digest、耗时）
+# =============================================================================
+# nowen-note 发布脚本
 #
-# 用法：
-#   ./scripts/release.sh                       # 全交互
-#   ./scripts/release.sh -v 1.2.0              # 指定版本号
-#   ./scripts/release.sh -v 1.2.0 -y           # 非交互（CI）
-#   ./scripts/release.sh --no-pull             # 跳过 git pull（本地已是最新）
-#   ./scripts/release.sh --no-latest           # 只打版本 tag，不更新 latest
-#   ./scripts/release.sh --dry-run             # 只演示，不真正执行 build/push
+# 功能：
+#   1. 交互式输入版本号（带校验 + 自动建议下一版本）
+#   2. git pull 前检查工作区干净度 / 暂存区干净度
+#   3. 一次 docker build 同时打 :vX.Y.Z + :latest 两个 tag
+#   4. 分别 push 到 Docker Hub
+#   5. 同步打 git tag 并推送到 GitHub（失败时给出 PAT / SSH 指引）
 #
-# 设计要点：
-#   - set -euo pipefail：任一步失败立即中止，绝不带着错误往下走
-#   - build 只跑一次，通过 `-t vX.Y.Z -t latest` 同时打标签；push 分两条命令
-#     （docker 不支持一次 push 多 tag，但复用同一 image digest，实际上传层只会走一遍）
-#   - push 前要求 `docker info` 能读到登录凭证（detect 到没登录时明确报错）
-#   - 允许输入 "1.2.0" 或 "v1.2.0"，脚本内部统一成带 v 前缀
-#   - 版本号正则：v?\d+\.\d+\.\d+(-[A-Za-z0-9.]+)?  允许 1.2.0、1.2.0-rc.1 这种
-# -----------------------------------------------------------------------------
+# 架构（--arch）：
+#   amd64   默认。走原生 docker build，速度最快，适合大多数 x86 服务器/NAS。
+#   arm64   走 docker buildx --platform linux/arm64 --load，为
+#           A311D / RK3566 / OES / OECT 等 ARM64 板子出产物。需要 QEMU。
+#   multi   走 docker buildx --platform linux/amd64,linux/arm64 --push，
+#           直接在 Docker Hub 生成多架构 manifest（推荐的正式发布姿势）。
+#           注意：multi 模式必然推送，不支持 --dry-run 的"只 build 不 push"。
+#
+# 使用：
+#   ./scripts/release.sh                            # 全交互（amd64）
+#   ./scripts/release.sh -v 1.3.0 -y                # 指定版本 + 跳过确认
+#   ./scripts/release.sh -v 1.3.0-rc.1 --no-latest  # 预发布，不动 latest
+#   ./scripts/release.sh -v 1.3.0 --no-pull         # 不 git pull
+#   ./scripts/release.sh -v 1.3.0 --no-git-tag      # 不打 git tag
+#   ./scripts/release.sh -v 1.3.0 --dry-run         # 只打印命令不执行
+#   ./scripts/release.sh -v 1.3.0 --arch arm64 -y   # 只出 arm64 镜像（ARM 板子）
+#   ./scripts/release.sh -v 1.3.0 --arch multi -y   # 一次出 amd64+arm64 多架构
+# =============================================================================
+
 set -euo pipefail
 
-# ---------- 配置 ----------
-IMAGE="cropflre/nowen-note"
+# -------------------- 配置 --------------------
+IMAGE_NAME="cropflre/nowen-note"
 DEFAULT_BRANCH="main"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GITHUB_REPO_URL="https://github.com/cropflre/nowen-note"
+BUILDX_BUILDER="nowen-note-builder"
 
-# ---------- 彩色输出 ----------
-if [[ -t 1 ]]; then
-  C_RESET='\033[0m'; C_RED='\033[31m'; C_GRN='\033[32m'
-  C_YLW='\033[33m';  C_BLU='\033[34m'; C_BOLD='\033[1m'
+# -------------------- 彩色输出 --------------------
+if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
+    C_RED="$(tput setaf 1)"
+    C_GREEN="$(tput setaf 2)"
+    C_YELLOW="$(tput setaf 3)"
+    C_BLUE="$(tput setaf 4)"
+    C_CYAN="$(tput setaf 6)"
+    C_BOLD="$(tput bold)"
+    C_RESET="$(tput sgr0)"
 else
-  C_RESET=; C_RED=; C_GRN=; C_YLW=; C_BLU=; C_BOLD=
+    C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_CYAN=""; C_BOLD=""; C_RESET=""
 fi
-log()  { printf "${C_BLU}[*]${C_RESET} %s\n" "$*"; }
-ok()   { printf "${C_GRN}[✓]${C_RESET} %s\n" "$*"; }
-warn() { printf "${C_YLW}[!]${C_RESET} %s\n" "$*"; }
-err()  { printf "${C_RED}[x]${C_RESET} %s\n" "$*" >&2; }
-die()  { err "$*"; exit 1; }
 
-# ---------- 参数解析 ----------
+info()  { echo "${C_BLUE}[*]${C_RESET} $*"; }
+ok()    { echo "${C_GREEN}[✓]${C_RESET} $*"; }
+warn()  { echo "${C_YELLOW}[!]${C_RESET} $*" >&2; }
+die()   { echo "${C_RED}[✗]${C_RESET} $*" >&2; exit 1; }
+step()  { echo; echo "${C_BOLD}${C_CYAN}==== $* ====${C_RESET}"; }
+
+# -------------------- 参数解析 --------------------
 VERSION=""
 ASSUME_YES=0
 DO_PULL=1
 DO_LATEST=1
+DO_GIT_TAG=1
 DRY_RUN=0
+ARCH="amd64"   # amd64 | arm64 | multi
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
-  exit 0
+    cat <<EOF
+用法: $0 [选项]
+
+选项:
+  -v, --version VERSION    指定版本号（例: 1.3.0 或 v1.3.0）
+  -y, --yes                跳过所有确认
+      --arch ARCH          构建架构：amd64(默认) / arm64 / multi
+      --no-pull            不执行 git pull
+      --no-latest          不打 :latest tag
+      --no-git-tag         不打 git tag / 不推送到 GitHub
+      --dry-run            仅打印命令，不真实执行
+  -h, --help               显示帮助
+
+架构说明:
+  amd64   原生 docker build，最快；适合 x86 服务器/NAS。
+  arm64   buildx --platform linux/arm64 --load；适合 A311D/RK3566 等 ARM 板子。
+  multi   buildx --platform linux/amd64,linux/arm64 --push；
+          一次性在 Docker Hub 生成多架构 manifest（推荐的正式发布姿势）。
+EOF
+    exit 0
 }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -v|--version)  VERSION="${2:-}"; shift 2 ;;
-    -y|--yes)      ASSUME_YES=1; shift ;;
-    --no-pull)     DO_PULL=0; shift ;;
-    --no-latest)   DO_LATEST=0; shift ;;
-    --dry-run)     DRY_RUN=1; shift ;;
-    -h|--help)     usage ;;
-    *)             die "未知参数：$1  （查看 --help）" ;;
-  esac
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -v|--version)   VERSION="${2:-}"; shift 2 ;;
+        -y|--yes)       ASSUME_YES=1; shift ;;
+        --arch)         ARCH="${2:-}"; shift 2 ;;
+        --no-pull)      DO_PULL=0; shift ;;
+        --no-latest)    DO_LATEST=0; shift ;;
+        --no-git-tag)   DO_GIT_TAG=0; shift ;;
+        --dry-run)      DRY_RUN=1; shift ;;
+        -h|--help)      usage ;;
+        *)              die "未知参数: $1（使用 -h 查看帮助）" ;;
+    esac
 done
 
-# ---------- 前置检查 ----------
-cd "$REPO_ROOT"
-log "工作目录：$REPO_ROOT"
+case "$ARCH" in
+    amd64|arm64|multi) ;;
+    *) die "--arch 只能是 amd64 / arm64 / multi，收到: $ARCH" ;;
+esac
 
-command -v git    >/dev/null || die "找不到 git，请先安装"
-command -v docker >/dev/null || die "找不到 docker，请先安装并确认当前用户有权限"
-
-# docker daemon 是否可用
-docker info >/dev/null 2>&1 || die "docker daemon 不可用（没启动？当前用户不在 docker 组？）"
-
-# 是否在 git 仓库
-git rev-parse --git-dir >/dev/null 2>&1 || die "当前目录不是 git 仓库"
-
-# 工作区脏检查（避免误打未提交改动进镜像）
-if [[ -n "$(git status --porcelain)" ]]; then
-  warn "工作区有未提交的改动："
-  git status --short
-  if [[ $ASSUME_YES -eq 0 ]]; then
-    read -r -p "继续构建？[y/N] " ans
-    [[ "$ans" =~ ^[Yy]$ ]] || die "已取消"
-  else
-    warn "--yes 已指定，带脏改动继续"
-  fi
+if [ "$ARCH" = "multi" ] && [ "$DRY_RUN" != "1" ] && [ "$DO_LATEST" = "0" ] && [ "$ASSUME_YES" != "1" ]; then
+    : # 仅占位，无额外约束
 fi
 
-# ---------- git pull ----------
-if [[ $DO_PULL -eq 1 ]]; then
-  CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-  log "当前分支：$CURRENT_BRANCH"
-  log "git pull --ff-only ..."
-  git pull --ff-only
-  ok  "代码已是最新：$(git rev-parse --short HEAD)  $(git log -1 --pretty=%s)"
-else
-  warn "跳过 git pull（--no-pull）"
-fi
-
-# ---------- 版本号交互/校验 ----------
-# 尝试从最近的 tag 推一个建议版本（如 v1.2.3 → 1.2.4）
-suggest_next_version() {
-  local last patch
-  last="$(git tag --list 'v*.*.*' --sort=-v:refname | head -n1 || true)"
-  if [[ -z "$last" ]]; then
-    echo "0.1.0"
-    return
-  fi
-  # 去掉 v 前缀
-  last="${last#v}"
-  # 只对 X.Y.Z 这种递增 Z；带 -rc 的就原样回退为基础版本 +1
-  if [[ "$last" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-    patch=$((BASH_REMATCH[3] + 1))
-    echo "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$patch"
-  else
-    echo "${last%%-*}"
-  fi
+run() {
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "  ${C_YELLOW}DRY-RUN${C_RESET} $*"
+    else
+        eval "$@"
+    fi
 }
 
-if [[ -z "$VERSION" ]]; then
-  SUGGEST="$(suggest_next_version)"
-  if [[ $ASSUME_YES -eq 1 ]]; then
-    die "未指定版本号（-v），且 --yes 模式下不能交互输入"
-  fi
-  echo
-  printf "${C_BOLD}请输入本次发布版本号${C_RESET}（格式：1.2.3 或 v1.2.3，可带 -rc.1 等后缀）\n"
-  printf "   建议：%s（回车使用建议值）\n" "$SUGGEST"
-  read -r -p "> " VERSION
-  VERSION="${VERSION:-$SUGGEST}"
+# run_argv：按参数数组原样执行（不经 eval 二次解析），用于参数含空格/等号等
+# 特殊字符的场景（例如 docker build 的 --label k=v 参数）。
+run_argv() {
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "  ${C_YELLOW}DRY-RUN${C_RESET} $*"
+    else
+        "$@"
+    fi
+}
+
+# -------------------- 前置检查 --------------------
+# 定位到仓库根目录（脚本可能被从任意目录调用）
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
+info "工作目录：$REPO_ROOT"
+info "构建架构：$ARCH"
+
+# 必须在 git 仓库里
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || die "当前目录不是 git 仓库"
+
+# docker 可用
+command -v docker >/dev/null 2>&1 || die "未安装 docker"
+docker info >/dev/null 2>&1 || die "docker daemon 不可用（请启动 docker）"
+
+# buildx 可用性（arm64 / multi 模式强制）
+if [ "$ARCH" != "amd64" ]; then
+    docker buildx version >/dev/null 2>&1 \
+        || die "未检测到 docker buildx；arm64 / multi 模式必须使用 buildx（请升级 Docker 或启用 BuildKit）"
 fi
 
-# 去掉可能的 v 前缀，统一内部表示
+# Dockerfile 存在
+[ -f Dockerfile ] || die "仓库根目录未找到 Dockerfile"
+
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+info "当前分支：$CURRENT_BRANCH"
+if [ "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]; then
+    warn "当前不在 $DEFAULT_BRANCH 分支，继续？"
+    if [ "$ASSUME_YES" != "1" ]; then
+        read -r -p "[y/N] " ans
+        case "$ans" in [yY]|[yY][eE][sS]) ;; *) die "已取消" ;; esac
+    fi
+fi
+
+# 工作区脏检查
+if ! git diff-index --quiet HEAD --; then
+    warn "工作区有未提交的改动："
+    git status --short | head -20
+    die "请先提交或 stash 再发布"
+fi
+
+# 暂存区检查
+if ! git diff --cached --quiet; then
+    die "暂存区有未提交的改动，请先 commit"
+fi
+
+# -------------------- git pull --------------------
+if [ "$DO_PULL" = "1" ]; then
+    info "git pull --ff-only origin $CURRENT_BRANCH ..."
+    run "git pull --ff-only origin \"$CURRENT_BRANCH\""
+    ok "代码已是最新：$(git log -1 --pretty=format:'%h  %s')"
+else
+    info "跳过 git pull（--no-pull）"
+fi
+
+# -------------------- 版本号确定 --------------------
+# 找最新的 v*.*.* tag，算下一版本建议值
+suggest_next_version() {
+    local latest
+    latest="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 | sed 's/^v//')" || latest=""
+    if [ -z "$latest" ]; then
+        echo "0.1.0"
+        return
+    fi
+    # 只取基础 MAJOR.MINOR.PATCH，忽略预发布后缀
+    local base="${latest%%-*}"
+    local major minor patch
+    IFS='.' read -r major minor patch <<EOF
+$base
+EOF
+    patch=$((patch + 1))
+    echo "${major}.${minor}.${patch}"
+}
+
+validate_version() {
+    # 支持 1.2.3 / 1.2.3-rc.1 / 1.2.3-beta.2 等
+    echo "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+}
+
+if [ -z "$VERSION" ]; then
+    SUGGEST="$(suggest_next_version)"
+    if [ "$ASSUME_YES" = "1" ]; then
+        die "未指定版本号（-v），且 --yes 模式下不能交互输入"
+    fi
+    echo
+    echo "${C_BOLD}请输入本次发布版本号${C_RESET}（格式：1.2.3 或 v1.2.3，可带 -rc.1 等后缀）"
+    echo "   建议：${C_GREEN}${SUGGEST}${C_RESET}（回车使用建议值）"
+    read -r -p "> " VERSION
+    VERSION="${VERSION:-$SUGGEST}"
+fi
+
+# 去除前缀 v
 VERSION="${VERSION#v}"
-# 合法性：X.Y.Z 或 X.Y.Z-<suffix>
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
-  die "版本号格式不合法：'$VERSION'（期望形如 1.2.3 或 1.2.3-rc.1）"
-fi
-TAG_VER="v${VERSION}"
+validate_version "$VERSION" || die "版本号格式非法：$VERSION（期望 X.Y.Z 或 X.Y.Z-rc.N）"
+VERSION_TAG="v${VERSION}"
 
-# 若该 tag 已存在于 docker hub 的本地镜像（近期 build 过）提示
-if docker image inspect "${IMAGE}:${TAG_VER}" >/dev/null 2>&1; then
-  warn "本地已存在镜像 ${IMAGE}:${TAG_VER}，继续将覆盖"
-  if [[ $ASSUME_YES -eq 0 ]]; then
-    read -r -p "覆盖？[y/N] " ans
-    [[ "$ans" =~ ^[Yy]$ ]] || die "已取消"
-  fi
+# 检查 git tag 是否已存在
+if [ "$DO_GIT_TAG" = "1" ] && git rev-parse "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
+    die "git tag ${VERSION_TAG} 已存在"
 fi
 
-# ---------- 摘要确认 ----------
-echo
-printf "${C_BOLD}==== 发布摘要 ====${C_RESET}\n"
-printf "  镜像仓库      : %s\n" "$IMAGE"
-printf "  版本 tag      : %s\n" "$TAG_VER"
-printf "  同步 latest   : %s\n" "$([[ $DO_LATEST -eq 1 ]] && echo yes || echo no)"
-printf "  git commit    : %s  %s\n" "$(git rev-parse --short HEAD)" "$(git log -1 --pretty=%s)"
-printf "  构建上下文    : %s\n" "$REPO_ROOT"
-printf "  Dry run       : %s\n" "$([[ $DRY_RUN -eq 1 ]] && echo yes || echo no)"
-echo
+# -------------------- 发布摘要 --------------------
+GIT_COMMIT="$(git log -1 --pretty=format:'%h  %s')"
+GIT_SHA="$(git rev-parse HEAD)"
+BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
-if [[ $ASSUME_YES -eq 0 ]]; then
-  read -r -p "确认发布？[y/N] " ans
-  [[ "$ans" =~ ^[Yy]$ ]] || die "已取消"
+case "$ARCH" in
+    amd64) PLATFORM_DESC="linux/amd64（原生 docker build）" ;;
+    arm64) PLATFORM_DESC="linux/arm64（buildx --load，QEMU 模拟）" ;;
+    multi) PLATFORM_DESC="linux/amd64,linux/arm64（buildx --push，多架构 manifest）" ;;
+esac
+
+step "发布摘要"
+echo "  镜像仓库      : ${IMAGE_NAME}"
+echo "  版本 tag      : ${VERSION_TAG}"
+echo "  构建架构      : ${PLATFORM_DESC}"
+echo "  同步 latest   : $([ "$DO_LATEST" = "1" ] && echo yes || echo no)"
+echo "  同步 git tag  : $([ "$DO_GIT_TAG" = "1" ] && echo yes || echo no)"
+echo "  git commit    : ${GIT_COMMIT}"
+echo "  构建时间      : ${BUILD_DATE}"
+[ "$DRY_RUN" = "1" ] && echo "  ${C_YELLOW}模式          : DRY-RUN（不真实执行）${C_RESET}"
+if [ "$ARCH" = "multi" ]; then
+    echo "  ${C_YELLOW}注意          : multi 模式会直接 push 多架构 manifest 到 Docker Hub${C_RESET}"
 fi
 
-# ---------- docker build（一次 build 打两个 tag） ----------
-BUILD_ARGS=(build -t "${IMAGE}:${TAG_VER}")
-if [[ $DO_LATEST -eq 1 ]]; then
-  BUILD_ARGS+=(-t "${IMAGE}:latest")
+if [ "$ASSUME_YES" != "1" ]; then
+    echo
+    read -r -p "确认发布？[y/N] " ans
+    case "$ans" in [yY]|[yY][eE][sS]) ;; *) die "已取消" ;; esac
 fi
-# 注入 commit/version 到 label，便于在运行时排查
-BUILD_ARGS+=(
-  --label "org.opencontainers.image.version=${VERSION}"
-  --label "org.opencontainers.image.revision=$(git rev-parse HEAD)"
-  --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  --label "org.opencontainers.image.source=$(git config --get remote.origin.url || echo unknown)"
-  .
+
+# -------------------- build --------------------
+START_TS=$(date +%s)
+
+BUILD_TAGS=( -t "${IMAGE_NAME}:${VERSION_TAG}" )
+[ "$DO_LATEST" = "1" ] && BUILD_TAGS+=( -t "${IMAGE_NAME}:latest" )
+
+# OCI 标签：便于 docker inspect 时追溯
+OCI_LABELS=(
+    --label "org.opencontainers.image.version=${VERSION_TAG}"
+    --label "org.opencontainers.image.revision=${GIT_SHA}"
+    --label "org.opencontainers.image.created=${BUILD_DATE}"
+    --label "org.opencontainers.image.source=${GITHUB_REPO_URL}"
+    --label "org.opencontainers.image.title=nowen-note"
 )
 
-echo
-log "开始构建：docker ${BUILD_ARGS[*]}"
-T0=$(date +%s)
-if [[ $DRY_RUN -eq 1 ]]; then
-  warn "--dry-run：跳过实际 build"
-else
-  docker "${BUILD_ARGS[@]}"
-fi
-T1=$(date +%s)
-ok "构建完成，用时 $((T1 - T0))s"
-
-# ---------- docker push ----------
-push_tag() {
-  local tag="$1"
-  log "推送：${IMAGE}:${tag}"
-  if [[ $DRY_RUN -eq 1 ]]; then
-    warn "--dry-run：跳过实际 push"
-    return
-  fi
-  docker push "${IMAGE}:${tag}"
+# 确保 buildx builder 存在（仅 arm64/multi 需要）
+ensure_buildx_builder() {
+    if ! docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1; then
+        info "创建 buildx builder: $BUILDX_BUILDER"
+        run_argv docker buildx create --name "$BUILDX_BUILDER" --use
+    else
+        run_argv docker buildx use "$BUILDX_BUILDER"
+    fi
+    run_argv docker buildx inspect --bootstrap
 }
 
-echo
-push_tag "$TAG_VER"
-if [[ $DO_LATEST -eq 1 ]]; then
-  push_tag "latest"
-fi
-T2=$(date +%s)
+step "开始构建"
+BUILD_START=$(date +%s)
 
-# ---------- 结果摘要 ----------
-echo
-printf "${C_GRN}${C_BOLD}==== 发布完成 ====${C_RESET}\n"
-printf "  %s:%s  ←  已推送\n" "$IMAGE" "$TAG_VER"
-if [[ $DO_LATEST -eq 1 ]]; then
-  printf "  %s:%s  ←  已推送\n" "$IMAGE" "latest"
-fi
-printf "  总耗时            : %ss （build %ss + push %ss）\n" \
-  "$((T2 - T0))" "$((T1 - T0))" "$((T2 - T1))"
+case "$ARCH" in
+    amd64)
+        # 明确 -f Dockerfile 与上下文路径 "$REPO_ROOT"，避免个别环境下 docker build 被
+        # 劫持为 buildx bake 模式时无法正确定位 Dockerfile（报错 #2 transferring
+        # dockerfile: 2B / failed to read dockerfile: no such file or directory）
+        BUILD_CMD=( docker build -f "$REPO_ROOT/Dockerfile" "${BUILD_TAGS[@]}" "${OCI_LABELS[@]}" "$REPO_ROOT" )
+        echo "  ${BUILD_CMD[*]}"
+        run_argv "${BUILD_CMD[@]}"
+        ;;
+    arm64)
+        ensure_buildx_builder
+        # --load 只能加载单架构到本机 docker，所以 arm64 模式仍然分两步：
+        # 先 --load 本地，再后续 docker push 到 Hub（走 QEMU 模拟构建）
+        BUILD_CMD=(
+            docker buildx build
+            --platform linux/arm64
+            -f "$REPO_ROOT/Dockerfile"
+            "${BUILD_TAGS[@]}"
+            "${OCI_LABELS[@]}"
+            --load
+            "$REPO_ROOT"
+        )
+        echo "  ${BUILD_CMD[*]}"
+        run_argv "${BUILD_CMD[@]}"
+        ;;
+    multi)
+        ensure_buildx_builder
+        # 多架构 manifest 不能 --load，只能 --push，且必须已登录 Docker Hub
+        BUILD_CMD=(
+            docker buildx build
+            --platform linux/amd64,linux/arm64
+            -f "$REPO_ROOT/Dockerfile"
+            "${BUILD_TAGS[@]}"
+            "${OCI_LABELS[@]}"
+            --push
+            "$REPO_ROOT"
+        )
+        echo "  ${BUILD_CMD[*]}"
+        run_argv "${BUILD_CMD[@]}"
+        ;;
+esac
 
-if [[ $DRY_RUN -eq 0 ]]; then
-  DIGEST="$(docker image inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:${TAG_VER}" 2>/dev/null || true)"
-  [[ -n "$DIGEST" ]] && printf "  digest            : %s\n" "$DIGEST"
+BUILD_END=$(date +%s)
+BUILD_DURATION=$((BUILD_END - BUILD_START))
+ok "构建完成，用时 ${BUILD_DURATION}s"
+
+# -------------------- push --------------------
+PUSH_DURATION=0
+if [ "$ARCH" = "multi" ]; then
+    info "multi 模式 buildx 已经把镜像直接推送到 Docker Hub，跳过单独 push 步骤"
+else
+    step "推送镜像"
+    PUSH_START=$(date +%s)
+    info "推送：${IMAGE_NAME}:${VERSION_TAG}"
+    run "docker push \"${IMAGE_NAME}:${VERSION_TAG}\""
+
+    if [ "$DO_LATEST" = "1" ]; then
+        info "推送：${IMAGE_NAME}:latest"
+        run "docker push \"${IMAGE_NAME}:latest\""
+    fi
+    PUSH_END=$(date +%s)
+    PUSH_DURATION=$((PUSH_END - PUSH_START))
 fi
 
+# 尝试获取 digest（multi 模式本地没镜像，拿不到，留空）
+DIGEST=""
+if [ "$DRY_RUN" != "1" ] && [ "$ARCH" != "multi" ]; then
+    DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_NAME}:${VERSION_TAG}" 2>/dev/null || echo "")"
+fi
+
+# -------------------- git tag --------------------
+if [ "$DO_GIT_TAG" = "1" ]; then
+    step "打 git tag 并推送到 GitHub"
+    # 本地 tag：已存在就跳过创建（可能上次 push 失败后重试）
+    if git rev-parse -q --verify "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
+        info "本地 tag ${VERSION_TAG} 已存在，跳过创建"
+    else
+        info "git tag -a ${VERSION_TAG} -m 'Release ${VERSION_TAG}'"
+        run "git tag -a \"${VERSION_TAG}\" -m \"Release ${VERSION_TAG}\""
+    fi
+    info "git push origin ${VERSION_TAG}"
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "  (dry-run) git push origin \"${VERSION_TAG}\""
+    elif git push origin "${VERSION_TAG}"; then
+        ok "git tag ${VERSION_TAG} 已推送"
+    else
+        echo
+        echo "${C_YELLOW}[!] git push tag 失败（镜像已成功推送至 Docker Hub，本地 tag 已保留）${C_RESET}"
+        echo "    常见原因：GitHub 已禁用密码认证，需使用 PAT 或 SSH key"
+        echo "    修复方式任选一种，然后补推："
+        echo "      git push origin ${VERSION_TAG}"
+        echo
+        echo "    方案 A（PAT，推荐）："
+        echo "      1. https://github.com/settings/tokens 生成 fine-grained token（Contents: RW）"
+        echo "      2. git config --global credential.helper store"
+        echo "      3. git push origin ${VERSION_TAG}   # 用户名: GitHub 用户名；密码: 粘贴 PAT"
+        echo
+        echo "    方案 B（SSH key）："
+        echo "      1. ssh-keygen -t ed25519 -C \"\$(hostname)\""
+        echo "      2. cat ~/.ssh/id_ed25519.pub  → 添加到 https://github.com/settings/keys"
+        echo "      3. git remote set-url origin git@github.com:cropflre/nowen-note.git"
+        echo "      4. git push origin ${VERSION_TAG}"
+        die "git tag 推送失败"
+    fi
+else
+    info "跳过 git tag（--no-git-tag）"
+fi
+
+# -------------------- 完成 --------------------
+END_TS=$(date +%s)
+TOTAL=$((END_TS - START_TS))
+
+step "发布完成"
+echo "  ${C_GREEN}${IMAGE_NAME}:${VERSION_TAG}${C_RESET}  ←  已推送"
+[ "$DO_LATEST" = "1" ] && echo "  ${C_GREEN}${IMAGE_NAME}:latest${C_RESET}  ←  已推送"
+[ "$DO_GIT_TAG" = "1" ] && echo "  ${C_GREEN}git tag ${VERSION_TAG}${C_RESET}  ←  已推送到 GitHub"
+echo "  构建架构      : ${PLATFORM_DESC}"
+echo "  总耗时        : ${TOTAL}s （build ${BUILD_DURATION}s + push ${PUSH_DURATION}s）"
+[ -n "$DIGEST" ] && echo "  digest        : ${DIGEST}"
+
 echo
-ok "可用以下命令拉取："
-printf "    docker pull %s:%s\n" "$IMAGE" "$TAG_VER"
-[[ $DO_LATEST -eq 1 ]] && printf "    docker pull %s:latest\n" "$IMAGE"
+ok "发布成功 🎉"
+echo
+echo "拉取命令（板子 / 服务器）："
+printf "    docker pull %s:%s\n" "$IMAGE_NAME" "$VERSION_TAG"
+[ "$DO_LATEST" = "1" ] && printf "    docker pull %s:latest\n" "$IMAGE_NAME"

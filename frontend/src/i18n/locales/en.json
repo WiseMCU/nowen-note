@@ -249,7 +249,13 @@
     "markdownConvertError": "Markdown conversion failed, inserted as plain text",
     "imageUploading": "Uploading image...",
     "imageUploadSuccess": "Image uploaded",
-    "imageUploadFailed": "Image upload failed"
+    "imageUploadFailed": "Image upload failed",
+    "imageSize25": "25%",
+    "imageSize50": "50%",
+    "imageSize75": "75%",
+    "imageSize100": "100%",
+    "imageSizeOriginal": "Original",
+    "imageSizeOriginalTitle": "Original size (remove custom width)"
   },
   "slash": {
     "catHeadings": "Headings",

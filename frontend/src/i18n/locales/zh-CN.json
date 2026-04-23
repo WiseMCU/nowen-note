@@ -256,7 +256,13 @@
     "markdownConvertError": "Markdown 转换失败，已以纯文本插入",
     "imageUploading": "正在上传图片...",
     "imageUploadSuccess": "图片上传成功",
-    "imageUploadFailed": "图片上传失败"
+    "imageUploadFailed": "图片上传失败",
+    "imageSize25": "25%",
+    "imageSize50": "50%",
+    "imageSize75": "75%",
+    "imageSize100": "100%",
+    "imageSizeOriginal": "原始",
+    "imageSizeOriginalTitle": "原始尺寸（移除自定义宽度）"
   },
   "slash": {
     "catHeadings": "标题",

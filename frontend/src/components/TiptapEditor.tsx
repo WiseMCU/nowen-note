@@ -4,6 +4,7 @@ import { BubbleMenu } from "@tiptap/react/menus";
 import { AnimatePresence, motion } from "framer-motion";import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Image from "@tiptap/extension-image";
+import ResizableImageView from "./ResizableImageView";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import Underline from "@tiptap/extension-underline";
 import Highlight from "@tiptap/extension-highlight";
@@ -357,7 +358,46 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
         placeholder: t('tiptap.placeholder'),
         emptyEditorClass: "is-editor-empty",
       }),
-      Image.configure({
+      // Image 扩展：在原扩展基础上 (1) 新增 width/height 可持久化属性；
+      //             (2) 挂 ResizableImageView，提供选中后四角拖拽改宽度的能力。
+      // 序列化 DOM 仍是一个普通 <img>，width/height 作为 HTML 属性，
+      // 因此所有导出路径（zip/markdown/分享页/SSR）都无需改动。
+      Image.extend({
+        addAttributes() {
+          return {
+            ...this.parent?.(),
+            width: {
+              default: null,
+              parseHTML: (element) => {
+                const raw = element.getAttribute("width");
+                if (!raw) return null;
+                const n = parseInt(raw, 10);
+                return Number.isFinite(n) && n > 0 ? n : null;
+              },
+              renderHTML: (attrs) => {
+                if (attrs.width == null) return {};
+                return { width: attrs.width };
+              },
+            },
+            height: {
+              default: null,
+              parseHTML: (element) => {
+                const raw = element.getAttribute("height");
+                if (!raw) return null;
+                const n = parseInt(raw, 10);
+                return Number.isFinite(n) && n > 0 ? n : null;
+              },
+              renderHTML: (attrs) => {
+                if (attrs.height == null) return {};
+                return { height: attrs.height };
+              },
+            },
+          };
+        },
+        addNodeView() {
+          return ReactNodeViewRenderer(ResizableImageView);
+        },
+      }).configure({
         inline: false,
         allowBase64: true,
         HTMLAttributes: { class: "rounded-lg max-w-full mx-auto my-4 shadow-md" },
@@ -1273,6 +1313,13 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       {/* Bubble menu for inline formatting */}
       {editor && (
         <BubbleMenu editor={editor}
+          // 仅在"非空文本选区且不是图片选区"时显示文本格式 BubbleMenu，
+          // 避免与下方的图片 BubbleMenu 叠加。
+          shouldShow={({ editor: ed, from, to }) => {
+            if (from === to) return false;
+            if (ed.isActive("image")) return false;
+            return true;
+          }}
           className="flex items-center gap-0.5 bg-app-elevated border border-app-border rounded-lg shadow-lg p-1"
         >
           <ToolbarButton
@@ -1325,6 +1372,66 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
               </ToolbarButton>
             </>
           )}
+        </BubbleMenu>
+      )}
+
+      {/* Bubble menu for image quick-size */}
+      {editor && (
+        <BubbleMenu
+          editor={editor}
+          // 仅在当前选中的是图片节点时显示。
+          shouldShow={({ editor: ed }) => ed.isActive("image")}
+          className="flex items-center gap-0.5 bg-app-elevated border border-app-border rounded-lg shadow-lg p-1"
+        >
+          {/*
+            25% / 50% / 75% / 100% 按"编辑区可视宽度的百分比"计算绝对 px，
+            写进 image 节点的 width 属性（和拖拽手柄写入同一个 attribute，
+            序列化路径完全一致）。
+
+            为什么用编辑区宽度而不是图片原始像素：
+              - 原始像素可能远大于视口（屏幕截图常见 2x/3x DPR），按原始
+                百分比会出现"50% 还是超宽"的反直觉结果；
+              - 编辑区宽度 = 用户实际看到的版心，百分比语义直观；
+              - 最终还是被 <img> 的 max-width:100% 兜底，不会溢出。
+           */}
+          {[
+            { key: "25", label: t("tiptap.imageSize25"), ratio: 0.25 },
+            { key: "50", label: t("tiptap.imageSize50"), ratio: 0.5 },
+            { key: "75", label: t("tiptap.imageSize75"), ratio: 0.75 },
+            { key: "100", label: t("tiptap.imageSize100"), ratio: 1 },
+          ].map((s) => (
+            <ToolbarButton
+              key={s.key}
+              title={s.label}
+              onClick={() => {
+                // 定位编辑器根 DOM 的可用宽度；拿不到就退回 640（常规版心宽）。
+                const root = editor.view.dom as HTMLElement;
+                const contentWidth = root.clientWidth || 640;
+                const target = Math.round(contentWidth * s.ratio);
+                editor
+                  .chain()
+                  .focus()
+                  .updateAttributes("image", { width: target })
+                  .run();
+              }}
+            >
+              <span className="text-xs px-1">{s.label}</span>
+            </ToolbarButton>
+          ))}
+          <div className="w-px h-4 bg-app-border mx-0.5" />
+          <ToolbarButton
+            title={t("tiptap.imageSizeOriginalTitle")}
+            onClick={() => {
+              // 移除自定义 width/height，回到图片自然尺寸（受 max-width:100% 约束）。
+              editor
+                .chain()
+                .focus()
+                .updateAttributes("image", { width: null, height: null })
+                .run();
+            }}
+          >
+            <span className="text-xs px-1">{t("tiptap.imageSizeOriginal")}</span>
+          </ToolbarButton>
         </BubbleMenu>
       )}
 

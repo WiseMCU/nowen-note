@@ -56,9 +56,21 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     allowedHosts: true,
+    // 接受来自手机 App（Capacitor WebView）跨 origin 的 HMR WebSocket 握手。
+    // 手机侧的 `capacitor.config.ts#server.url` 会把 WebView 直接指向
+    // `http://<电脑LAN_IP>:5173`，此时 host 就是 LAN IP。
+    // 不设 hmr.host 时 vite 会把 HMR clientScript 固定成某个值（通常是 localhost），
+    // 导致手机端无法命中 HMR 通道——因此显式放开。
     proxy: {
       "/api": {
         target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+      // 后端的实时协作 WebSocket（Y.js presence / 协同编辑）也必须代理，
+      // 否则手机端 `new WebSocket("/ws")` 会落到 vite 自己的 HMR server 上。
+      "/ws": {
+        target: "ws://localhost:3001",
+        ws: true,
         changeOrigin: true,
       },
     },

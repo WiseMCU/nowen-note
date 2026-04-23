@@ -66,17 +66,23 @@ const TaskRow = React.forwardRef<HTMLDivElement, {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -20, transition: { duration: 0.15 } }}
       className={cn(
-        "group flex items-center gap-3 px-4 py-3 rounded-lg border transition-all cursor-pointer",
+        // 关键：
+        // 1) `min-w-0` + `w-full` —— 阻止 flex 子项因为内容过长把容器撑破
+        //    (flex item 默认 min-width:auto，会让内部长 URL / 长中文无间断串
+        //     把整行撑到视口外，导致右侧徽标被挤没、出现横向滚动)
+        // 2) `items-start` —— 允许标题多行展示时，checkbox / 徽标对齐到首行顶端，
+        //    比 items-center 在多行场景下视觉更稳
+        "group flex items-start gap-3 w-full min-w-0 px-4 py-3 rounded-lg border transition-all cursor-pointer",
         isCompleted
           ? "border-transparent bg-app-hover/50 opacity-60"
           : "border-app-border bg-app-elevated hover:shadow-md hover:border-accent-primary/30"
       )}
       onClick={() => onSelect(task)}
     >
-      {/* Checkbox */}
+      {/* Checkbox —— 多行场景用 mt-0.5 把它轻微下压，与首行文字基线对齐 */}
       <button
         onClick={(e) => { e.stopPropagation(); onToggle(task.id); }}
-        className="flex-shrink-0 transition-transform hover:scale-110"
+        className="flex-shrink-0 mt-0.5 transition-transform hover:scale-110"
       >
         {isCompleted ? (
           <CheckCircle2 className="w-5 h-5 text-indigo-500" />
@@ -85,18 +91,23 @@ const TaskRow = React.forwardRef<HTMLDivElement, {
         )}
       </button>
 
-      {/* Title */}
+      {/* Title
+          - `min-w-0` 再次不可少：flex 1 子项同样需要打破默认 min-width:auto
+          - `line-clamp-2` 最多展示 2 行，多余…省略（点击进详情看全文）
+          - `break-all` 对连续无空格的 URL / 纯英文长串也能强制折行，
+            比 `break-words` 更可靠；副作用是中英文词会被拆开，但任务标题场景可接受 */}
       <span
         className={cn(
-          "flex-1 text-sm truncate transition-all",
+          "flex-1 min-w-0 text-sm leading-relaxed break-all line-clamp-2 transition-all",
           isCompleted ? "line-through text-tx-tertiary" : "text-tx-primary"
         )}
+        title={task.title}
       >
         {task.title}
       </span>
 
-      {/* Badges */}
-      <div className="flex items-center gap-2 flex-shrink-0">
+      {/* Badges —— items-start 之后要用 mt-0.5 对齐到首行 */}
+      <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
         <DateBadge dateStr={task.dueDate} />
         <Flag size={14} className={pri.flagClass} />
         <button
@@ -156,7 +167,7 @@ const TaskDetail = React.forwardRef<HTMLDivElement, {
       )}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-app-border" style={{ paddingTop: 'max(env(safe-area-inset-top, 0px), 12px)' }}>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-app-border" style={{ paddingTop: 'calc(var(--safe-area-top) + 12px)' }}>
         <span className="text-sm font-semibold text-tx-primary">{t('tasks.taskDetail')}</span>
         <button onClick={onClose} className="p-1 rounded-md hover:bg-app-hover transition-colors">
           <X size={16} className="text-tx-secondary" />
@@ -227,7 +238,7 @@ const TaskDetail = React.forwardRef<HTMLDivElement, {
       </div>
 
       {/* Footer */}
-      <div className="p-4 border-t border-app-border" style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}>
+      <div className="p-4 border-t border-app-border" style={{ paddingBottom: 'calc(var(--safe-area-bottom) + 16px)' }}>
         <button
           onClick={() => { onDelete(task.id); onClose(); }}
           className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm text-accent-danger border border-accent-danger/30 hover:bg-accent-danger/10 transition-colors"
@@ -419,7 +430,7 @@ export default function TaskCenter() {
           </h1>
         </div>
 
-        {/* Quick Add */}
+        {/* Quick Add —— 注意 min-w-0：input 粘贴超长 URL 时默认会把 flex 容器撑破 */}
         <div className="px-4 md:px-6 py-3 border-b border-app-border">
           <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-dashed border-app-border bg-app-elevated/50 hover:border-accent-primary/40 transition-colors">
             <Plus size={16} className="text-tx-tertiary flex-shrink-0" />
@@ -429,7 +440,7 @@ export default function TaskCenter() {
               onChange={(e) => setNewTitle(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
               placeholder={t('tasks.addTaskPlaceholder')}
-              className="flex-1 bg-transparent text-sm text-tx-primary placeholder:text-tx-tertiary focus:outline-none"
+              className="flex-1 min-w-0 bg-transparent text-sm text-tx-primary placeholder:text-tx-tertiary focus:outline-none"
             />
           </div>
         </div>

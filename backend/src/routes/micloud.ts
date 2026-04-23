@@ -16,14 +16,69 @@ const MI_HEADERS = {
 // 这不是标准 HTML 图片标签，需要先识别并剥离/转换。
 const MI_SHORT_IMG_RE = /([A-Za-z0-9][A-Za-z0-9._-]{6,})<\d+\s*\/>/g;
 
-// 判断一行纯文本是否"只是"图片占位（短格式或 <img> 标签），用于标题提取时跳过
+// 小米笔记"图片占位符"字符：
+// 小米笔记在纯图片笔记里，会用 ☺（U+263A）或 ☻（U+263B，极少见）作为图片占位字符，
+// 后面可能跟 `<N/>` 段落索引（对应 extraInfo.imgs[N] 的 fileId），也可能裸站。
+// 以前只认 `fileId<N/>` 短格式，于是 `☺<0/>` 的纯图片笔记：
+//   1) 标题提取跳不过这行 → 标题变成 "☺"
+//   2) HTML 转换不识别 → 正文每张图位置原样保留 "☺"
+// 所以现在把 ☺/☻ 也视为合法的图片占位。
+const MI_IMG_PLACEHOLDER_CHARS = /[\u263A\u263B]/;
+// ☺<0/>、☺<1/> 这种：占位符 + 索引标签
+const MI_PLACEHOLDER_WITH_INDEX_RE = /([\u263A\u263B])<(\d+)\s*\/>/g;
+// ☺ + 空白 + 裸 fileId 格式（老版小米便签 / 官方示例"欢迎使用小米便签"/"语音便签"）：
+// content 里直接写 `☺ 119791.G81zpx4HvpA7f-p2J5jK5A`，fileId 不在 extraInfo.imgs 里，
+// 而是紧跟 ☺ 后面，以空格/NBSP 分隔。fileId 字符集：字母、数字、小数点、下划线、减号，
+// 这类 fileId 长度通常在 15+，所以用 {10,} 比较安全，避免误伤普通文本。
+const MI_PLACEHOLDER_WITH_INLINE_ID_RE =
+  /[\u263A\u263B][\s\u00A0]*([A-Za-z0-9][A-Za-z0-9._-]{10,})/g;
+// 紧邻 <img ...> 前的 ☺（中间可能是空白、<br>、&nbsp;）：小米笔记会在图片标签前多写一个 ☺
+const MI_PLACEHOLDER_BEFORE_IMG_RE =
+  /[\u263A\u263B][\s\u00A0]*(?:<br\s*\/?>|&nbsp;|\s)*(?=<img\b)/gi;
+// 裸占位符（无索引）
+const MI_PLACEHOLDER_BARE_RE = /[\u263A\u263B]/g;
+
+// 判断一行纯文本是否"只是"图片占位（短格式、<img> 标签、或 ☺ 占位符），用于标题提取时跳过
 function isImageOnlyLine(line: string): boolean {
   const stripped = line
     .replace(/<img\b[^>]*>/gi, "")
     .replace(MI_SHORT_IMG_RE, "")
+    .replace(MI_PLACEHOLDER_WITH_INDEX_RE, "")
+    // "☺ fileId" 作为整体也算图片占位，不然 fileId 会被误当成标题
+    .replace(MI_PLACEHOLDER_WITH_INLINE_ID_RE, "")
+    .replace(MI_PLACEHOLDER_BARE_RE, "")
     .replace(/<[^>]+>/g, "")
     .trim();
   return stripped.length === 0;
+}
+
+// 从 entry 中安全提取 extraInfo.imgs（小米笔记图片附件列表，字段名按实测兼容多种）。
+// 返回 fileId 数组，顺序即正文中占位符的默认匹配顺序。
+function extractImgFileIds(entry: any): string[] {
+  try {
+    const extra =
+      typeof entry?.extraInfo === "string"
+        ? JSON.parse(entry.extraInfo)
+        : entry?.extraInfo;
+    if (!extra) return [];
+    // 兼容几种可能的字段名：imgs / noteImgInfos / images / attachments
+    const list =
+      extra.imgs ||
+      extra.noteImgInfos ||
+      extra.images ||
+      extra.attachments ||
+      [];
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((it: any) =>
+        typeof it === "string"
+          ? it
+          : it?.fileId || it?.fileid || it?.id || it?.url || ""
+      )
+      .filter((x: string) => typeof x === "string" && x.length > 0);
+  } catch {
+    return [];
+  }
 }
 
 // 从小米笔记条目中提取标题
@@ -47,6 +102,10 @@ function extractTitle(entry: any): string {
       const plainText = rawLine
         .replace(/<img\b[^>]*>/gi, "")
         .replace(MI_SHORT_IMG_RE, "")
+        // 去掉"占位符 + 索引"、"☺ fileId" 和裸占位符，避免标题变成 ☺ 或光秃秃的 fileId
+        .replace(MI_PLACEHOLDER_WITH_INDEX_RE, "")
+        .replace(MI_PLACEHOLDER_WITH_INLINE_ID_RE, "")
+        .replace(MI_PLACEHOLDER_BARE_RE, "")
         .replace(/<[^>]+>/g, "")
         .replace(/&nbsp;/g, " ")
         .replace(/&amp;/g, "&")
@@ -57,8 +116,15 @@ function extractTitle(entry: any): string {
     }
   }
 
-  // 3. 使用 subject
-  if (entry.subject) return entry.subject;
+  // 3. 使用 subject（也需过滤 ☺ 占位符，避免 subject 本身就是 ☺ 的情况）
+  if (entry.subject) {
+    const cleanSubject = String(entry.subject)
+      .replace(MI_PLACEHOLDER_WITH_INDEX_RE, "")
+      .replace(MI_PLACEHOLDER_WITH_INLINE_ID_RE, "")
+      .replace(MI_PLACEHOLDER_BARE_RE, "")
+      .trim();
+    if (cleanSubject) return cleanSubject;
+  }
 
   return "未命名笔记";
 }
@@ -203,11 +269,17 @@ app.post("/notes", async (c) => {
     // 解析每条笔记的基本信息
     const notes = allEntries.map((entry: any) => {
       const title = extractTitle(entry);
+      // snippet 也可能是 "☺" 或 "☺ fileId"，列表里展示成笑脸/乱码很奇怪，做同样的清理
+      const snippet = String(entry.snippet || "")
+        .replace(MI_PLACEHOLDER_WITH_INDEX_RE, "")
+        .replace(MI_PLACEHOLDER_WITH_INLINE_ID_RE, "")
+        .replace(MI_PLACEHOLDER_BARE_RE, "")
+        .trim();
 
       return {
         id: entry.id,
         title,
-        snippet: entry.snippet || "",
+        snippet,
         folderId: entry.folderId || "",
         folderName: allFolders[entry.folderId] || "",
         createDate: entry.createDate,
@@ -281,8 +353,8 @@ app.post("/import", async (c) => {
       // 解析标题
       const title = extractTitle(entry);
 
-      // 转换内容为 HTML（含图片下载）
-      const content = await convertMiNoteToHtmlAsync(entry.content || "", cookie);
+      // 转换内容为 HTML（含图片下载）——传 entry 进去以便从 extraInfo.imgs 解析 ☺ 占位符
+      const content = await convertMiNoteToHtmlAsync(entry.content || "", cookie, entry);
       const contentText = extractPlainText(entry.content || "");
 
       results.push({
@@ -436,10 +508,64 @@ function extractImageFileIds(content: string): string[] {
 }
 
 // 将小米笔记内容转换为 HTML（兼容 Tiptap 编辑器），支持异步下载图片
-async function convertMiNoteToHtmlAsync(content: string, cookie: string): Promise<string> {
+// entry 是可选的原始小米笔记条目，用于从 extraInfo.imgs 解析 ☺ 占位符对应的 fileId
+async function convertMiNoteToHtmlAsync(content: string, cookie: string, entry?: any): Promise<string> {
   if (!content) return "<p></p>";
 
   let html = content;
+
+  // ☺ 占位符归一化：
+  // 小米笔记"纯图片笔记"或正文嵌图的典型 content 形如 `☺<0/>\n☺<1/>` 或 `☺☺`，
+  // 对应的 fileId 列表在 entry.extraInfo.imgs 里。顺序规则：
+  //   - `☺<N/>` → imgs[N] 的 fileId
+  //   - `☺ 119791.xxxxx`（空白+裸 fileId，老版/官方示例格式）→ 直接用内联的 fileId
+  //   - `☺<img ...>`（小米有时在正式 <img> 前多写一个 ☺ 装饰）→ 删掉 ☺
+  //   - 裸 ☺   → 按出现顺序消费 imgs 里剩余未用的 fileId
+  // 解析出来后先整形成统一的 `<img fileid="xxx" />`，下面的图片下载逻辑就能兜底。
+  // 如果 imgs 为空（比如 extraInfo 字段缺失或字段名不匹配），最好的策略是直接
+  // 把 ☺ 从文本里删掉 —— 至少肉眼看上去不再是"笑脸满天飞"。
+  if (MI_IMG_PLACEHOLDER_CHARS.test(html)) {
+    const imgFileIds = entry ? extractImgFileIds(entry) : [];
+    const usedIndices = new Set<number>();
+
+    // 1) 先处理带索引的占位符：☺<0/>
+    html = html.replace(MI_PLACEHOLDER_WITH_INDEX_RE, (_m, _char, idx) => {
+      const i = parseInt(idx, 10);
+      const fid = imgFileIds[i];
+      if (fid) {
+        usedIndices.add(i);
+        return `<img fileid="${fid}" />`;
+      }
+      return ""; // 拿不到就清空
+    });
+
+    // 2) 处理"☺ + 空白 + 裸 fileId"：这是老版小米便签示例笔记的格式，
+    //    fileId 不在 extraInfo 里而是直接写在 content 字符串里。
+    //    必须在"裸 ☺ 消费 imgs"之前处理，否则 ☺ 会被先吃掉，fileId 变孤儿残留成纯文本。
+    html = html.replace(
+      MI_PLACEHOLDER_WITH_INLINE_ID_RE,
+      (_m, fileId: string) => `<img fileid="${fileId}" />`
+    );
+
+    // 3) 处理"紧邻 <img> 前的装饰 ☺"：小米会在 <img fileid="..."> 前多写一个 ☺，
+    //    <img> 已经是合法图片标签，☺ 纯属残留装饰，直接删。
+    html = html.replace(MI_PLACEHOLDER_BEFORE_IMG_RE, "");
+
+    // 4) 再处理裸占位符：按未消费的顺序分配 fileId
+    if (MI_IMG_PLACEHOLDER_CHARS.test(html)) {
+      let cursor = 0;
+      html = html.replace(MI_PLACEHOLDER_BARE_RE, () => {
+        while (cursor < imgFileIds.length && usedIndices.has(cursor)) cursor++;
+        const fid = imgFileIds[cursor];
+        if (fid) {
+          usedIndices.add(cursor);
+          cursor++;
+          return `<img fileid="${fid}" />`;
+        }
+        return "";
+      });
+    }
+  }
 
   // 归一化小米笔记图片短格式：`{fileId}<段落索引/>` → `<img fileid="{fileId}" />`
   // 只在图片短格式前后没有构成其他属性值（如 `="abc<0/>"`) 时替换。
@@ -607,6 +733,10 @@ function extractPlainText(content: string): string {
   return content
     .replace(/<img\b[^>]*>/gi, "")
     .replace(MI_SHORT_IMG_RE, "")
+    // 小米 ☺ 占位符也要清掉，否则 contentText 里会看到一串笑脸或 "☺ fileId" 这种乱码
+    .replace(MI_PLACEHOLDER_WITH_INDEX_RE, "")
+    .replace(MI_PLACEHOLDER_WITH_INLINE_ID_RE, "")
+    .replace(MI_PLACEHOLDER_BARE_RE, "")
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")

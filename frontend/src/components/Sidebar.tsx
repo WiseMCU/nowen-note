@@ -435,7 +435,7 @@ function NotebookItem({
         initial={{ opacity: 0, x: -8 }}
         animate={{ opacity: 1, x: 0 }}
         className={cn(
-          "flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer text-sm group transition-colors",
+          "flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer text-sm group transition-colors min-w-0",
           isSelected ? "bg-app-active text-tx-primary" : "text-tx-secondary hover:bg-app-hover hover:text-tx-primary",
           // inside 放置指示：显著的内边框 + 背景高亮，让用户清楚"将作为子项放入"
           showInsideIndicator && "outline outline-2 outline-accent-primary bg-accent-primary/15"
@@ -501,7 +501,7 @@ function NotebookItem({
           />
         ) : (
           <>
-            <span className="flex-1 truncate">{notebook.name}</span>
+            <span className="flex-1 min-w-0 truncate">{notebook.name}</span>
             {notebook.noteCount !== undefined && notebook.noteCount > 0 && (
               <span className="text-[10px] text-tx-tertiary tabular-nums shrink-0">{notebook.noteCount}</span>
             )}

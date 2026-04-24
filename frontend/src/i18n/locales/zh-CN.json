@@ -203,6 +203,7 @@
     "synced": "已同步",
     "sync": "同步",
     "newNoteShortcut": "快速新建笔记",
+    "noteLoading": "正在加载笔记...",
     "modeSwitch": {
       "toMd": "当前 Markdown 编辑器，点击切换到富文本",
       "toTiptap": "当前富文本编辑器，点击切换到 Markdown",
@@ -905,6 +906,24 @@
     "loadMore": "加载更多",
     "loadingMore": "加载中...",
     "statsLine": "共 {{total}} 条 · 今日 {{today}} 条"
+  },
+  "about": {
+    "title": "关于",
+    "appName": "Nowen Note",
+    "slogan": "轻量级私有化知识管理平台",
+    "version": "版本",
+    "description": "一款开源、可自托管的笔记应用，专注于隐私与效率。支持 Markdown / 富文本编辑、AI 智能助手、Web 剪藏、思维导图、多端同步与团队协作。",
+    "features": "核心能力",
+    "featureEditor": "Markdown 与富文本双模式编辑器",
+    "featureAI": "AI 写作助手 & 知识问答",
+    "featureClipper": "浏览器剪藏插件，一键保存网页",
+    "featureMindMap": "思维导图可视化",
+    "featureSync": "多设备实时同步",
+    "featureSelfHost": "Docker 一键部署，数据完全自主",
+    "openSource": "开源项目",
+    "github": "GitHub",
+    "license": "MIT License",
+    "madeWith": "用 ❤️ 打造"
   },
   "versions": {
     "title": "版本历史",

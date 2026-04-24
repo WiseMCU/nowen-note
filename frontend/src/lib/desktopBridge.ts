@@ -25,7 +25,17 @@ export type DesktopMenuChannel =
   | "menu:focus-note-list"
   | "menu:zoom-in"
   | "menu:zoom-out"
-  | "menu:zoom-reset";
+  | "menu:zoom-reset"
+  | "menu:format"
+  | "dock:new-note"
+  | "dock:search";
+
+/** 格式菜单事件负载（menu:format） */
+export interface FormatMenuPayload {
+  mark?: "bold" | "italic" | "underline" | "strike" | "code";
+  node?: "heading" | "paragraph";
+  level?: number;
+}
 
 export type UpdaterStatus =
   | "checking"
@@ -82,11 +92,20 @@ export const isDesktop = (): boolean => !!getBridge();
 /** 订阅菜单事件，返回反注册函数。非 Electron 环境返回 no-op。 */
 export function onMenuAction(
   channel: DesktopMenuChannel,
-  handler: () => void
+  handler: (payload?: unknown) => void
 ): () => void {
   const bridge = getBridge();
   if (!bridge) return () => {};
-  return bridge.on(channel, () => handler());
+  return bridge.on(channel, (p) => handler(p));
+}
+
+/** 订阅格式菜单事件（带 payload） */
+export function onFormatMenu(
+  handler: (payload: FormatMenuPayload) => void
+): () => void {
+  const bridge = getBridge();
+  if (!bridge) return () => {};
+  return bridge.on("menu:format", (p) => handler((p as FormatMenuPayload) ?? {}));
 }
 
 /** 订阅自动更新事件 */

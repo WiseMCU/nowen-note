@@ -18,6 +18,8 @@ interface AppState {
   sidebarWidth: number;
   noteListWidth: number;
   isLoading: boolean;
+  /** 笔记切换时的加载状态：正在从后端获取完整笔记内容 */
+  noteLoading: boolean;
   syncStatus: SyncStatus;
   lastSyncedAt: string | null;
   mobileView: MobileView;
@@ -39,6 +41,7 @@ type Action =
   | { type: "SET_SIDEBAR_WIDTH"; payload: number }
   | { type: "SET_NOTELIST_WIDTH"; payload: number }
   | { type: "SET_LOADING"; payload: boolean }
+  | { type: "SET_NOTE_LOADING"; payload: boolean }
   | { type: "UPDATE_NOTE_IN_LIST"; payload: Partial<NoteListItem> & { id: string } }
   | { type: "REMOVE_NOTE_FROM_LIST"; payload: string }
   | { type: "ADD_NOTE_TO_LIST"; payload: NoteListItem }
@@ -91,6 +94,7 @@ const initialState: AppState = {
   sidebarWidth: getSavedSidebarWidth(),
   noteListWidth: getSavedNoteListWidth(),
   isLoading: false,
+  noteLoading: false,
   syncStatus: "idle",
   lastSyncedAt: null,
   mobileView: "list",
@@ -132,6 +136,8 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "SET_LOADING":
       return { ...state, isLoading: action.payload };
+    case "SET_NOTE_LOADING":
+      return { ...state, noteLoading: action.payload };
     case "UPDATE_NOTE_IN_LIST":
       return {
         ...state,
@@ -203,6 +209,7 @@ export function useAppActions() {
     setSidebarWidth: (v: number) => dispatch({ type: "SET_SIDEBAR_WIDTH", payload: v }),
     setNoteListWidth: (v: number) => dispatch({ type: "SET_NOTELIST_WIDTH", payload: v }),
     setLoading: (v: boolean) => dispatch({ type: "SET_LOADING", payload: v }),
+    setNoteLoading: (v: boolean) => dispatch({ type: "SET_NOTE_LOADING", payload: v }),
     updateNoteInList: (v: Partial<NoteListItem> & { id: string }) => dispatch({ type: "UPDATE_NOTE_IN_LIST", payload: v }),
     removeNoteFromList: (id: string) => dispatch({ type: "REMOVE_NOTE_FROM_LIST", payload: id }),
     addNoteToList: (v: NoteListItem) => dispatch({ type: "ADD_NOTE_TO_LIST", payload: v }),

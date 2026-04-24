@@ -20,6 +20,7 @@ import { User } from "@/types";
 import { getServerUrl, clearServerUrl, broadcastLogout } from "@/lib/api";
 import { useBackButton, hideSplashScreen, useStatusBarSync, useKeyboardLayout, isNativePlatform } from "@/hooks/useCapacitor";
 import { useDesktopMenuBridge } from "@/hooks/useDesktopMenuBridge";
+import CommandPalette from "@/components/common/CommandPalette";
 
 function SidebarResizeHandle() {
   const { state } = useApp();
@@ -180,6 +181,22 @@ function AppLayout() {
   const isAIChatView = state.viewMode === "ai-chat";
   const isDiaryView = state.viewMode === "diary";
 
+  /**
+   * Cmd-K 全局搜索面板开关
+   * ----------------------------------------------------------------
+   * 三种来源：
+   *   1) 组件内部 Cmd-K 键盘事件自己派发 "nowen:open-command-palette"；
+   *   2) macOS 原生菜单 "搜索笔记…" / Dock 右键 → useDesktopMenuBridge.onOpenSearch；
+   *   3) 未来若需要业务代码编程式打开，同样 dispatch 上述事件即可。
+   * 统一从外部事件驱动 setOpen(true)，组件只负责展示 + Esc 关闭。
+   */
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onOpen = () => setCommandPaletteOpen(true);
+    window.addEventListener("nowen:open-command-palette", onOpen);
+    return () => window.removeEventListener("nowen:open-command-palette", onOpen);
+  }, []);
+
 
   // P0: Android 返回键处理
   const handleBackToList = useCallback(() => {
@@ -257,6 +274,12 @@ function AppLayout() {
   useDesktopMenuBridge({
     onNewNote: () => void quickCreateNote(),
     onToggleSidebar: () => actions.toggleSidebar(),
+    /**
+     * 原生"搜索"菜单 / Dock Quick Action → 打开 Cmd-K 命令面板。
+     * 相比过去聚焦 Sidebar 搜索框的方案，命令面板是"即用即走"语义，
+     * 不污染当前 viewMode，也与 Cmd-K 键盘入口完全统一。
+     */
+    onOpenSearch: () => setCommandPaletteOpen(true),
   });
 
   return (
@@ -357,6 +380,12 @@ function AppLayout() {
           </div>
         </div>
       )}
+
+      {/* 全局命令面板（Cmd-K / 菜单搜索 / Dock 搜索统一入口） */}
+      <CommandPalette
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+      />
     </div>
   );
 }

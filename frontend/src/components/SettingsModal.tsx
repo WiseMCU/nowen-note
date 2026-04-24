@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Palette, Shield, Database, X, Settings, Camera, Save, Loader2, Trash2, Upload, Type, Check, ChevronDown, Globe, Bot, Users } from "lucide-react";
+import { Palette, Shield, Database, X, Settings, Camera, Save, Loader2, Trash2, Upload, Type, Check, ChevronDown, Globe, Bot, Users, Info, ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import ThemeToggle from "@/components/ThemeToggle";
 import SkinSwitcher from "@/components/SkinSwitcher";
@@ -14,11 +14,74 @@ import { api } from "@/lib/api";
 import { CustomFont } from "@/types";
 import { cn } from "@/lib/utils";
 
-type TabId = "appearance" | "ai" | "security" | "data" | "users";
+type TabId = "appearance" | "ai" | "security" | "data" | "users" | "about";
 
 interface SettingsModalProps {
   onClose: () => void;
   defaultTab?: TabId;
+}
+
+function AboutPanel() {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-6">
+      {/* 标题区 */}
+      <div className="text-center py-4">
+        <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{t('about.appName')}</h2>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">{t('about.slogan')}</p>
+        <span className="inline-block mt-2 px-3 py-0.5 rounded-full bg-accent-primary/10 text-accent-primary text-xs font-medium">
+          {t('about.version')} {__APP_VERSION__}
+        </span>
+      </div>
+
+      <div className="h-px bg-zinc-200 dark:bg-zinc-800" />
+
+      {/* 简介 */}
+      <p className="text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed">
+        {t('about.description')}
+      </p>
+
+      {/* 核心能力 */}
+      <div>
+        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-3">{t('about.features')}</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {[
+            'featureEditor', 'featureAI', 'featureClipper',
+            'featureMindMap', 'featureSync', 'featureSelfHost',
+          ].map((key) => (
+            <div key={key} className="flex items-start gap-2 p-2.5 rounded-lg bg-zinc-50 dark:bg-zinc-800/40">
+              <Check size={14} className="text-accent-primary mt-0.5 shrink-0" />
+              <span className="text-xs text-zinc-700 dark:text-zinc-300">{t(`about.${key}`)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="h-px bg-zinc-200 dark:bg-zinc-800" />
+
+      {/* 开源信息 */}
+      <div className="flex items-center justify-between p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+        <div>
+          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{t('about.openSource')}</span>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">{t('about.license')}</p>
+        </div>
+        <a
+          href="https://github.com/cropflre/nowen-note"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 text-xs font-medium hover:opacity-80 transition-opacity"
+        >
+          <ExternalLink size={12} />
+          {t('about.github')}
+        </a>
+      </div>
+
+      {/* 底部 */}
+      <p className="text-center text-xs text-zinc-400 dark:text-zinc-600">
+        {t('about.madeWith')}
+      </p>
+    </div>
+  );
 }
 
 function AppearancePanel() {
@@ -442,6 +505,7 @@ const SettingsModal = React.forwardRef<HTMLDivElement, SettingsModalProps>(
     { id: "security" as const, label: t('settings.security'), icon: Shield },
     ...(isAdmin ? [{ id: "users" as const, label: t('settings.users'), icon: Users }] : []),
     { id: "data" as const, label: t('settings.dataManagement'), icon: Database },
+    { id: "about" as const, label: t('about.title'), icon: Info },
   ];
 
   // 用 Portal 挂载到 body：
@@ -567,6 +631,7 @@ const SettingsModal = React.forwardRef<HTMLDivElement, SettingsModalProps>(
                 {activeTab === "security" && <SecuritySettings />}
                 {activeTab === "users" && isAdmin && <UserManagement currentUserId={currentUser?.id ?? null} />}
                 {activeTab === "data" && <DataManager />}
+                {activeTab === "about" && <AboutPanel />}
               </motion.div>
             </AnimatePresence>
           </div>

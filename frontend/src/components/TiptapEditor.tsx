@@ -32,6 +32,7 @@ import { Note, Tag } from "@/types";
 import TagInput from "@/components/TagInput";
 import AIWritingAssistant from "@/components/AIWritingAssistant";
 import type { NoteEditorHandle, NoteEditorHeading, NoteEditorProps } from "@/components/editors/types";
+import type { FormatMenuPayload } from "@/lib/desktopBridge";
 import { SlashCommandsMenu, getDefaultSlashCommands, createSlashExtension, createSlashEventHandlers } from "@/components/SlashCommands";
 import CodeBlockView from "@/components/CodeBlockView";
 import MobileFloatingToolbar, { MobileToolbarItem } from "@/components/MobileFloatingToolbar";
@@ -890,6 +891,137 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     };
     onEditorReady?.(scrollTo);
   }, [editor, onEditorReady]);
+
+  /**
+   * 桌面端格式菜单桥（macOS 原生菜单 / 快捷键 → Tiptap）
+   * ----------------------------------------------------------------
+   * 监听 window "nowen:format" 自定义事件，由 `useDesktopMenuBridge`（App.tsx）
+   * 在收到 Electron 主进程 "menu:format" IPC 时派发。payload 形如：
+   *   { mark: "bold" | "italic" | "underline" | "strike" | "code" }
+   *   { node: "heading", level: 1..6 }
+   *   { node: "paragraph" }
+   *
+   * 为什么直接监听 window 事件（而不是通过 ref 暴露 runFormat）：
+   *   - editor 是 TiptapEditor 闭包内变量，穿 ref 会污染 NoteEditorHandle 合约；
+   *   - EditorPane 同一时刻只会渲染一个 TiptapEditor（MD/HTML 模式时不挂载），
+   *     不存在多实例竞态；即使在 RTE 模式下也只有一个 subscription；
+   *   - 当编辑器未挂载（切到 MD 模式），格式菜单本就应该无响应——
+   *     没有 subscriber 自然 no-op，语义正确。
+   *
+   * 只在 editable 且 editor 已就绪时生效；editor 未就绪 / 只读模式下忽略，避免
+   * `chain()` 在被销毁的 view 上报错。
+   */
+  useEffect(() => {
+    if (!editor || !editable) return;
+    const handler = (ev: Event) => {
+      const detail = (ev as CustomEvent<FormatMenuPayload>).detail;
+      if (!detail || editor.isDestroyed) return;
+
+      const chain = editor.chain().focus();
+      if (detail.mark) {
+        switch (detail.mark) {
+          case "bold":      chain.toggleBold().run();      break;
+          case "italic":    chain.toggleItalic().run();    break;
+          case "underline": chain.toggleUnderline().run(); break;
+          case "strike":    chain.toggleStrike().run();    break;
+          case "code":      chain.toggleCode().run();      break;
+        }
+        return;
+      }
+      if (detail.node === "heading" && detail.level) {
+        const lvl = detail.level as 1 | 2 | 3 | 4 | 5 | 6;
+        chain.toggleHeading({ level: lvl }).run();
+        return;
+      }
+      if (detail.node === "paragraph") {
+        chain.setParagraph().run();
+      }
+    };
+    window.addEventListener("nowen:format", handler as EventListener);
+    return () => window.removeEventListener("nowen:format", handler as EventListener);
+  }, [editor, editable]);
+
+  /**
+   * 原生菜单 checked 同步（Electron / macOS）
+   * ----------------------------------------------------------------
+   * HIG：菜单项应反映当前上下文状态——当前选区已加粗，则"格式 → 加粗"旁显示 ✓。
+   *
+   * 实现思路：
+   *   - 订阅 Tiptap 的 `selectionUpdate`/`transaction` 事件，采集布尔快照；
+   *   - 节流 100ms：人眼 10fps 足够感知菜单勾选切换，更高频只是白白烧 IPC；
+   *   - 浅比较去重：大多数键盘输入不改变格式状态，去重后 IPC 调用量降至 ~0。
+   *   - 编辑器卸载 / 失焦时发 null，让主进程清空所有 checked（避免"残影"）。
+   *
+   * 仅在 Electron 环境下有效；Web / 移动端 window.nowenDesktop 不存在，直接短路。
+   *
+   * Markdown 模式下 TiptapEditor 根本没挂载，自然不会上报——符合语义：
+   * 菜单 checked 反映的始终是"当前正在编辑的那个上下文"。MD 未来若需要可以
+   * 复用同一通道，这里不展开。
+   */
+  useEffect(() => {
+    if (!editor) return;
+    const bridge = (window as unknown as { nowenDesktop?: { sendFormatState?: (s: unknown) => void } })
+      .nowenDesktop;
+    const send = bridge?.sendFormatState;
+    if (!send) return;
+
+    let lastKey = "";
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const flush = () => {
+      timer = null;
+      if (editor.isDestroyed) return;
+      const state = {
+        bold: editor.isActive("bold"),
+        italic: editor.isActive("italic"),
+        underline: editor.isActive("underline"),
+        strike: editor.isActive("strike"),
+        code: editor.isActive("code"),
+        heading1: editor.isActive("heading", { level: 1 }),
+        heading2: editor.isActive("heading", { level: 2 }),
+        heading3: editor.isActive("heading", { level: 3 }),
+        paragraph: editor.isActive("paragraph"),
+      };
+      // 浅去重：把布尔值串成 9-bit 字符串，相等则不发 IPC
+      const key = Object.values(state).map((v) => (v ? "1" : "0")).join("");
+      if (key === lastKey) return;
+      lastKey = key;
+      send(state);
+    };
+
+    const schedule = () => {
+      if (timer) return; // 100ms 窗口内合并多个事件
+      timer = setTimeout(flush, 100);
+    };
+
+    editor.on("selectionUpdate", schedule);
+    editor.on("transaction", schedule);
+    editor.on("focus", schedule);
+    editor.on("blur", () => {
+      // blur 立即清空：用户切到别处时菜单不应保留旧勾选
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      lastKey = "";
+      send(null);
+    });
+
+    // 挂载时推一次初始状态
+    schedule();
+
+    return () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      editor.off("selectionUpdate", schedule);
+      editor.off("transaction", schedule);
+      editor.off("focus", schedule);
+      // 卸载清空，避免切到 MD 模式后菜单仍显示 Tiptap 的旧状态
+      send(null);
+    };
+  }, [editor]);
 
   const handleTitleChange = useCallback(() => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);

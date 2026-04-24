@@ -848,6 +848,9 @@ export default function NoteList() {
     return () => window.removeEventListener("keydown", handler);
   }, [selectedIds.size]);
 
+  // 防止快速点击导致多个并发 getNote 请求
+  const selectNoteAbortRef = useRef<AbortController | null>(null);
+
   const handleSelectNote = async (noteId: string, e?: React.MouseEvent) => {
     const isCtrl = !!e && (e.ctrlKey || e.metaKey);
     const isShift = !!e && e.shiftKey;
@@ -889,11 +892,40 @@ export default function NoteList() {
       // 这里选择"先退出多选、再正常打开"：更直观
     }
 
+    // 如果点击的是当前已激活的笔记，跳过重复加载
+    if (state.activeNote?.id === noteId) {
+      actions.setMobileView("editor");
+      return;
+    }
+
     haptic.selection();
     setLastClickedId(noteId);
-    const note = await api.getNote(noteId);
-    actions.setActiveNote(note);
-    actions.setMobileView("editor");
+
+    // 取消之前正在进行的 getNote 请求（快速连续点击时只加载最后一个）
+    if (selectNoteAbortRef.current) {
+      selectNoteAbortRef.current.abort();
+    }
+    const abortCtrl = new AbortController();
+    selectNoteAbortRef.current = abortCtrl;
+
+    // 立即设置 loading 状态，给 EditorPane 显示骨架屏
+    actions.setNoteLoading(true);
+
+    try {
+      const note = await api.getNote(noteId);
+      // 如果该请求已被新的点击 abort，则忽略结果
+      if (abortCtrl.signal.aborted) return;
+      actions.setActiveNote(note);
+      actions.setMobileView("editor");
+    } catch (err: any) {
+      // 被 abort 的请求不需要处理错误
+      if (abortCtrl.signal.aborted || err?.name === "AbortError") return;
+      console.error("Failed to load note:", err);
+    } finally {
+      if (!abortCtrl.signal.aborted) {
+        actions.setNoteLoading(false);
+      }
+    }
   };
 
   const handleCreateNote = async () => {

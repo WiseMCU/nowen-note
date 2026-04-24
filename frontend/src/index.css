@@ -1451,3 +1451,109 @@ html[data-electron="darwin"] .vibrancy-sidebar > :first-child {
   padding-left: 72px;
 }
 
+/* 全屏：Traffic Light 自动隐藏，回收 72px 左 padding 避免顶部空白 */
+html[data-electron="darwin"][data-fullscreen="1"] .vibrancy-sidebar > :first-child {
+  padding-left: 0;
+}
+
+/* ----------------------------------------------------------------------------
+ * NSFullSizeContentView：内容延伸到标题栏
+ *   主进程已设 `titleBarStyle: "hiddenInset"`，等价于 AppKit 的
+ *   NSFullSizeContentViewWindowMask——窗口没有独立标题栏，内容从 y=0 开始绘制。
+ *   但 HIG 要求"原应由标题栏承担的拖拽能力"必须在内容区补回，否则用户无处抓取
+ *   窗口。给主内容区顶部 28px 设为 drag region 即可；侧栏顶部本身已是 drag region，
+ *   这里补的是 Sidebar 之外的大区域（编辑器/笔记列表上方）。
+ *
+ *   选择器用 `main`（App.tsx 根布局中的 <main> 元素）。若未来结构改变，可改成
+ *   data-app-root 之类的稳定选择器；这里先用语义标签以免污染业务 DOM。
+ * -------------------------------------------------------------------------- */
+html[data-electron="darwin"] main::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  -webkit-app-region: drag;
+  pointer-events: none; /* 不阻挡下层点击 */
+  z-index: 1;
+}
+
+/* main 需要是 relative，::before 才能定位到它 */
+html[data-electron="darwin"] main {
+  position: relative;
+}
+
+/* 全屏下标题栏彻底消失，回收拖拽条 */
+html[data-electron="darwin"][data-fullscreen="1"] main::before {
+  display: none;
+}
+
+
+
+/* ============================================================================
+ * prefers-contrast: more —— 高对比度偏好（HIG / WCAG 2.1 AA-AAA 过渡要求）
+ * ----------------------------------------------------------------------------
+ * 触发条件：
+ *   - macOS：系统设置 → 辅助功能 → 显示 → 提高对比度
+ *   - Windows：设置 → 辅助功能 → 对比度主题（高对比度模式下浏览器会上报 more）
+ *   - iOS：设置 → 辅助功能 → 显示与文字大小 → 提高对比度
+ *
+ * 策略：
+ *   1. 弱化的 border 一律强化为 currentColor，宽度不增（增宽会让布局抖动）；
+ *   2. 毛玻璃 / 半透明覆盖层一律回落成 solid 变量；
+ *   3. 焦点环加粗到 3px 且更纯的 accent 色，不再用 color-mix 40% 透明；
+ *   4. 次要文字从 --color-text-secondary（~0.6 alpha）回落到主文本色。
+ *
+ * 所有覆写都走语义 token，组件侧无需任何改动。
+ * ========================================================================= */
+@media (prefers-contrast: more) {
+  :root {
+    /* 边框：从弱灰到纯黑/纯白（跟 text 对齐） */
+    --color-border: currentColor;
+    --color-border-soft: currentColor;
+  }
+
+  /* 毛玻璃 → solid */
+  .vibrancy-sidebar,
+  .vibrancy-panel,
+  :root[data-skin="macos"] .vibrancy-sidebar,
+  :root[data-skin="macos"] .vibrancy-panel {
+    background-color: var(--color-sidebar-solid) !important;
+  }
+  :root[data-skin="macos"] .vibrancy-sidebar::before,
+  :root[data-skin="macos"] .vibrancy-panel::before {
+    display: none !important;
+  }
+
+  /* 焦点环：更粗、更纯 */
+  *:focus-visible {
+    outline: 3px solid var(--color-accent-primary) !important;
+    outline-offset: 2px !important;
+    box-shadow: none !important;
+  }
+  :root[data-skin="macos"] input:focus-visible,
+  :root[data-skin="macos"] textarea:focus-visible,
+  :root[data-skin="macos"] select:focus-visible {
+    outline: 3px solid var(--color-accent-primary) !important;
+    outline-offset: 1px !important;
+    box-shadow: none !important;
+  }
+
+  /* 半透明次级文字 → 满对比度 */
+  .text-app-muted,
+  .text-app-secondary {
+    color: var(--color-text) !important;
+  }
+
+  /* 通用的 hover 半透明色层（很多按钮用 bg-white/5 类）在高对比下几乎不可见，
+   * 通过 :hover 时加可见的 outline 补偿语义。 */
+  button:hover:not(:disabled),
+  [role="button"]:hover {
+    outline: 1px solid currentColor;
+    outline-offset: -1px;
+  }
+}
+
+
+

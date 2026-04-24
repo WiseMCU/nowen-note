@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, Menu } = require("electron");
 const path = require("path");
 const { spawn } = require("child_process");
 const fs = require("fs");
@@ -6,7 +6,7 @@ const net = require("net");
 const http = require("http");
 const crypto = require("crypto");
 
-const { buildMenu } = require("./menu");
+const { buildMenu, applyFormatState } = require("./menu");
 const { createTray, destroyTray, markQuitting, getIsQuitting } = require("./tray");
 const { initAutoUpdater, checkForUpdatesManually } = require("./updater");
 const { initLogger, getLogDir } = require("./logger");
@@ -391,6 +391,26 @@ function createWindow() {
 
   mainWindow.loadURL(`http://127.0.0.1:${backendPort}`);
 
+  // ---------- macOS：全屏进出时通知 renderer 调整 Traffic Light 让位 ----------
+  // 全屏模式下 Traffic Light 自动隐藏，顶部 72px 左 padding 应回收；离开全屏再恢复。
+  // 通过 dom.document.documentElement[data-fullscreen] 驱动 CSS 分支，避免轮询。
+  if (isMac) {
+    const notifyFullscreen = (value) => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents
+          .executeJavaScript(
+            `document.documentElement.setAttribute("data-fullscreen", "${value ? "1" : "0"}")`
+          )
+          .catch(() => { /* 页面可能还未就绪，忽略 */ });
+      }
+    };
+    mainWindow.on("enter-full-screen", () => notifyFullscreen(true));
+    mainWindow.on("leave-full-screen", () => notifyFullscreen(false));
+    mainWindow.webContents.on("did-finish-load", () => {
+      notifyFullscreen(mainWindow.isFullScreen());
+    });
+  }
+
   mainWindow.once("ready-to-show", () => {
     closeSplash();
     mainWindow.show();
@@ -470,6 +490,25 @@ function registerAppIpc() {
     await shell.openPath(dir);
     return { ok: true, path: dir };
   });
+
+  /**
+   * renderer → main：上报格式状态，同步系统菜单栏 checked 标记。
+   *
+   * 为什么是 ipcMain.on 而不是 handle：
+   *   - renderer 调用 ipcRenderer.send 是"火后不管"的单向通道，没有返回值预期；
+   *   - 避免 renderer 在高频场景下 awaiting invoke 带来的微任务栈压力。
+   *
+   * 节流由 renderer 负责（100ms + 浅比较）——main 侧不再二次节流，
+   * 收到即应用；Electron 的 MenuItem.checked 设置本身是轻量同步操作。
+   */
+  ipcMain.removeAllListeners("menu:format-state");
+  ipcMain.on("menu:format-state", (_event, state) => {
+    try {
+      applyFormatState(state);
+    } catch (err) {
+      console.warn("[main] applyFormatState failed:", err);
+    }
+  });
 }
 
 // ---------- 生命周期 ----------
@@ -494,6 +533,43 @@ app.whenReady().then(async () => {
     onCheckForUpdates: () => checkForUpdatesManually(),
     openAboutWindow,
   });
+
+  // ---------- macOS Dock Quick Action（HIG：Dock 右键菜单） ----------
+  // 用户未启动窗口时右键 Dock 即可快速进入关键操作。app.dock 仅存在于 darwin，
+  // 其它平台跳过；点击会先确保主窗口可见并聚焦，再向 renderer 发送业务事件。
+  if (process.platform === "darwin" && app.dock) {
+    const focusAndSend = (channel) => {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        // 窗口已销毁（例如最后一个窗口关闭后）：重建
+        createWindow();
+        // createWindow 是同步的，但实际 show 要等 ready-to-show；事件先落盘
+      }
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        // webContents 可能尚未 did-finish-load；对两种情况都覆盖
+        if (mainWindow.webContents.isLoading()) {
+          mainWindow.webContents.once("did-finish-load", () => {
+            mainWindow.webContents.send(channel);
+          });
+        } else {
+          mainWindow.webContents.send(channel);
+        }
+      }
+    };
+    const dockMenu = Menu.buildFromTemplate([
+      {
+        label: "新建笔记",
+        click: () => focusAndSend("dock:new-note"),
+      },
+      {
+        label: "搜索笔记",
+        click: () => focusAndSend("dock:search"),
+      },
+    ]);
+    app.dock.setMenu(dockMenu);
+  }
 
   // 托盘
   createTray({

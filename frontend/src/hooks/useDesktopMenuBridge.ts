@@ -13,7 +13,13 @@
  *   - "切换侧边栏" 直接调 store actions。
  */
 import { useEffect } from "react";
-import { onMenuAction, onOpenFile, type OpenFilePayload } from "@/lib/desktopBridge";
+import {
+  onMenuAction,
+  onFormatMenu,
+  onOpenFile,
+  type OpenFilePayload,
+  type FormatMenuPayload,
+} from "@/lib/desktopBridge";
 
 export interface DesktopMenuBridgeOptions {
   onNewNote?: () => void;
@@ -22,6 +28,8 @@ export interface DesktopMenuBridgeOptions {
   onToggleSidebar?: () => void;
   onFocusNoteList?: () => void;
   onOpenFile?: (file: OpenFilePayload) => void;
+  /** 格式菜单（macOS 格式菜单 / 快捷键）。若未提供则派发 window 事件 "nowen:format"。 */
+  onFormat?: (payload: FormatMenuPayload) => void;
 }
 
 export function useDesktopMenuBridge(opts: DesktopMenuBridgeOptions) {
@@ -34,8 +42,21 @@ export function useDesktopMenuBridge(opts: DesktopMenuBridgeOptions) {
         else window.dispatchEvent(new CustomEvent("nowen:new-note"));
       })
     );
+    // Dock 右键快捷入口（macOS）：复用同一 handler，保持行为统一
+    unsubs.push(
+      onMenuAction("dock:new-note", () => {
+        if (opts.onNewNote) opts.onNewNote();
+        else window.dispatchEvent(new CustomEvent("nowen:new-note"));
+      })
+    );
     unsubs.push(
       onMenuAction("menu:search", () => {
+        if (opts.onOpenSearch) opts.onOpenSearch();
+        else window.dispatchEvent(new CustomEvent("nowen:open-search"));
+      })
+    );
+    unsubs.push(
+      onMenuAction("dock:search", () => {
         if (opts.onOpenSearch) opts.onOpenSearch();
         else window.dispatchEvent(new CustomEvent("nowen:open-search"));
       })
@@ -56,6 +77,16 @@ export function useDesktopMenuBridge(opts: DesktopMenuBridgeOptions) {
       onMenuAction("menu:focus-note-list", () => {
         if (opts.onFocusNoteList) opts.onFocusNoteList();
         else window.dispatchEvent(new CustomEvent("nowen:focus-note-list"));
+      })
+    );
+    // 格式菜单（加粗/斜体/标题等）：payload 由 Electron 菜单 click 时发出
+    unsubs.push(
+      onFormatMenu((payload) => {
+        if (opts.onFormat) opts.onFormat(payload);
+        else
+          window.dispatchEvent(
+            new CustomEvent<FormatMenuPayload>("nowen:format", { detail: payload })
+          );
       })
     );
     // 文件关联：双击 .md 把文件内容透传进来
@@ -80,5 +111,6 @@ export function useDesktopMenuBridge(opts: DesktopMenuBridgeOptions) {
     opts.onToggleSidebar,
     opts.onFocusNoteList,
     opts.onOpenFile,
+    opts.onFormat,
   ]);
 }

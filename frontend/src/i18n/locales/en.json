@@ -196,6 +196,7 @@
     "synced": "Synced",
     "sync": "Sync",
     "newNoteShortcut": "Quick New Note",
+    "noteLoading": "Loading note...",
     "modeSwitch": {
       "toMd": "Currently Markdown editor, click to switch to rich text",
       "toTiptap": "Currently rich-text editor, click to switch to Markdown",
@@ -898,6 +899,24 @@
     "loadMore": "Load More",
     "loadingMore": "Loading...",
     "statsLine": "{{total}} total · {{today}} today"
+  },
+  "about": {
+    "title": "About",
+    "appName": "Nowen Note",
+    "slogan": "Lightweight Self-Hosted Knowledge Platform",
+    "version": "Version",
+    "description": "An open-source, self-hosted note-taking app focused on privacy and productivity. Supports Markdown / rich-text editing, AI assistant, web clipping, mind maps, real-time sync, and team collaboration.",
+    "features": "Key Features",
+    "featureEditor": "Markdown & rich-text dual-mode editor",
+    "featureAI": "AI writing assistant & knowledge Q&A",
+    "featureClipper": "Browser clipper extension for one-click saving",
+    "featureMindMap": "Mind map visualization",
+    "featureSync": "Real-time multi-device sync",
+    "featureSelfHost": "One-click Docker deploy, full data ownership",
+    "openSource": "Open Source",
+    "github": "GitHub",
+    "license": "MIT License",
+    "madeWith": "Made with ❤️"
   },
   "versions": {
     "title": "Version History",

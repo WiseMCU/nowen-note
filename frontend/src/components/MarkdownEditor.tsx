@@ -96,6 +96,7 @@ import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { normalizeToMarkdown, markdownToPlainText } from "@/lib/contentFormat";
 import type { NoteEditorHandle, NoteEditorHeading, NoteEditorProps } from "@/components/editors/types";
+import type { FormatMenuPayload } from "@/lib/desktopBridge";
 import {
   toggleWrap,
   toggleHeading,
@@ -105,6 +106,7 @@ import {
   toggleBlockquote,
   toggleCodeBlock,
   toggleInlineCode,
+  toggleLinePrefix,
   insertHorizontalRule,
   insertTable,
   insertLink,
@@ -922,6 +924,65 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
     };
     onEditorReady(scrollTo);
   }, [onEditorReady]);
+
+  /**
+   * 桌面端格式菜单桥（macOS 原生菜单 / 快捷键 → CodeMirror）
+   * ----------------------------------------------------------------
+   * 与 TiptapEditor 共用同一个 "nowen:format" 事件契约（由 useDesktopMenuBridge
+   * 在收到 Electron 主进程 "menu:format" IPC 时派发）。
+   *
+   * Markdown ↔ 语义映射：
+   *   bold      → toggleWrap("**")
+   *   italic    → toggleWrap("*")
+   *   strike    → toggleWrap("~~")
+   *   code      → toggleInlineCode
+   *   underline → toggleWrap("<u>", "</u>")   // MD 没有原生下划线，用 HTML 标签；
+   *                                             渲染侧（预览 / contentFormat）已支持
+   *   heading lv→ toggleHeading(v, lv)
+   *   paragraph → toggleHeading(v, 0)          // 与现有 toggleHeading 语义对齐：0 = 去标题
+   *
+   * 守卫：view 未就绪 / !editable 时忽略，避免在已销毁 view 上 dispatch。
+   */
+  useEffect(() => {
+    if (!editable) return;
+    const handler = (ev: Event) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const detail = (ev as CustomEvent<FormatMenuPayload>).detail;
+      if (!detail) return;
+
+      if (detail.mark) {
+        switch (detail.mark) {
+          case "bold":      toggleWrap(view, "**");   break;
+          case "italic":    toggleWrap(view, "*");    break;
+          case "strike":    toggleWrap(view, "~~");   break;
+          case "code":      toggleInlineCode(view);   break;
+          // MD 无原生下划线语法，用 HTML 兜底。toggleWrap 的第 3 参用于非对称包裹。
+          case "underline": toggleWrap(view, "<u>", "</u>"); break;
+        }
+        view.focus();
+        return;
+      }
+      if (detail.node === "heading" && detail.level) {
+        // MarkdownEditor 仅支持 h1..h3（与 extractHeadings 大纲对齐）；
+        // 超出的级别作 h3 兜底，比静默忽略更符合用户预期。
+        const lv = (detail.level <= 3 ? detail.level : 3) as 1 | 2 | 3;
+        toggleHeading(view, lv);
+        view.focus();
+        return;
+      }
+      if (detail.node === "paragraph") {
+        // "转正文" = 剥去行首 #{1,6} \s+，不添加任何新前缀。
+        // toggleLinePrefix("", [/^#{1,6}\s+/]) 恰好实现这个语义：
+        //   - 匹配到标题前缀 → 替换为 ""（删除）；
+        //   - 本就是正文    → 新增 "" 前缀（no-op）。
+        toggleLinePrefix(view, "", [/^#{1,6}\s+/]);
+        view.focus();
+      }
+    };
+    window.addEventListener("nowen:format", handler as EventListener);
+    return () => window.removeEventListener("nowen:format", handler as EventListener);
+  }, [editable]);
 
   // ---------- 标题变化触发保存 ----------
 

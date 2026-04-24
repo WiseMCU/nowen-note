@@ -1134,6 +1134,10 @@ export default function Sidebar() {
             placeholder={t('sidebar.searchPlaceholder')}
             className="pl-8 h-8 text-xs bg-app-bg border-app-border"
             value={searchInput}
+            /* data-sidebar-search：Electron 原生"搜索"菜单 / Dock Quick Action 的
+             * 聚焦目标。见 App.tsx 的 onOpenSearch。本应用没有全局搜索弹窗，
+             * "搜索"语义就是聚焦此输入框。 */
+            data-sidebar-search=""
             onChange={(e) => {
               setSearchInput(e.target.value);
               if (e.target.value.trim()) {

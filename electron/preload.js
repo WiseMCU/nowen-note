@@ -12,6 +12,11 @@ const allowedChannels = new Set([
   "menu:zoom-in",
   "menu:zoom-out",
   "menu:zoom-reset",
+  // 格式菜单：{ mark?: "bold"|"italic"|"underline"|"strike"|"code", node?: "heading"|"paragraph", level?: number }
+  "menu:format",
+  // Dock Quick Action（macOS）
+  "dock:new-note",
+  "dock:search",
   // 文件关联：双击 .md 打开
   "file:open",
   // 自动更新状态
@@ -54,6 +59,30 @@ contextBridge.exposeInMainWorld("nowenDesktop", {
   /** 打开日志目录（方便用户取日志反馈问题） */
   openLogDir() {
     return ipcRenderer.invoke("app:open-log-dir");
+  },
+
+  /**
+   * renderer → 主进程：上报当前编辑器"格式状态"，供主进程同步系统菜单栏的
+   * checked 标记（HIG：菜单项应反映当前上下文状态）。
+   *
+   * @param {null | {
+   *   bold?: boolean,
+   *   italic?: boolean,
+   *   underline?: boolean,
+   *   strike?: boolean,
+   *   code?: boolean,
+   *   heading1?: boolean,
+   *   heading2?: boolean,
+   *   heading3?: boolean,
+   *   paragraph?: boolean,
+   * }} state
+   *   null 表示"无可用编辑器"（编辑器销毁 / 焦点离开 / MD 模式未命中），
+   *   主进程应清空所有格式菜单的 checked。
+   *
+   * 调用端职责：**自己做节流**（建议 100ms）与 **去重**（浅比较）。此 IPC 极轻量但频繁调用仍划不来。
+   */
+  sendFormatState(state) {
+    ipcRenderer.send("menu:format-state", state ?? null);
   },
 
   /** 运行在 Electron 客户端的标识（前端用来条件渲染桌面专属 UI） */

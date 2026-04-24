@@ -58,7 +58,7 @@ const SHOW_EDITOR_MODE_TOGGLE = false;
 export default function EditorPane() {
   const { state } = useApp();
   const actions = useAppActions();
-  const { activeNote, syncStatus, lastSyncedAt } = state;
+  const { activeNote, syncStatus, lastSyncedAt, noteLoading } = state;
   const savedTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [showMoveDropdown, setShowMoveDropdown] = useState(false);
   const moveDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -910,6 +910,39 @@ export default function EditorPane() {
     [state.notebooks, activeNote?.notebookId]
   );
 
+  // ── 笔记加载中骨架屏 ──
+  // 在点击笔记列表后、内容还没到达前显示过渡态
+  if (noteLoading && !activeNote) {
+    return (
+      <div className="flex-1 flex flex-col bg-app-bg overflow-hidden transition-colors">
+        {/* 骨架屏标题栏 */}
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-app-border">
+          <div className="h-7 w-48 rounded-md bg-app-hover animate-pulse" />
+          <div className="ml-auto flex items-center gap-2">
+            <div className="h-7 w-7 rounded-md bg-app-hover animate-pulse" />
+            <div className="h-7 w-7 rounded-md bg-app-hover animate-pulse" />
+          </div>
+        </div>
+        {/* 骨架屏内容区 */}
+        <div className="flex-1 px-6 py-6 space-y-4">
+          <div className="h-8 w-3/5 rounded-md bg-app-hover animate-pulse" />
+          <div className="space-y-3 mt-6">
+            <div className="h-4 w-full rounded bg-app-hover animate-pulse" />
+            <div className="h-4 w-11/12 rounded bg-app-hover animate-pulse" />
+            <div className="h-4 w-4/5 rounded bg-app-hover animate-pulse" />
+            <div className="h-4 w-full rounded bg-app-hover animate-pulse" />
+            <div className="h-4 w-3/4 rounded bg-app-hover animate-pulse" />
+          </div>
+          <div className="space-y-3 mt-4">
+            <div className="h-4 w-full rounded bg-app-hover animate-pulse" />
+            <div className="h-4 w-5/6 rounded bg-app-hover animate-pulse" />
+            <div className="h-4 w-2/3 rounded bg-app-hover animate-pulse" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!activeNote) {
     return (
       <div className="flex-1 flex items-center justify-center bg-app-bg transition-colors">
@@ -944,8 +977,25 @@ export default function EditorPane() {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.15 }}
-      className="flex-1 flex flex-col bg-app-bg overflow-hidden transition-colors"
+      className="flex-1 flex flex-col bg-app-bg overflow-hidden transition-colors relative"
     >
+      {/* 笔记切换 loading 遮罩 */}
+      <AnimatePresence>
+        {noteLoading && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.12 }}
+            className="absolute inset-0 z-50 flex items-center justify-center bg-app-bg/60 backdrop-blur-[2px]"
+          >
+            <div className="flex flex-col items-center gap-3">
+              <Loader2 size={24} className="animate-spin text-accent-primary" />
+              <span className="text-xs text-tx-tertiary">{t('editor.noteLoading')}</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Mobile Editor Header - 返回按钮 */}
       <header className="flex items-center gap-2 px-3 py-2 border-b border-app-border bg-app-surface/50 md:hidden" style={{ paddingTop: 'calc(var(--safe-area-top) + 8px)' }}>
         <button

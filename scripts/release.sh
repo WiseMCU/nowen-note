@@ -94,6 +94,7 @@ DO_PUSH_CUSTOM=0       # --push，仅在 build-only + 自定义 image 下
 TARGETS="docker"
 TARGETS_EXPLICIT=0     # 用户是否通过 --target 显式指定了
 DO_GITHUB_RELEASE=0    # --github-release：把 PC/Android 产物上传到 GitHub Release（自动打 tag）
+NO_GITHUB_RELEASE_EXPLICIT=0  # --no-github-release：显式关闭自动推断
 RELEASE_NOTES=""       # --notes "xxx" 或 --notes-file path
 RELEASE_NOTES_FILE=""
 RELEASE_DRAFT=0        # --draft
@@ -152,6 +153,8 @@ usage() {
                            （避免一边打包一边 npm run dev:backend 时 ABI 不匹配）
       --github-release     把 pc/android 产物以 gh release create 上传到 GitHub Releases
                            需要 gh CLI 已登录（gh auth login），或设了 GH_TOKEN 环境变量
+                           注意：当 --target 包含 pc 或 android 时会自动启用，无需手动加
+      --no-github-release  显式关闭 GitHub Release 上传（覆盖自动推断）
       --notes "TEXT"       Release 发布说明（简短文本）
       --notes-file PATH    Release 发布说明（从文件读，优先级高于 --notes）
       --draft              Release 作为草稿（可在网页上再发布）
@@ -230,6 +233,7 @@ while [ $# -gt 0 ]; do
         --android-docker-sync) ANDROID_DOCKER_SYNC=1; ANDROID_USE_DOCKER=1; shift ;;
         --restore-backend-abi) RESTORE_BACKEND_ABI=1; shift ;;
         --github-release) DO_GITHUB_RELEASE=1; shift ;;
+        --no-github-release) DO_GITHUB_RELEASE=0; NO_GITHUB_RELEASE_EXPLICIT=1; shift ;;
         --notes)        RELEASE_NOTES="${2:-}"; shift 2 ;;
         --notes-file)   RELEASE_NOTES_FILE="${2:-}"; shift 2 ;;
         --draft)        RELEASE_DRAFT=1; shift ;;
@@ -239,19 +243,25 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# -------------------- 交互式发布模式选择 --------------------
-# 当用户未通过 --target 显式指定目标、不是 --build-only 模式、且不是 -y 自动模式时，
-# 弹出菜单让用户选择要发布的目标。
+# -------------------- 交互式向导（完整覆盖所有选项） --------------------
+# 当用户直接 ./release.sh（不带任何参数）且不是 -y 自动模式时，启动交互式向导，
+# 让用户通过菜单选择所有配置，无需记命令行参数。
 if [ "$TARGETS_EXPLICIT" = "0" ] && [ "$BUILD_ONLY" = "0" ] && [ "$ASSUME_YES" = "0" ]; then
     echo
-    echo "${C_BOLD}请选择发布模式：${C_RESET}"
+    echo "${C_BOLD}${C_CYAN}╔════════════════════════════════════════╗${C_RESET}"
+    echo "${C_BOLD}${C_CYAN}║     Nowen Note 发布向导               ║${C_RESET}"
+    echo "${C_BOLD}${C_CYAN}╚════════════════════════════════════════╝${C_RESET}"
+
+    # ======== 第 1 步：选择发布目标 ========
     echo
-    echo "  ${C_CYAN}1${C_RESET})  Docker 镜像${C_RESET}              仅发布 Docker Hub 镜像"
-    echo "  ${C_CYAN}2${C_RESET})  PC 客户端${C_RESET}               打包 exe / AppImage / deb / dmg"
-    echo "  ${C_CYAN}3${C_RESET})  Android APK${C_RESET}             打包 Android 安装包"
-    echo "  ${C_CYAN}4${C_RESET})  PC + Android${C_RESET}            同时打 PC 和 Android"
-    echo "  ${C_CYAN}5${C_RESET})  Docker + PC + Android${C_RESET}   全部发布"
-    echo "  ${C_CYAN}6${C_RESET})  自定义组合${C_RESET}              手动输入 docker,pc,android 组合"
+    echo "${C_BOLD}📦 第 1 步：选择发布目标${C_RESET}"
+    echo
+    echo "  ${C_CYAN}1${C_RESET})  Docker 镜像               仅发布 Docker Hub 镜像"
+    echo "  ${C_CYAN}2${C_RESET})  PC 客户端                 打包 exe / AppImage / deb / dmg"
+    echo "  ${C_CYAN}3${C_RESET})  Android APK               打包 Android 安装包"
+    echo "  ${C_CYAN}4${C_RESET})  PC + Android              同时打 PC 和 Android"
+    echo "  ${C_CYAN}5${C_RESET})  Docker + PC + Android     全部发布"
+    echo "  ${C_CYAN}6${C_RESET})  自定义组合                手动输入 docker,pc,android 组合"
     echo
     read -r -p "请输入序号 [1-6]（默认 1）: " _mode_choice
     _mode_choice="${_mode_choice:-1}"
@@ -271,6 +281,176 @@ if [ "$TARGETS_EXPLICIT" = "0" ] && [ "$BUILD_ONLY" = "0" ] && [ "$ASSUME_YES" =
         *) die "无效选择: $_mode_choice" ;;
     esac
     info "已选择发布目标: ${C_GREEN}${TARGETS}${C_RESET}"
+
+    # 提前解析一下 TARGETS，以便后续步骤做条件判断
+    _W_HAS_DOCKER=0; _W_HAS_PC=0; _W_HAS_ANDROID=0
+    for _wt in $(echo "$TARGETS" | tr ',' ' '); do
+        case "$_wt" in docker) _W_HAS_DOCKER=1;; pc) _W_HAS_PC=1;; android) _W_HAS_ANDROID=1;; esac
+    done
+
+    # ======== 第 2 步：Docker 架构（仅当目标包含 docker 时） ========
+    if [ "$_W_HAS_DOCKER" = "1" ]; then
+        echo
+        echo "${C_BOLD}🏗️  第 2 步：Docker 构建架构${C_RESET}"
+        echo
+        echo "  ${C_CYAN}1${C_RESET})  amd64     x86 服务器/NAS（最快，默认）"
+        echo "  ${C_CYAN}2${C_RESET})  arm64     ARM64 板子（A311D/RK3566 等，需 QEMU）"
+        echo "  ${C_CYAN}3${C_RESET})  multi     同时打 amd64 + arm64 多架构（直接 push）"
+        echo
+        read -r -p "请选择 [1-3]（默认 1）: " _arch_choice
+        _arch_choice="${_arch_choice:-1}"
+        case "$_arch_choice" in
+            1) ARCH="amd64" ;;
+            2) ARCH="arm64" ;;
+            3) ARCH="multi" ;;
+            *) die "无效选择: $_arch_choice" ;;
+        esac
+        info "Docker 架构: ${C_GREEN}${ARCH}${C_RESET}"
+    fi
+
+    # ======== 第 3 步：PC 平台选择（仅当目标包含 pc 时） ========
+    if [ "$_W_HAS_PC" = "1" ] && [ -z "$PC_PLATFORMS" ]; then
+        echo
+        echo "${C_BOLD}💻 第 3 步：PC 端要打的平台${C_RESET}"
+        echo
+        _UNAME_W="$(uname -s 2>/dev/null || echo unknown)"
+        case "$_UNAME_W" in
+            Linux)  _default_plat="win,linux" ;;
+            Darwin) _default_plat="mac,linux" ;;
+            *)      _default_plat="win" ;;
+        esac
+        echo "  ${C_CYAN}1${C_RESET})  ${_default_plat}       自动推荐（基于当前系统: ${_UNAME_W}）"
+        echo "  ${C_CYAN}2${C_RESET})  win                 仅 Windows（exe + portable）"
+        echo "  ${C_CYAN}3${C_RESET})  linux               仅 Linux（AppImage + deb）"
+        echo "  ${C_CYAN}4${C_RESET})  win,linux           Windows + Linux"
+        echo "  ${C_CYAN}5${C_RESET})  mac                 仅 macOS（需在 macOS 上运行）"
+        echo "  ${C_CYAN}6${C_RESET})  自定义              手动输入 win,linux,mac 组合"
+        echo
+        read -r -p "请选择 [1-6]（默认 1）: " _plat_choice
+        _plat_choice="${_plat_choice:-1}"
+        case "$_plat_choice" in
+            1) PC_PLATFORMS="$_default_plat" ;;
+            2) PC_PLATFORMS="win" ;;
+            3) PC_PLATFORMS="linux" ;;
+            4) PC_PLATFORMS="win,linux" ;;
+            5) PC_PLATFORMS="mac" ;;
+            6)
+                read -r -p "  请输入平台组合（win,linux,mac）: " _custom_plat
+                [ -z "$_custom_plat" ] && die "未输入任何平台"
+                PC_PLATFORMS="$_custom_plat"
+                ;;
+            *) die "无效选择: $_plat_choice" ;;
+        esac
+        info "PC 平台: ${C_GREEN}${PC_PLATFORMS}${C_RESET}"
+    fi
+
+    # ======== 第 4 步：Android 构建方式（仅当目标包含 android 时） ========
+    if [ "$_W_HAS_ANDROID" = "1" ]; then
+        echo
+        echo "${C_BOLD}📱 第 4 步：Android 构建方式${C_RESET}"
+        echo
+        # 探测本机是否有 JDK / Android SDK
+        _has_local_android=0
+        if { [ -n "${JAVA_HOME:-}" ] || command -v javac >/dev/null 2>&1; } \
+           && { [ -n "${ANDROID_HOME:-}" ] || [ -n "${ANDROID_SDK_ROOT:-}" ]; }; then
+            _has_local_android=1
+        fi
+        if [ "$_has_local_android" = "1" ]; then
+            echo "  ${C_CYAN}1${C_RESET})  本机 gradlew       使用本机 JDK + Android SDK（已检测到）"
+            echo "  ${C_CYAN}2${C_RESET})  Docker 构建         使用 Docker 镜像跑 gradle（无需本机装 SDK）"
+            echo
+            read -r -p "请选择 [1-2]（默认 1）: " _android_choice
+            _android_choice="${_android_choice:-1}"
+        else
+            if command -v docker >/dev/null 2>&1; then
+                echo "  ${C_YELLOW}未检测到本机 JDK / Android SDK${C_RESET}"
+                echo
+                echo "  ${C_CYAN}1${C_RESET})  Docker 构建         使用 Docker 镜像（推荐，无需装 SDK）"
+                echo "  ${C_CYAN}2${C_RESET})  本机 gradlew       强制用本机（需先手动安装 JDK + SDK）"
+                echo
+                read -r -p "请选择 [1-2]（默认 1）: " _android_choice
+                _android_choice="${_android_choice:-1}"
+                # 映射选项（无本机 SDK 时默认选项为 docker）
+                case "$_android_choice" in
+                    1) _android_choice=2 ;;
+                    2) _android_choice=1 ;;
+                esac
+            else
+                echo "  ${C_YELLOW}未检测到 JDK/SDK 且未安装 Docker${C_RESET}"
+                echo "  将使用本机 gradlew，请确保已安装 JDK + Android SDK"
+                _android_choice=1
+            fi
+        fi
+        case "$_android_choice" in
+            1) ANDROID_USE_DOCKER=0; info "Android 构建: ${C_GREEN}本机 gradlew${C_RESET}" ;;
+            2)
+                ANDROID_USE_DOCKER=1
+                echo
+                echo "  是否把 frontend build + cap sync 也放进 Docker？"
+                echo "  （宿主连 node 都不装也能打 APK，但首次会多下载依赖）"
+                read -r -p "  [y/N]（默认 N）: " _sync_choice
+                case "$_sync_choice" in
+                    [yY]|[yY][eE][sS]) ANDROID_DOCKER_SYNC=1; info "Android 构建: ${C_GREEN}Docker（含前端 sync）${C_RESET}" ;;
+                    *) ANDROID_DOCKER_SYNC=0; info "Android 构建: ${C_GREEN}Docker（仅 gradle）${C_RESET}" ;;
+                esac
+                ;;
+            *) die "无效选择: $_android_choice" ;;
+        esac
+    fi
+
+    # ======== 第 5 步：GitHub Release ========
+    if [ "$_W_HAS_PC" = "1" ] || [ "$_W_HAS_ANDROID" = "1" ]; then
+        echo
+        echo "${C_BOLD}🚀 第 5 步：是否上传产物到 GitHub Releases？${C_RESET}"
+        echo
+        echo "  ${C_CYAN}1${C_RESET})  是（推荐）    PC/Android 安装包上传到 GitHub，用户可直接下载"
+        echo "  ${C_CYAN}2${C_RESET})  否            只打包到本地，不上传"
+        echo
+        read -r -p "请选择 [1-2]（默认 1）: " _gh_choice
+        _gh_choice="${_gh_choice:-1}"
+        case "$_gh_choice" in
+            1) DO_GITHUB_RELEASE=1; NO_GITHUB_RELEASE_EXPLICIT=0; info "GitHub Release: ${C_GREEN}是${C_RESET}" ;;
+            2) DO_GITHUB_RELEASE=0; NO_GITHUB_RELEASE_EXPLICIT=1; info "GitHub Release: ${C_GREEN}否${C_RESET}" ;;
+            *) die "无效选择: $_gh_choice" ;;
+        esac
+
+        # Release 说明（仅当选了上传时）
+        if [ "$DO_GITHUB_RELEASE" = "1" ] && [ -z "$RELEASE_NOTES" ] && [ -z "$RELEASE_NOTES_FILE" ]; then
+            echo
+            read -r -p "  Release 说明（直接回车跳过，将自动生成）: " _notes_input
+            [ -n "$_notes_input" ] && RELEASE_NOTES="$_notes_input"
+        fi
+    fi
+
+    # ======== 第 6 步：其他选项 ========
+    echo
+    echo "${C_BOLD}⚙️  第 6 步：其他选项${C_RESET}"
+    echo
+
+    # 是否 git pull
+    echo "  是否先 git pull 拉取最新代码？"
+    read -r -p "  [Y/n]（默认 Y）: " _pull_choice
+    case "$_pull_choice" in
+        [nN]|[nN][oO]) DO_PULL=0; info "Git pull: ${C_GREEN}跳过${C_RESET}" ;;
+        *) DO_PULL=1; info "Git pull: ${C_GREEN}是${C_RESET}" ;;
+    esac
+
+    # PC 端打完后是否恢复 backend ABI
+    if [ "$_W_HAS_PC" = "1" ]; then
+        echo
+        echo "  PC 打包后是否自动恢复 backend better-sqlite3 到 Node ABI？"
+        echo "  （方便打包后继续 npm run dev:backend）"
+        read -r -p "  [y/N]（默认 N）: " _abi_choice
+        case "$_abi_choice" in
+            [yY]|[yY][eE][sS]) RESTORE_BACKEND_ABI=1; info "恢复 ABI: ${C_GREEN}是${C_RESET}" ;;
+            *) RESTORE_BACKEND_ABI=0 ;;
+        esac
+    fi
+
+    echo
+    echo "${C_BOLD}${C_CYAN}────────────────────────────────────────${C_RESET}"
+    echo "${C_BOLD}  向导配置完成，继续后将开始发布流程${C_RESET}"
+    echo "${C_BOLD}${C_CYAN}────────────────────────────────────────${C_RESET}"
 fi
 
 # 展开 TARGETS
@@ -291,6 +471,16 @@ for t in $(echo "$TARGETS" | tr ',' ' '); do
 done
 [ "$HAS_DOCKER" = "0" ] && [ "$HAS_PC" = "0" ] && [ "$HAS_ANDROID" = "0" ] \
     && die "--target 至少包含一个目标"
+
+# ===== 自动推断 --github-release =====
+# 当 target 包含 pc 或 android 时，自动启用 GitHub Release 上传（无需手动加 --github-release）
+# 因为 PC/Android 产物的主要分发渠道就是 GitHub Releases
+# 若用户显式传了 --no-github-release 则跳过自动推断
+if [ "$DO_GITHUB_RELEASE" = "0" ] && [ "$NO_GITHUB_RELEASE_EXPLICIT" = "0" ] \
+   && { [ "$HAS_PC" = "1" ] || [ "$HAS_ANDROID" = "1" ]; }; then
+    info "检测到 target 包含 pc/android，自动启用 --github-release（可用 --no-github-release 关闭）"
+    DO_GITHUB_RELEASE=1
+fi
 
 case "$ARCH" in
     amd64|arm64|multi) ;;
@@ -1358,9 +1548,39 @@ if [ "$DO_GITHUB_RELEASE" = "1" ]; then
         die "--github-release 需要同时打 git tag（不要与 --no-git-tag 一起用）"
     fi
 
-    command -v gh >/dev/null 2>&1 || die "未安装 gh CLI。请先安装：https://cli.github.com/"
+    # ---- 确保 gh CLI 可用（未安装则自动安装） ----
+    if ! command -v gh >/dev/null 2>&1; then
+        info "gh CLI 未安装，尝试自动安装..."
+        if command -v apt-get >/dev/null 2>&1; then
+            # Debian / Ubuntu
+            (type -p wget >/dev/null || (sudo apt-get update && sudo apt-get install -y wget)) \
+            && sudo mkdir -p -m 755 /etc/apt/keyrings \
+            && wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+                | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null \
+            && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+            && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+                | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null \
+            && sudo apt-get update \
+            && sudo apt-get install -y gh
+        elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y gh
+        elif command -v brew >/dev/null 2>&1; then
+            brew install gh
+        else
+            die "无法自动安装 gh CLI，请手动安装：https://cli.github.com/"
+        fi
+        command -v gh >/dev/null 2>&1 || die "gh CLI 安装失败，请手动安装：https://cli.github.com/"
+        ok "gh CLI 安装成功"
+    fi
+
+    # ---- 确保 gh 已认证 ----
     # gh 登录状态或 GH_TOKEN 任一满足即可
     if ! gh auth status >/dev/null 2>&1 && [ -z "${GH_TOKEN:-}" ]; then
+        # 尝试用 git remote 的凭据自动登录
+        if git remote get-url origin 2>/dev/null | grep -q "github.com"; then
+            warn "gh 未登录。请运行 'gh auth login' 登录，或设置 GH_TOKEN 环境变量"
+            warn "提示：可以用 'echo \$YOUR_TOKEN | gh auth login --with-token' 非交互式登录"
+        fi
         die "gh 未登录（gh auth login），且未设置 GH_TOKEN 环境变量"
     fi
 

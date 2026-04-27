@@ -44,8 +44,9 @@ tasks.get("/stats/summary", (c) => {
   const completed = (db.prepare("SELECT COUNT(*) as count FROM tasks WHERE userId = ? AND isCompleted = 1").get(userId) as any).count;
   const today = (db.prepare("SELECT COUNT(*) as count FROM tasks WHERE userId = ? AND isCompleted = 0 AND dueDate IS NOT NULL AND date(dueDate) = date('now')").get(userId) as any).count;
   const overdue = (db.prepare("SELECT COUNT(*) as count FROM tasks WHERE userId = ? AND isCompleted = 0 AND dueDate IS NOT NULL AND date(dueDate) < date('now')").get(userId) as any).count;
-
-  return c.json({ total, completed, pending: total - completed, today, overdue });
+  const week = (db.prepare("SELECT COUNT(*) as count FROM tasks WHERE userId = ? AND isCompleted = 0 AND dueDate IS NOT NULL AND date(dueDate) BETWEEN date('now') AND date('now', '+7 days')").get(userId) as any).count;
+  
+  return c.json({ total, completed, pending: total - completed, today, overdue, week });
 });
 
 // 获取单个任务（含子任务）

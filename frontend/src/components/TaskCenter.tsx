@@ -346,7 +346,7 @@ export default function TaskCenter() {
     switch (key) {
       case "all": return stats.total;
       case "today": return stats.today;
-      case "week": return stats.today; // approximate
+      case "week": return stats.week ?? 0;
       case "overdue": return stats.overdue;
       case "completed": return stats.completed;
       default: return 0;

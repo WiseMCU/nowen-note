@@ -1252,6 +1252,8 @@ if [ "$HAS_ANDROID" = "1" ]; then
         esac
 
         info "gradlew assembleRelease（本机）"
+        # 确保 gradlew 有可执行权限（git clone 到 WSL/Linux 后可能丢失 +x）
+        chmod +x "$REPO_ROOT/frontend/android/gradlew" 2>/dev/null || true
         if [ "$DRY_RUN" = "1" ]; then
             echo "  (dry-run) cd frontend/android && $GRADLEW assembleRelease"
         else

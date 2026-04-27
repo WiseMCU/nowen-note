@@ -73,6 +73,26 @@ async function main() {
   console.log(
     `[rebuild-native] ✓ done in ${((Date.now() - start) / 1000).toFixed(1)}s`
   );
+
+  // 验证 .node 文件确实存在
+  const nodFile = path.join(
+    backendDir,
+    "node_modules",
+    "better-sqlite3",
+    "build",
+    "Release",
+    "better_sqlite3.node"
+  );
+  if (!fs.existsSync(nodFile)) {
+    console.error(
+      `[rebuild-native] ⚠ 编译后未找到 ${nodFile}，打包后 Electron 启动会报 ERR_DLOPEN_FAILED！`
+    );
+    process.exit(1);
+  }
+  const stat = fs.statSync(nodFile);
+  console.log(
+    `[rebuild-native] ✓ verified: ${nodFile} (${(stat.size / 1024 / 1024).toFixed(1)} MB, mtime=${stat.mtime.toISOString()})`
+  );
 }
 
 main().catch((err) => {

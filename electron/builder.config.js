@@ -4,6 +4,33 @@
  */
 const path = require("path");
 const os = require("os");
+const fs = require("fs");
+
+// ===== 打包前校验：better-sqlite3 原生模块必须已 rebuild 为 Electron ABI =====
+// 防止忘记 `npm run rebuild:native` 就打包，导致安装后 ERR_DLOPEN_FAILED。
+function checkNativeModule() {
+  const nodeFile = path.resolve(
+    __dirname,
+    "..",
+    "backend",
+    "node_modules",
+    "better-sqlite3",
+    "build",
+    "Release",
+    "better_sqlite3.node"
+  );
+  if (!fs.existsSync(nodeFile)) {
+    throw new Error(
+      `[builder] better-sqlite3 原生模块不存在：${nodeFile}\n` +
+        `请先运行 npm run rebuild:native 编译为 Electron ABI！`
+    );
+  }
+  const stat = fs.statSync(nodeFile);
+  console.log(
+    `[builder] ✓ better-sqlite3.node found (${(stat.size / 1024 / 1024).toFixed(1)} MB, ` +
+      `mtime=${stat.mtime.toISOString()})`
+  );
+}
 
 // 允许把输出目录放到工作区外，避免 IDE / Defender 对打包产物做文件监听锁
 // 用法：set NOWEN_BUILD_OUT=1 && npm run electron:build
@@ -42,6 +69,11 @@ const LINUX_HOMEPAGE =
 module.exports = {
   appId: "com.nowen.note",
   productName: "Nowen Note",
+  // 打包前自动校验原生模块，避免漏跑 rebuild:native 导致安装后崩溃
+  beforeBuild() {
+    checkNativeModule();
+    return true; // 返回 true 表示继续打包
+  },
   directories: {
     output: OUT_DIR,
     // 图标、entitlements 等打包资源统一放 build/ 下

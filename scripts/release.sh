@@ -786,7 +786,7 @@ else
         local all latest
         all="$( { collect_local_tags; collect_github_tags; collect_dockerhub_tags; } | sort -u )"
         # 只用 "纯三段"（不带 -rc 等后缀）作为递增基准，避免预发布被当正式版
-        latest="$(echo "$all" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+        latest="$(echo "$all" | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -1)"
         if [ -z "$latest" ]; then
             echo "0.1.0"
             return
@@ -813,9 +813,9 @@ EOF
     info "聚合历史版本（本地 tag / GitHub / Docker Hub）..."
     SUGGEST="$(suggest_next_version)"
     # 打印一下当前各源最大版本，方便肉眼核对
-    _LOCAL_MAX="$(collect_local_tags    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
-    _GH_MAX="$(   collect_github_tags   | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
-    _DH_MAX="$(   collect_dockerhub_tags| grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+    _LOCAL_MAX="$(collect_local_tags    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+    _GH_MAX="$(   collect_github_tags   | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+    _DH_MAX="$(   collect_dockerhub_tags| grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
     info "  本地 tag 最新 : ${_LOCAL_MAX:-(无)}"
     info "  GitHub 最新   : ${_GH_MAX:-(无/不可达)}"
     info "  Docker Hub 最新: ${_DH_MAX:-(无/不可达)}"

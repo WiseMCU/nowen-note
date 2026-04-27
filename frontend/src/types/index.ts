@@ -169,6 +169,7 @@ export interface TaskStats {
   pending: number;
   today: number;
   overdue: number;
+  week: number;
 }
 
 export interface CustomFont {

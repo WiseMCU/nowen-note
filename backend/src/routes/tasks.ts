@@ -40,12 +40,28 @@ tasks.get("/stats/summary", (c) => {
   const db = getDb();
   const userId = c.req.header("X-User-Id")!;
 
-  const total = (db.prepare("SELECT COUNT(*) as count FROM tasks WHERE userId = ?").get(userId) as any).count;
-  const completed = (db.prepare("SELECT COUNT(*) as count FROM tasks WHERE userId = ? AND isCompleted = 1").get(userId) as any).count;
-  const today = (db.prepare("SELECT COUNT(*) as count FROM tasks WHERE userId = ? AND isCompleted = 0 AND dueDate IS NOT NULL AND date(dueDate) = date('now')").get(userId) as any).count;
-  const overdue = (db.prepare("SELECT COUNT(*) as count FROM tasks WHERE userId = ? AND isCompleted = 0 AND dueDate IS NOT NULL AND date(dueDate) < date('now')").get(userId) as any).count;
-  const week = (db.prepare("SELECT COUNT(*) as count FROM tasks WHERE userId = ? AND isCompleted = 0 AND dueDate IS NOT NULL AND date(dueDate) BETWEEN date('now') AND date('now', '+7 days')").get(userId) as any).count;
-  
+  // 单条 SQL 聚合所有统计，避免 5 次独立查询
+  const row = db.prepare(`
+    SELECT
+      COUNT(*)                                                                          AS total,
+      SUM(CASE WHEN isCompleted = 1 THEN 1 ELSE 0 END)                                 AS completed,
+      SUM(CASE WHEN isCompleted = 0 AND dueDate IS NOT NULL
+               AND date(dueDate) = date('now') THEN 1 ELSE 0 END)                      AS today,
+      SUM(CASE WHEN isCompleted = 0 AND dueDate IS NOT NULL
+               AND date(dueDate) < date('now') THEN 1 ELSE 0 END)                      AS overdue,
+      SUM(CASE WHEN isCompleted = 0 AND dueDate IS NOT NULL
+               AND date(dueDate) BETWEEN date('now') AND date('now', '+7 days')
+               THEN 1 ELSE 0 END)                                                      AS week
+    FROM tasks
+    WHERE userId = ?
+  `).get(userId) as any;
+
+  const total     = row.total     ?? 0;
+  const completed = row.completed ?? 0;
+  const today     = row.today     ?? 0;
+  const overdue   = row.overdue   ?? 0;
+  const week      = row.week      ?? 0;
+
   return c.json({ total, completed, pending: total - completed, today, overdue, week });
 });
 

@@ -139,10 +139,11 @@ export interface Task {
 
 export interface TaskStats {
   total: number;
-  todo: number;
-  doing: number;
-  done: number;
+  completed: number;
+  pending: number;
+  today: number;
   overdue: number;
+  week: number;
 }
 
 export interface ListTasksParams {

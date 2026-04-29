@@ -1,0 +1,12 @@
+{
+  "src": [
+    "pages/LoginPage",
+    "pages/ServerConfigPage",
+    "pages/MainPage",
+    "pages/NoteEditPage",
+    "pages/SearchPage",
+    "pages/TaskPage",
+    "pages/SettingsPage",
+    "pages/TagDetailPage"
+  ]
+}

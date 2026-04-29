@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Nowen Note 鸿蒙客户端",
+  "main": "",
+  "author": "",
+  "license": "MIT",
+  "dependencies": {}
+}

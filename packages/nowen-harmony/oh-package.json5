@@ -1,0 +1,9 @@
+{
+  "name": "nowen-harmony",
+  "version": "1.0.0",
+  "description": "Nowen Note 鸿蒙（HarmonyOS NEXT）客户端",
+  "main": "",
+  "author": "nowen",
+  "license": "MIT",
+  "dependencies": {}
+}

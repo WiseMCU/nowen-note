@@ -1,0 +1,19 @@
+{
+  "apiType": "stageMode",
+  "buildOption": {
+    "arkOptions": {
+      "apFilePath": []
+    }
+  },
+  "buildOptionPack": {
+    "arkOptions": {
+      "apFilePath": []
+    }
+  },
+  "targets": [
+    {
+      "name": "default",
+      "runtimeOS": "HarmonyOS"
+    }
+  ]
+}

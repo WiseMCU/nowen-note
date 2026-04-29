@@ -1,0 +1,16 @@
+{
+  "color": [
+    { "name": "start_window_background", "value": "#FFFFFF" },
+    { "name": "app_background", "value": "#F5F5F5" },
+    { "name": "primary", "value": "#3B82F6" },
+    { "name": "primary_dark", "value": "#2563EB" },
+    { "name": "text_primary", "value": "#1F2937" },
+    { "name": "text_secondary", "value": "#6B7280" },
+    { "name": "text_tertiary", "value": "#9CA3AF" },
+    { "name": "border", "value": "#E5E7EB" },
+    { "name": "surface", "value": "#FFFFFF" },
+    { "name": "danger", "value": "#EF4444" },
+    { "name": "warning", "value": "#F59E0B" },
+    { "name": "success", "value": "#10B981" }
+  ]
+}

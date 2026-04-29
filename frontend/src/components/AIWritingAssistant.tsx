@@ -226,9 +226,16 @@ export default function AIWritingAssistant({
       {/* 加载状态 / 结果展示 */}
       {(isLoading || result) && (
         <div ref={resultRef} className="flex-1 overflow-auto px-3 py-3 min-h-[100px] max-h-[280px]">
+          {/* 首 chunk 返回前：展示明显的 Loader，避免用户以为卡死 */}
+          {isLoading && !result && (
+            <div className="flex items-center gap-2 py-4 text-xs text-zinc-500 dark:text-zinc-400">
+              <Loader2 size={14} className="animate-spin text-accent-primary" />
+              <span>{t("ai.generating")}</span>
+            </div>
+          )}
           <div className="text-sm text-zinc-800 dark:text-zinc-200 leading-relaxed whitespace-pre-wrap">
             {result}
-            {isLoading && (
+            {isLoading && result && (
               <span className="inline-block w-1.5 h-4 bg-accent-primary/60 animate-pulse ml-0.5 align-middle rounded-sm" />
             )}
           </div>

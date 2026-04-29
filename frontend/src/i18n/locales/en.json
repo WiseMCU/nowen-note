@@ -815,7 +815,8 @@
     "copy": "Copy",
     "copied": "Copied",
     "retry": "Retry",
-    "requestFailed": "AI request failed, please check settings"
+    "requestFailed": "AI request failed, please check settings",
+    "generating": "AI is generating…"
   },
   "aiChat": {
     "title": "AI Knowledge Q&A",

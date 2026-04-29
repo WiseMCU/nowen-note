@@ -630,7 +630,10 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             const insertFrom = state.selection.from;
             const tr = state.tr.insertText(text);
             dispatch(tr);
-            const insertTo = insertFrom + text.length;
+            // 注意：不能用 insertFrom + text.length，因为 ProseMirror 把 \n 转成段落节点，
+            // 每个节点边界占 2 个位置，实际偏移远大于字符数。
+            // insertText 后光标移到末尾，直接读 view.state.selection.to 即为真实终点。
+            const insertTo = view.state.selection.to;
 
             // 构造转换动作：把 [insertFrom, insertTo] 替换为转换后的 HTML 切片。
             // 注意 view 在此闭包中长期有效（React 卸载时编辑器会 destroy，届时 isDestroyed 为真）。
@@ -1302,22 +1305,60 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     setShowAI(true);
   }, [editor]);
 
+  /**
+   * 把一段可能是 Markdown 的文本注入到编辑器的 [from, to] 范围。
+   * - 若检测到 Markdown 语法：直接转换为富文本 HTML 后插入，并弹 success toast 告知用户。
+   * - 否则：作为纯文本插入。
+   *
+   * 注意：不走"先插纯文本再替换"的路径，因为 ProseMirror insertText 后
+   * 文档位置偏移（\n → 段落节点，每个节点边界占 2 个位置）与 text.length 不一致，
+   * 会导致 replaceRange 范围计算错误、内容大量丢失。
+   */
+  const insertWithMarkdownDetect = useCallback((text: string, from: number, to: number) => {
+    if (!editor) return;
+    const view = editor.view;
+
+    if (looksLikeMarkdown(text)) {
+      // 直接转换为富文本 HTML 后插入，一步到位
+      try {
+        const convertedHtml = markdownToSimpleHtml(text);
+        const parser = ProseMirrorDOMParser.fromSchema(view.state.schema);
+        const tempDiv = document.createElement("div");
+        tempDiv.innerHTML = convertedHtml;
+        const slice = parser.parseSlice(tempDiv);
+        const docSize = view.state.doc.content.size;
+        const safeFrom = Math.min(from, docSize);
+        const safeTo = Math.min(to, docSize);
+        const tr = view.state.tr.replaceRange(safeFrom, safeTo, slice).scrollIntoView();
+        view.dispatch(tr);
+        editor.chain().focus().run();
+        showPasteToast("success", t("tiptap.markdownConvertSuccess"));
+      } catch (err) {
+        console.error("AI Markdown conversion failed:", err);
+        // 降级：纯文本插入
+        const tr = view.state.tr.insertText(text, from, to);
+        view.dispatch(tr);
+        editor.chain().focus().run();
+      }
+    } else {
+      // 非 Markdown：纯文本插入
+      const tr = view.state.tr.insertText(text, from, to);
+      view.dispatch(tr);
+      editor.chain().focus().run();
+    }
+  }, [editor, showPasteToast, t]);
+
   const handleAIInsert = useCallback((text: string) => {
     if (!editor) return;
     const { to } = editor.state.selection;
-    editor.chain().focus().insertContentAt(to, text).run();
-  }, [editor]);
+    insertWithMarkdownDetect(text, to, to);
+  }, [editor, insertWithMarkdownDetect]);
 
   const handleAIReplace = useCallback((text: string) => {
     if (!editor) return;
     const { from, to } = editor.state.selection;
-    if (from === to) {
-      // 无选区时，插入到光标处
-      editor.chain().focus().insertContent(text).run();
-    } else {
-      editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, text).run();
-    }
-  }, [editor]);
+    insertWithMarkdownDetect(text, from, to);
+  }, [editor, insertWithMarkdownDetect]);
 
   if (!editor) return null;
 

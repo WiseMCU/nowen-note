@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { marked, Renderer } from "marked";
 import i18n from "i18next";
 import { generateJSON } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
@@ -498,241 +499,81 @@ function extractFrontmatterDates(md: string): { createdAt?: string; updatedAt?: 
   return { createdAt, updatedAt };
 }
 
+// 脱壳：整段被 ```markdown ... ``` 外层围栏包裹的场景（常见于从博客/ChatGPT 复制）
+// 识别规则：首个非空行是 ```[markdown|md|空] 开围栏 + 末尾存在一个"单独成行的 ```"闭合围栏，
+// 且二者之间没有其他同级 lang=markdown/md 的开围栏（避免误剥真正的代码块）。
+function unwrapOuterMarkdownFence(content: string): string {
+  const lines = content.split("\n");
+  // 首个非空行
+  let start = 0;
+  while (start < lines.length && !lines[start].trim()) start++;
+  if (start >= lines.length) return content;
+
+  const opener = lines[start].trim();
+  const openMatch = opener.match(/^(`{3,}|~{3,})(.*)$/);
+  if (!openMatch) return content;
+  const fence = openMatch[1];
+  const fenceChar = fence[0];
+  const fenceLen = fence.length;
+  const langToken = (openMatch[2] || "").trim().split(/\s+/)[0] || "";
+  // 仅处理 lang 为 markdown/md/空 的外层围栏；其他语言（如 bash、js）不应被脱壳
+  if (langToken && !/^(markdown|md)$/i.test(langToken)) return content;
+
+  // 末尾非空行应是闭合围栏
+  let end = lines.length - 1;
+  while (end > start && !lines[end].trim()) end--;
+  if (end <= start) return content;
+
+  const isClosingFence = (rawLine: string): boolean => {
+    const t = rawLine.trim();
+    if (t.length < fenceLen) return false;
+    let k = 0;
+    while (k < t.length && t[k] === fenceChar) k++;
+    if (k < fenceLen) return false;
+    const rest = t.slice(k);
+    return rest.length === 0 || /^\s*$/.test(rest);
+  };
+  if (!isClosingFence(lines[end])) return content;
+
+  // 返回剥掉外层后的内容
+  return lines.slice(start + 1, end).join("\n");
+}
+
 // 将 Markdown 转为 HTML（用于存储到 Tiptap 格式）
 export function markdownToSimpleHtml(md: string, imageMap?: Record<string, string>): string {
   // 去除 YAML frontmatter
-  const content = md.replace(/^---[\s\S]*?---\n*/m, "");
-  const lines = content.split("\n");
-  const htmlParts: string[] = [];
+  // 注意：必须锁定"字符串最开头"且 --- 独占整行，否则会把文档中任意两个水平线
+  // `---` 之间的内容整段吃掉（曾导致粘贴含有多个 --- 分隔线的 MD 时大量内容丢失）。
+  let content = md.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "");
 
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = line.trim();
+  // 脱壳：整段被 ```markdown ... ``` 包裹时，剥掉外层
+  content = unwrapOuterMarkdownFence(content);
 
-    // 空行 → 直接跳过，不产出 <p></p>
-    // 之前的做法是每个空行生成一个空段落，但标准 Markdown 里空行是
-    // "块级分隔符"（让段落/列表/代码块分块）而不是可见空行。
-    // 生成空段落会导致：
-    // 1) 列表项之间隔空行时被打断成多个 <ol>/<ul>（视觉上是多组"1."）；
-    // 2) 列表与代码块、标题与段落之间出现多余的可见空白行。
-    // 块级元素之间的天然间距交给 Tiptap 的 CSS 处理即可。
-    if (!trimmed) {
-      i++;
-      continue;
-    }
+  // 使用 marked 解析 Markdown → HTML
+  // marked 是业界成熟的 CommonMark 兼容解析器，正确处理嵌套围栏代码块、表格、任务列表等
+  const renderer = new Renderer();
 
-    // 代码块（``` 或 ~~~）
-    const codeBlockMatch = trimmed.match(/^(`{3,}|~{3,})(\w*)/);
-    if (codeBlockMatch) {
-      const fence = codeBlockMatch[1];
-      const lang = codeBlockMatch[2] || "";
-      // 围栏行的前导缩进宽度（tab 记为 4 列）。
-      // 用于剥除代码行中与围栏等量的前导空白，避免"列表项内嵌代码块"
-      // （常见的 3/4 空格缩进）被原样塞进 <code>，产生看起来空格过多的缩进。
-      const fenceLeading = line.match(/^[ \t]*/)?.[0] ?? "";
-      let fenceIndent = 0;
-      for (const ch of fenceLeading) fenceIndent += ch === "\t" ? 4 : 1;
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length) {
-        if (lines[i].trim().startsWith(fence)) {
-          i++;
-          break;
-        }
-        // 安全剥除：最多去掉与围栏同量的前导空白，不误伤代码本身的缩进
-        let raw = lines[i];
-        if (fenceIndent > 0) {
-          let stripped = 0;
-          let k = 0;
-          while (k < raw.length && stripped < fenceIndent) {
-            const ch = raw[k];
-            if (ch === " ") { stripped += 1; k += 1; }
-            else if (ch === "\t") { stripped += 4; k += 1; }
-            else break;
-          }
-          raw = raw.slice(k);
-        }
-        codeLines.push(
-          raw
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-        );
-        i++;
-      }
-      const langAttr = lang ? ` class="language-${lang}"` : "";
-      htmlParts.push(`<pre><code${langAttr}>${codeLines.join("\n")}</code></pre>`);
-      continue;
-    }
+  // 图片：替换 imageMap 中的本地路径为 data URI
+  renderer.image = ({ href, title, text }: { href: string; title?: string | null; text: string }) => {
+    const resolvedSrc = resolveImageSrc(href, imageMap);
+    const titleAttr = title ? ` title="${title}"` : "";
+    return `<img src="${resolvedSrc}" alt="${text}"${titleAttr} />`;
+  };
 
-    // 引用块（> ...）
-    if (trimmed.startsWith(">")) {
-      const quoteLines: string[] = [];
-      while (i < lines.length && lines[i].trim().startsWith(">")) {
-        quoteLines.push(lines[i].trim().replace(/^>\s?/, ""));
-        i++;
-      }
-      const quotedContent = quoteLines
-        .join("\n")
-        .split("\n")
-        .map((l) => (l.trim() ? `<p>${inlineMarkdown(l, imageMap)}</p>` : ""))
-        .filter(Boolean)
-        .join("");
-      htmlParts.push(`<blockquote>${quotedContent}</blockquote>`);
-      continue;
-    }
+  // 代码块：输出 Tiptap 期望的 <pre><code class="language-xxx"> 格式
+  renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
+    const langClass = lang ? ` class="language-${lang}"` : "";
+    const escaped = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    return `<pre><code${langClass}>${escaped}</code></pre>`;
+  };
 
-    // 水平线
-    if (/^(---|\*\*\*|___)$/.test(trimmed)) {
-      htmlParts.push("<hr />");
-      i++;
-      continue;
-    }
+  marked.use({ renderer, gfm: true, breaks: false });
 
-    // 标题
-    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      htmlParts.push(`<h${level}>${inlineMarkdown(headingMatch[2], imageMap)}</h${level}>`);
-      i++;
-      continue;
-    }
-
-    // Markdown 表格（| col1 | col2 | ...）
-    if (/^\|(.+)\|\s*$/.test(trimmed)) {
-      const tableRows: string[][] = [];
-      let hasHeader = false;
-      while (i < lines.length && /^\|(.+)\|\s*$/.test(lines[i].trim())) {
-        const row = lines[i].trim();
-        // 检测分隔行 |---|---|---|
-        if (/^\|[\s:]*-{2,}[\s:]*\|/.test(row)) {
-          hasHeader = true;
-          i++;
-          continue;
-        }
-        const cells = row
-          .replace(/^\|\s*/, "")
-          .replace(/\s*\|$/, "")
-          .split(/\s*\|\s*/);
-        tableRows.push(cells);
-        i++;
-      }
-      if (tableRows.length > 0) {
-        let tableHtml = "<table>";
-        tableRows.forEach((cells, idx) => {
-          const isHead = hasHeader && idx === 0;
-          const tag = isHead ? "th" : "td";
-          const wrap = isHead ? "thead" : (idx === 1 && hasHeader ? "tbody" : "");
-          if (wrap === "thead") tableHtml += "<thead>";
-          if (wrap === "tbody") tableHtml += "<tbody>";
-          tableHtml += "<tr>";
-          cells.forEach((c) => {
-            tableHtml += `<${tag}>${inlineMarkdown(c.trim(), imageMap)}</${tag}>`;
-          });
-          tableHtml += "</tr>";
-          if (wrap === "thead") tableHtml += "</thead>";
-        });
-        if (hasHeader && tableRows.length > 1) tableHtml += "</tbody>";
-        tableHtml += "</table>";
-        htmlParts.push(tableHtml);
-      }
-      continue;
-    }
-
-    // 待办列表（- [x] / - [ ]）
-    if (/^[-*]\s+\[[ xX]\]\s+/.test(trimmed)) {
-      const taskItems: string[] = [];
-      while (i < lines.length) {
-        const cur = lines[i].trim();
-        if (/^[-*]\s+\[[ xX]\]\s+/.test(cur)) {
-          const taskMatch = cur.match(/^[-*]\s+\[([xX ])\]\s+(.+)$/);
-          if (taskMatch) {
-            const checked = taskMatch[1].toLowerCase() === "x";
-            taskItems.push(
-              `<li data-type="taskItem" data-checked="${checked}"><label><input type="checkbox" ${checked ? "checked" : ""}><span></span></label><div><p>${inlineMarkdown(taskMatch[2], imageMap)}</p></div></li>`
-            );
-          }
-          i++;
-          continue;
-        }
-        if (!cur) {
-          let j = i + 1;
-          while (j < lines.length && !lines[j].trim()) j++;
-          if (j < lines.length && /^[-*]\s+\[[ xX]\]\s+/.test(lines[j].trim())) {
-            i = j;
-            continue;
-          }
-        }
-        break;
-      }
-      htmlParts.push(`<ul data-type="taskList">${taskItems.join("")}</ul>`);
-      continue;
-    }
-
-    // 无序列表（- / * / +）
-    if (/^[-*+]\s+/.test(trimmed)) {
-      const listItems: string[] = [];
-      while (i < lines.length) {
-        const cur = lines[i].trim();
-        if (/^[-*+]\s+/.test(cur)) {
-          const itemText = cur.replace(/^[-*+]\s+/, "");
-          listItems.push(`<li><p>${inlineMarkdown(itemText, imageMap)}</p></li>`);
-          i++;
-          continue;
-        }
-        // 空行：前瞻，若下一个非空行仍是同类型列表项，则吞掉空行继续采集
-        if (!cur) {
-          let j = i + 1;
-          while (j < lines.length && !lines[j].trim()) j++;
-          if (j < lines.length && /^[-*+]\s+/.test(lines[j].trim())) {
-            i = j;
-            continue;
-          }
-        }
-        break;
-      }
-      htmlParts.push(`<ul>${listItems.join("")}</ul>`);
-      continue;
-    }
-
-    // 有序列表（1. / 2. ...）
-    // 读取首项的真实数字作为 <ol start="N">，这样当原始 MD 里列表被
-    // 代码块/段落打断（→ 进到不同的 <ol>）时，编号仍可延续
-    // 例："1. A\n\n```代码```\n\n2. B"  → <ol>1</ol> ... <ol start="2">2</ol>
-    if (/^\d+\.\s+/.test(trimmed)) {
-      const firstNumMatch = trimmed.match(/^(\d+)\.\s+/);
-      const startNum = firstNumMatch ? parseInt(firstNumMatch[1], 10) : 1;
-      const listItems: string[] = [];
-      while (i < lines.length) {
-        const cur = lines[i].trim();
-        if (/^\d+\.\s+/.test(cur)) {
-          const itemText = cur.replace(/^\d+\.\s+/, "");
-          listItems.push(`<li><p>${inlineMarkdown(itemText, imageMap)}</p></li>`);
-          i++;
-          continue;
-        }
-        if (!cur) {
-          let j = i + 1;
-          while (j < lines.length && !lines[j].trim()) j++;
-          if (j < lines.length && /^\d+\.\s+/.test(lines[j].trim())) {
-            i = j;
-            continue;
-          }
-        }
-        break;
-      }
-      const startAttr = startNum > 1 ? ` start="${startNum}"` : "";
-      htmlParts.push(`<ol${startAttr}>${listItems.join("")}</ol>`);
-      continue;
-    }
-
-    // 普通段落
-    htmlParts.push(`<p>${inlineMarkdown(trimmed, imageMap)}</p>`);
-    i++;
-  }
-
-  return htmlParts.join("\n");
+  const html = marked.parse(content) as string;
+  return html;
 }
 
 // 在 imageMap 中查找图片路径对应的 data URI
@@ -860,7 +701,7 @@ function extractPlainText(fileInfo: ImportFileInfo): string {
 
   // Markdown / txt
   return content
-    .replace(/^---[\s\S]*?---\n*/m, "")
+    .replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "")
     .replace(/[#*_~`\[\]()>|-]/g, "")
     .trim();
 }

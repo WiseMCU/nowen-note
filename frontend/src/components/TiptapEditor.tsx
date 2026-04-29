@@ -84,6 +84,159 @@ if (!(ProseMirrorNode.prototype as any)[RESOLVE_PATCHED]) {
 }
 
 
+// ---------------------------------------------------------------------------
+// 粘贴 HTML 归一化：把"伪多行段落"拆成真正的多个 <p>
+// ---------------------------------------------------------------------------
+// 很多来源（微信/QQ/钉钉/飞书网页复制、Word、部分浏览器富文本）在 clipboard
+// 的 text/html 里会把多行文本序列化成：
+//     <p>行1<br>行2<br>行3</p>          ← 同一段落内多个 <br>
+//     <div>行1</div><div>行2</div>       ← 多个 <div> 当段落
+// 这种结构粘到 Tiptap 后 ProseMirror 会解析成**一个 paragraph 节点里多个
+// hardBreak**，视觉上是多行，但块级操作（toggleHeading / setParagraph /
+// blockquote）会把**整段**转换，就出现"只选一行却整段变标题"的 bug。
+//
+// 这里在粘贴进入 PM DOMParser 之前，把顶层的 <br> 拆成段落边界、把 <div>
+// 统一升级为 <p>，让 PM 看到的是真正的多段落结构。
+// ---------------------------------------------------------------------------
+function normalizePastedHtmlForBlocks(html: string): string {
+  if (!html) return html;
+  try {
+    const doc = new DOMParser().parseFromString(`<div id="__root">${html}</div>`, "text/html");
+    const root = doc.getElementById("__root");
+    if (!root) return html;
+
+    // 1) 顶层 <div> 直接替换为 <p>（保留内部内联内容）
+    //    注意只处理"直接子节点层"，不递归改动引用/表格内的 <div>。
+    Array.from(root.children).forEach((child) => {
+      if (child.tagName === "DIV") {
+        const p = doc.createElement("p");
+        while (child.firstChild) p.appendChild(child.firstChild);
+        child.replaceWith(p);
+      }
+    });
+
+    // 2) 递归遍历 block 元素内部：<p>/<h1..h6>/<li>/<blockquote> 里若出现顶层 <br>，
+    //    就按 <br> 切成多个同类型的兄弟节点（对 <p> 最常见，对标题也适用）。
+    const splitByTopLevelBr = (el: Element) => {
+      const brs = Array.from(el.children).filter((c) => c.tagName === "BR");
+      if (brs.length === 0) return;
+      const parent = el.parentNode;
+      if (!parent) return;
+      // 收集每一段内容（按 <br> 切分的内联片段）
+      const groups: Node[][] = [[]];
+      Array.from(el.childNodes).forEach((n) => {
+        if (n.nodeType === 1 && (n as Element).tagName === "BR") {
+          groups.push([]);
+        } else {
+          groups[groups.length - 1].push(n);
+        }
+      });
+      // 丢掉完全空白的首/尾段，中间空段保留为空段落（符合用户视觉预期）
+      while (groups.length && isWhitespaceGroup(groups[0])) groups.shift();
+      while (groups.length && isWhitespaceGroup(groups[groups.length - 1])) groups.pop();
+      if (groups.length <= 1) return; // 没有实际切分效果
+      const frag = doc.createDocumentFragment();
+      groups.forEach((nodes) => {
+        const clone = doc.createElement(el.tagName.toLowerCase());
+        // 拷贝属性（保留 class/style 等）
+        Array.from(el.attributes).forEach((a) => clone.setAttribute(a.name, a.value));
+        nodes.forEach((n) => clone.appendChild(n));
+        frag.appendChild(clone);
+      });
+      parent.replaceChild(frag, el);
+    };
+
+    const isWhitespaceGroup = (nodes: Node[]) =>
+      nodes.every((n) => n.nodeType === 3 && !(n.nodeValue || "").trim());
+
+    // 只拆顶层 block：<p> <h1..h6>，避免破坏列表/表格/代码块内部结构
+    const topBlocks = Array.from(root.querySelectorAll(":scope > p, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6"));
+    topBlocks.forEach(splitByTopLevelBr);
+
+    return root.innerHTML;
+  } catch (e) {
+    // 异常时不阻塞粘贴流程，返回原 HTML
+    if (typeof console !== "undefined") console.warn("[normalizePastedHtmlForBlocks] failed:", e);
+    return html;
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// 智能 toggleHeading：先把当前段落里的 hardBreak 拆成独立段落，再 toggle
+// ---------------------------------------------------------------------------
+// 对应用户场景：老数据里已经存在"一个 <p> + 多个 <br>"的伪多行段落。
+// 若用户只选中其中几个字点 H1，期望只把这一行转成标题，而不是整段。
+//
+// 策略：
+//   1) 找到选区所覆盖的 paragraph 节点范围；
+//   2) 对这些 paragraph 里的 hardBreak，从后往前遍历（避免位置偏移问题），
+//      在 hardBreak 处执行 split（把前后切成两个 paragraph），并删除 hardBreak
+//      自身；
+//   3) split 完成后，用户光标会自然落到他原本选中的那一行对应的新段落里；
+//   4) 最后调用标准 toggleHeading，只影响该段。
+//
+// 如果原段落里没有 hardBreak，直接走标准 toggleHeading（无性能损失）。
+// ---------------------------------------------------------------------------
+function toggleHeadingSmart(editor: any, level: 1 | 2 | 3 | 4 | 5 | 6) {
+  if (!editor || editor.isDestroyed) return;
+  try {
+    const { state } = editor;
+    const hardBreakType = state.schema.nodes.hardBreak;
+    if (!hardBreakType) {
+      editor.chain().focus().toggleHeading({ level }).run();
+      return;
+    }
+    const { from, to } = state.selection;
+
+    // 找出选区覆盖的"块级文本节点"（paragraph / heading）的位置区间
+    const blocks: Array<{ from: number; to: number }> = [];
+    state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+      if (node.type.name === "paragraph" || node.type.name === "heading") {
+        blocks.push({ from: pos, to: pos + node.nodeSize });
+        return false; // 不再深入（hardBreak 在叶子内部）
+      }
+      return true;
+    });
+    if (blocks.length === 0) {
+      editor.chain().focus().toggleHeading({ level }).run();
+      return;
+    }
+
+    // 收集所有需要拆的 hardBreak 绝对位置（倒序处理）
+    const breakPositions: number[] = [];
+    blocks.forEach((b) => {
+      state.doc.nodesBetween(b.from, b.to, (node: any, pos: number) => {
+        if (node.type === hardBreakType) breakPositions.push(pos);
+      });
+    });
+
+    if (breakPositions.length === 0) {
+      editor.chain().focus().toggleHeading({ level }).run();
+      return;
+    }
+
+    // 倒序拆分：在每个 hardBreak 处 split paragraph 并删除 hardBreak。
+    // tr.delete(pos, pos+1) + tr.split(pos) 会把 hardBreak 所在位置切成两个段落。
+    const tr = state.tr;
+    // 在未应用中间事务时，同一份 doc 上所有位置仍相对稳定；倒序保证前面位置不被影响。
+    breakPositions.sort((a, b) => b - a);
+    breakPositions.forEach((pos) => {
+      // 删除 hardBreak（1 个位置），然后在原位置 split 到 paragraph 层
+      tr.delete(pos, pos + 1);
+      tr.split(pos);
+    });
+    editor.view.dispatch(tr);
+
+    // split 后再触发 toggleHeading：此时光标所在段落就是单行
+    editor.chain().focus().toggleHeading({ level }).run();
+  } catch (e) {
+    if (typeof console !== "undefined") console.warn("[toggleHeadingSmart] fallback:", e);
+    editor.chain().focus().toggleHeading({ level }).run();
+  }
+}
+
+
 // 自定义缩进扩展
 // 支持段落、标题、列表（bullet / ordered / task）、引用、代码块整体做"手动缩进"调整。
 // 通过 data-indent 属性 + CSS 的 padding-left 实现纯视觉缩进，不破坏文档结构。
@@ -667,11 +820,13 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
           }
 
           // 5) 只有 HTML 没有多行纯文本（如从网页复制的富文本片段）：解析插入
+          //    先归一化：把 <div>/<br> 伪多行段落拆成真正的多个 <p>，
+          //    避免后续块级操作（toggleHeading 等）误把整段转换。
           if (html && html.trim().length > 0) {
             const { state, dispatch } = view;
             const parser = ProseMirrorDOMParser.fromSchema(state.schema);
             const tempDiv = document.createElement("div");
-            tempDiv.innerHTML = html;
+            tempDiv.innerHTML = normalizePastedHtmlForBlocks(html);
             const slice = parser.parseSlice(tempDiv);
             const tr = state.tr.replaceSelection(slice);
             dispatch(tr);
@@ -1058,7 +1213,8 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       }
       if (detail.node === "heading" && detail.level) {
         const lvl = detail.level as 1 | 2 | 3 | 4 | 5 | 6;
-        chain.toggleHeading({ level: lvl }).run();
+        // 用 smart 版本：若当前段落含 <br>（hardBreak），先拆成独立段落再 toggle
+        toggleHeadingSmart(editor, lvl);
         return;
       }
       if (detail.node === "paragraph") {
@@ -1386,21 +1542,21 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
         <ToolbarDivider />
 
         <ToolbarButton
-          onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+          onClick={() => toggleHeadingSmart(editor, 1)}
           isActive={editor.isActive("heading", { level: 1 })}
           title={t('tiptap.heading1')}
         >
           <Heading1 size={iconSize} />
         </ToolbarButton>
         <ToolbarButton
-          onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+          onClick={() => toggleHeadingSmart(editor, 2)}
           isActive={editor.isActive("heading", { level: 2 })}
           title={t('tiptap.heading2')}
         >
           <Heading2 size={iconSize} />
         </ToolbarButton>
         <ToolbarButton
-          onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+          onClick={() => toggleHeadingSmart(editor, 3)}
           isActive={editor.isActive("heading", { level: 3 })}
           title={t('tiptap.heading3')}
         >
@@ -1915,14 +2071,14 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
               icon: <Heading1 size={18} />,
               title: t("tiptap.heading1"),
               isActive: editor.isActive("heading", { level: 1 }),
-              onClick: () => editor.chain().focus().toggleHeading({ level: 1 }).run(),
+              onClick: () => toggleHeadingSmart(editor, 1),
             },
             {
               key: "h2",
               icon: <Heading2 size={18} />,
               title: t("tiptap.heading2"),
               isActive: editor.isActive("heading", { level: 2 }),
-              onClick: () => editor.chain().focus().toggleHeading({ level: 2 }).run(),
+              onClick: () => toggleHeadingSmart(editor, 2),
             },
             {
               key: "bold",

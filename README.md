@@ -358,12 +358,21 @@ storeFile=你的keystore路径
    - **网络**：选择 bridge 模式
    - **端口映射**：主机 `3001` → 容器 `3001`
    - **存储映射**：
-     - 主机路径：`/mnt/user/appdata/nowen-note/data`（或自定义路径）
-     - 容器路径：`/app/data`
+     - 主机路径：`/mnt/user/appdata/nowen-note/data`（或自定义路径，如绿联默认的 `共享文件夹/docker/nowen-note/data`）
+     - 容器路径：**必须填 `/app/data`**（⚠️ 不是 `/data`，否则程序不会往挂载目录写入任何数据）
+       > 💡 从近期版本起，镜像在 Dockerfile 中显式声明了 `VOLUME ["/app/data"]`，绿联面板的「容器目录」下拉框会**自动预填 `/app/data`**，无需手填。如果你用的是旧镜像看不到这个预填，请重新构建/拉取镜像即可。
    - **重启策略**：开机自启
 
 3. **访问使用**
    - 浏览器访问 `http://<绿联NAS IP>:3001`
+
+> **⚠️ 常见踩坑：容器目录填错导致 NAS 目录看不到任何文件**
+>
+> 绿联 Docker 面板的"存储空间"配置中，**容器目录必须填 `/app/data`**（与 Dockerfile 中的 `WORKDIR /app` + `mkdir -p /app/data` 一致）。如果填成 `/data`，程序会把数据库、JWT 密钥写到容器内部的 `/app/data`（该路径没有挂载出去，容器删掉就没了），导致 NAS 侧挂载目录"空空如也"——这**不是权限问题**，是路径问题。
+>
+> **验证方法**：容器启动几秒后进入绿联 Docker → 容器 → 终端，执行 `ls -la /app/data`，应能看到 `.jwt_secret`、`nowen-note.db`、`nowen-note.db-shm`、`nowen-note.db-wal` 四个文件；同时 NAS 文件管理器里挂载目录也应看到同样的文件。
+>
+> **备选方案**：如果你因特殊原因必须把容器目录保留为 `/data`，请额外在"环境变量"里配置 `NOWEN_DATA_DIR=/data` 和 `DB_PATH=/data/nowen-note.db`，两者缺一不可。
 
 ---
 
@@ -473,7 +482,7 @@ docker run -d \
 
 #### 通用注意事项
 
-- **数据持久化**：务必将容器内的 `/app/data` 目录映射到宿主机，否则容器删除后数据丢失
+- **数据持久化**：务必将容器内的 **`/app/data`** 目录映射到宿主机（⚠️ 注意是 `/app/data`，不是 `/data`，填错会导致 NAS 挂载目录看不到任何文件），否则容器删除后数据丢失。镜像已通过 `VOLUME ["/app/data"]` 声明数据卷，主流 NAS 面板（绿联 / 群晖 / 威联通 / 极空间 / 飞牛 等）创建容器时会**自动把 `/app/data` 填入容器目录**，避免手填出错
 - **数据备份**：支持两种方式 — 直接备份 `nowen-note.db` 文件，或通过 API `/api/backups` 在线创建/下载备份
 - **自动备份**：服务启动后自动开启每 24 小时数据库备份，保留最近 10 个自动备份
 - **端口冲突**：如 3001 端口被占用，可修改主机端口映射（如 `8080:3001`）
@@ -1152,11 +1161,13 @@ All NAS platforms with Docker support follow the same general steps:
 2. **Import** `nowen-note.tar` into your NAS Docker manager
 3. **Create container** with:
    - Port mapping: host `3001` → container `3001`
-   - Volume mapping: host folder → container `/app/data`
+   - Volume mapping: host folder → container **`/app/data`** (⚠️ must be `/app/data`, **not** `/data` — otherwise the app writes to the unmounted in-container path and your host folder stays empty)
    - Restart policy: always / unless-stopped
 4. Visit `http://<nas-ip>:3001`
 
-> **Important:** Always map the `/app/data` directory to persist your database. Back up the `nowen-note.db` file for data safety, or use the built-in backup API at `/api/backups`.
+> **Important:** Always map the **`/app/data`** directory (not `/data`) to persist your database. If you really need a custom in-container path, also set env vars `NOWEN_DATA_DIR=<path>` and `DB_PATH=<path>/nowen-note.db` together. Back up the `nowen-note.db` file for data safety, or use the built-in backup API at `/api/backups`.
+>
+> 💡 **Tip:** The image declares `VOLUME ["/app/data"]` in the Dockerfile, so major NAS Docker UIs (UGREEN / Synology / QNAP / Zspace / fnOS) will **pre-fill `/app/data` as the container path** when creating a container — you only need to pick the host folder. If your panel still doesn't pre-fill it, you're on an older image; rebuild or re-pull the latest image.
 
 ### Key Features
 

@@ -88,6 +88,15 @@ COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 RUN mkdir -p /app/data
 
+# 声明数据卷，作用：
+#   1. 绿联 / 群晖 / 威联通 / 极空间 / 飞牛 等 NAS 的 Docker 面板在"创建容器"
+#      时会读取镜像的 VOLUME 列表，自动把 /app/data 填入"容器目录"下拉框，
+#      用户只需选择主机路径即可，避免手填成 /data 导致数据不持久化。
+#   2. 即使用户忘记挂载，Docker 也会创建匿名卷承接数据，容器重建时数据仍在匿名卷里。
+#   3. 对 docker run / docker-compose 用户无任何副作用 —— 他们显式 -v 的挂载
+#      会覆盖匿名卷。
+VOLUME ["/app/data"]
+
 # 启动脚本：首启自动生成并持久化 JWT_SECRET，使镜像开箱即用（同时保持安全基线）
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

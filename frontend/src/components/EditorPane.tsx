@@ -1501,26 +1501,25 @@ export default function EditorPane() {
         </div>
       </div>
 
-      {/* Phase 2: 实时协作横幅（软锁 / 远程更新 / 远程删除） */}
-      <EditingLockBanner users={presenceUsers} />
-      {remoteUpdate && (
-        <RemoteUpdateBanner
-          actorName={findUsername(remoteUpdate.actorUserId)}
-          onReload={handleReloadRemote}
-          onDismiss={() => setRemoteUpdate(null)}
-        />
-      )}
-      {remoteDelete && (
-        <RemoteDeleteBanner
-          actorName={findUsername(remoteDelete.actorUserId)}
-          trashed={remoteDelete.trashed}
-          onDismiss={handleAckRemoteDelete}
-        />
-      )}
-
       {/* Editor (HTML 预览 / MD / Tiptap 按模式分派) + Outline */}
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 overflow-hidden relative">
+          {/* Phase 2: 实时协作横幅（软锁 / 远程更新 / 远程删除）—— absolute 浮层，不占文档流，避免页面抖动 */}
+          <EditingLockBanner users={presenceUsers} />
+          {remoteUpdate && (
+            <RemoteUpdateBanner
+              actorName={findUsername(remoteUpdate.actorUserId)}
+              onReload={handleReloadRemote}
+              onDismiss={() => setRemoteUpdate(null)}
+            />
+          )}
+          {remoteDelete && (
+            <RemoteDeleteBanner
+              actorName={findUsername(remoteDelete.actorUserId)}
+              trashed={remoteDelete.trashed}
+              onDismiss={handleAckRemoteDelete}
+            />
+          )}
           {htmlPreviewMode ? (
             <HtmlPreviewPane
               key={`html-${activeNote.id}`}

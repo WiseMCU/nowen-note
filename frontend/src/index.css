@@ -525,38 +525,42 @@ html[data-code-theme="solarized-light"] {
   background: var(--code-copy-success-bg);
 }
 
-.ProseMirror .code-block-popup {
-  background: var(--code-popup-bg);
-  border-color: var(--code-border);
-  color: var(--code-muted-strong);
+/* 下拉面板（语言/主题选择器）— 使用不带 .ProseMirror 前缀的选择器，
+ * 以便 Portal 渲染到 <body> 下时仍能命中样式（避免透视/无背景）。 */
+.code-block-popup {
+  background: var(--code-popup-bg, #161b22);
+  border-color: var(--code-border, #30363d);
+  color: var(--code-muted-strong, #e6edf3);
+  /* 给一个兜底的实心背景，防止极端情况下 CSS 变量未注入时看起来透明 */
+  background-color: var(--code-popup-bg, #161b22);
 }
-.ProseMirror .code-block-popup-title {
-  color: var(--code-muted);
-  border-color: var(--code-border) !important;
+.code-block-popup-title {
+  color: var(--code-muted, #8b949e);
+  border-color: var(--code-border, #30363d) !important;
 }
-.ProseMirror .code-block-popup-input {
-  background: var(--code-popup-input-bg);
-  border-color: var(--code-border) !important;
-  color: var(--code-muted-strong);
+.code-block-popup-input {
+  background: var(--code-popup-input-bg, #0d1117);
+  border-color: var(--code-border, #30363d) !important;
+  color: var(--code-muted-strong, #e6edf3);
 }
-.ProseMirror .code-block-popup-input::placeholder {
-  color: var(--code-popup-placeholder);
+.code-block-popup-input::placeholder {
+  color: var(--code-popup-placeholder, #6e7681);
 }
-.ProseMirror .code-block-popup-empty {
-  color: var(--code-popup-placeholder);
+.code-block-popup-empty {
+  color: var(--code-popup-placeholder, #6e7681);
 }
-.ProseMirror .code-block-popup-item {
-  color: var(--code-fg);
+.code-block-popup-item {
+  color: var(--code-fg, #c9d1d9);
   background: transparent;
   border: none;
   cursor: pointer;
 }
-.ProseMirror .code-block-popup-item:hover {
-  background: var(--code-hover-bg);
+.code-block-popup-item:hover {
+  background: var(--code-hover-bg, #21262d);
 }
-.ProseMirror .code-block-popup-item.is-active {
-  background: var(--code-popup-active-bg);
-  color: var(--code-popup-active-fg);
+.code-block-popup-item.is-active {
+  background: var(--code-popup-active-bg, rgba(31, 111, 235, 0.2));
+  color: var(--code-popup-active-fg, #58a6ff);
 }
 
 .ProseMirror .code-block-wrapper {

@@ -1,4 +1,5 @@
-import React, { useCallback, useMemo, useState, useEffect } from "react";
+import React, { useCallback, useMemo, useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { NodeViewWrapper, NodeViewContent, NodeViewProps } from "@tiptap/react";
 import { Copy, Check, ChevronDown, Palette } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,46 @@ export function CodeBlockView(props: NodeViewProps) {
   const [langFilter, setLangFilter] = useState("");
   const [showThemePicker, setShowThemePicker] = useState(false);
   const [activeTheme, setActiveTheme] = useState<CodeBlockThemeId>(getSavedCodeBlockTheme);
+
+  // 下拉面板锚点按钮 ref，用于计算 fixed 弹出位置（避免被代码块容器 overflow-hidden 裁剪）
+  const langBtnRef = useRef<HTMLButtonElement | null>(null);
+  const themeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [langPopupPos, setLangPopupPos] = useState<{ top: number; left: number; placement: "bottom" | "top" } | null>(null);
+  const [themePopupPos, setThemePopupPos] = useState<{ top: number; right: number; placement: "bottom" | "top" } | null>(null);
+
+  // 语言下拉宽度 / 主题下拉宽度（与原样式保持一致：w-48 / w-52）
+  const LANG_POPUP_WIDTH = 192; // w-48
+  const THEME_POPUP_WIDTH = 208; // w-52
+  // 预估面板最大高度（含搜索框/标题与列表）
+  const LANG_POPUP_MAX_H = 260;
+  const THEME_POPUP_MAX_H = 300;
+
+  const computeLangPopupPos = useCallback(() => {
+    const btn = langBtnRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const placement: "bottom" | "top" = spaceBelow < LANG_POPUP_MAX_H && rect.top > spaceBelow ? "top" : "bottom";
+    const top = placement === "bottom" ? rect.bottom + 4 : Math.max(8, rect.top - 4 - LANG_POPUP_MAX_H);
+    // 左对齐按钮，同时避免超出右边界
+    const left = Math.min(
+      Math.max(8, rect.left),
+      window.innerWidth - LANG_POPUP_WIDTH - 8,
+    );
+    setLangPopupPos({ top, left, placement });
+  }, []);
+
+  const computeThemePopupPos = useCallback(() => {
+    const btn = themeBtnRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const placement: "bottom" | "top" = spaceBelow < THEME_POPUP_MAX_H && rect.top > spaceBelow ? "top" : "bottom";
+    const top = placement === "bottom" ? rect.bottom + 4 : Math.max(8, rect.top - 4 - THEME_POPUP_MAX_H);
+    // 右对齐按钮
+    const right = Math.max(8, window.innerWidth - rect.right);
+    setThemePopupPos({ top, right, placement });
+  }, []);
 
   // 订阅全局主题变化，使同文档多个代码块同步刷新高亮（UI 内选中态）
   useEffect(() => {
@@ -135,6 +176,26 @@ export function CodeBlockView(props: NodeViewProps) {
     };
   }, [showLangPicker]);
 
+  // 打开语言选择器时计算位置；滚动/resize 时重算或关闭
+  useEffect(() => {
+    if (!showLangPicker) {
+      setLangPopupPos(null);
+      return;
+    }
+    computeLangPopupPos();
+    const onScrollOrResize = () => {
+      // 滚动时直接关闭，避免位置错乱
+      setShowLangPicker(false);
+      setLangFilter("");
+    };
+    window.addEventListener("resize", onScrollOrResize);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    return () => {
+      window.removeEventListener("resize", onScrollOrResize);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+    };
+  }, [showLangPicker, computeLangPopupPos]);
+
   // 点击外部关闭主题选择器
   useEffect(() => {
     if (!showThemePicker) return;
@@ -151,6 +212,22 @@ export function CodeBlockView(props: NodeViewProps) {
       document.removeEventListener("mousedown", handleDocClick);
     };
   }, [showThemePicker]);
+
+  // 打开主题选择器时计算位置；滚动/resize 时关闭
+  useEffect(() => {
+    if (!showThemePicker) {
+      setThemePopupPos(null);
+      return;
+    }
+    computeThemePopupPos();
+    const onScrollOrResize = () => setShowThemePicker(false);
+    window.addEventListener("resize", onScrollOrResize);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    return () => {
+      window.removeEventListener("resize", onScrollOrResize);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+    };
+  }, [showThemePicker, computeThemePopupPos]);
 
   const handleSelectTheme = useCallback((theme: CodeBlockThemeId) => {
     setCodeBlockTheme(theme);
@@ -177,6 +254,7 @@ export function CodeBlockView(props: NodeViewProps) {
 
           <div className="relative" data-codeblock-langpicker>
             <button
+              ref={langBtnRef}
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
@@ -190,11 +268,20 @@ export function CodeBlockView(props: NodeViewProps) {
               <ChevronDown size={11} />
             </button>
 
-            {showLangPicker && (
+            {showLangPicker && langPopupPos && createPortal(
               <div
-                className="code-block-popup absolute left-0 top-full mt-1 w-48 border rounded-md shadow-xl z-50 overflow-hidden"
-                style={{ animation: "contextMenuIn 0.12s ease-out" }}
+                data-codeblock-langpicker
+                className="code-block-popup border rounded-md shadow-xl overflow-hidden"
+                style={{
+                  position: "fixed",
+                  top: langPopupPos.top,
+                  left: langPopupPos.left,
+                  width: LANG_POPUP_WIDTH,
+                  zIndex: 1000,
+                  animation: "contextMenuIn 0.12s ease-out",
+                }}
                 onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
               >
                 <input
                   autoFocus
@@ -222,7 +309,8 @@ export function CodeBlockView(props: NodeViewProps) {
                     ))
                   )}
                 </div>
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
         </div>
@@ -231,6 +319,7 @@ export function CodeBlockView(props: NodeViewProps) {
         <div className="flex items-center gap-1">
           <div className="relative" data-codeblock-themepicker>
             <button
+              ref={themeBtnRef}
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
@@ -244,11 +333,20 @@ export function CodeBlockView(props: NodeViewProps) {
               <span className="hidden sm:inline">主题</span>
             </button>
 
-            {showThemePicker && (
+            {showThemePicker && themePopupPos && createPortal(
               <div
-                className="code-block-popup absolute right-0 top-full mt-1 w-52 border rounded-md shadow-xl z-50 overflow-hidden"
-                style={{ animation: "contextMenuIn 0.12s ease-out" }}
+                data-codeblock-themepicker
+                className="code-block-popup border rounded-md shadow-xl overflow-hidden"
+                style={{
+                  position: "fixed",
+                  top: themePopupPos.top,
+                  right: themePopupPos.right,
+                  width: THEME_POPUP_WIDTH,
+                  zIndex: 1000,
+                  animation: "contextMenuIn 0.12s ease-out",
+                }}
                 onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
               >
                 <div className="code-block-popup-title px-2 py-1.5 text-[11px] font-medium border-b">
                   代码块主题
@@ -281,7 +379,8 @@ export function CodeBlockView(props: NodeViewProps) {
                     </button>
                   ))}
                 </div>
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
 

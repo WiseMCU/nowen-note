@@ -132,12 +132,9 @@ export function EditingLockBanner({
     : `${uniqueNames.slice(0, 2).join("、")} 等 ${uniqueNames.length} 人正在编辑此笔记`;
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800/50 text-xs text-amber-700 dark:text-amber-300">
-      <Pencil size={12} />
+    <div className="absolute bottom-4 right-4 z-20 flex items-center gap-2 px-3 py-2 rounded-lg shadow-md bg-amber-50/95 dark:bg-amber-900/90 border border-amber-200 dark:border-amber-800/50 text-xs text-amber-700 dark:text-amber-300 backdrop-blur-sm max-w-xs">
+      <Pencil size={12} className="shrink-0" />
       <span className="truncate">{label}</span>
-      <span className="ml-auto text-[10px] text-amber-600/70 dark:text-amber-400/60 shrink-0">
-        你的更改仍会保存，冲突时将提示
-      </span>
     </div>
   );
 }
@@ -154,24 +151,25 @@ export function RemoteUpdateBanner({
   onDismiss: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/20 border-b border-blue-200 dark:border-blue-800/50 text-xs text-blue-700 dark:text-blue-300">
-      <RefreshCw size={12} />
-      <span className="truncate">
-        {actorName ? `${actorName} 更新了此笔记` : "此笔记已被他人更新"}
-        ，建议重新加载以获取最新内容
-      </span>
-      <div className="ml-auto flex items-center gap-1 shrink-0">
+    <div className="absolute bottom-4 right-4 z-20 flex flex-col gap-2 px-3 py-2.5 rounded-lg shadow-md bg-blue-50/95 dark:bg-blue-900/90 border border-blue-200 dark:border-blue-800/50 text-xs text-blue-700 dark:text-blue-300 backdrop-blur-sm max-w-[220px]">
+      <div className="flex items-center gap-1.5">
+        <RefreshCw size={12} className="shrink-0" />
+        <span className="font-medium">
+          {actorName ? `${actorName} 更新了笔记` : "笔记已被他人更新"}
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5 justify-end">
+        <button
+          onClick={onDismiss}
+          className="px-2 py-0.5 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-800/30 transition-colors text-[11px]"
+        >
+          忽略
+        </button>
         <button
           onClick={onReload}
           className="px-2 py-0.5 rounded bg-blue-500 text-white hover:bg-blue-600 transition-colors text-[11px]"
         >
           重新加载
-        </button>
-        <button
-          onClick={onDismiss}
-          className="px-1.5 py-0.5 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-800/30 transition-colors text-[11px]"
-        >
-          忽略
         </button>
       </div>
     </div>
@@ -190,18 +188,22 @@ export function RemoteDeleteBanner({
   onDismiss: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800/50 text-xs text-red-700 dark:text-red-300">
-      <Trash2 size={12} />
-      <span className="truncate">
-        {actorName ? `${actorName} ` : ""}
-        {trashed ? "已将此笔记放入回收站" : "已永久删除此笔记"}
-      </span>
-      <button
-        onClick={onDismiss}
-        className="ml-auto shrink-0 px-1.5 py-0.5 rounded text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-800/30 transition-colors text-[11px]"
-      >
-        关闭
-      </button>
+    <div className="absolute bottom-4 right-4 z-20 flex flex-col gap-2 px-3 py-2.5 rounded-lg shadow-md bg-red-50/95 dark:bg-red-900/90 border border-red-200 dark:border-red-800/50 text-xs text-red-700 dark:text-red-300 backdrop-blur-sm max-w-[220px]">
+      <div className="flex items-center gap-1.5">
+        <Trash2 size={12} className="shrink-0" />
+        <span className="font-medium">
+          {actorName ? `${actorName} ` : ""}
+          {trashed ? "已将此笔记放入回收站" : "已永久删除此笔记"}
+        </span>
+      </div>
+      <div className="flex justify-end">
+        <button
+          onClick={onDismiss}
+          className="px-2 py-0.5 rounded text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-800/30 transition-colors text-[11px]"
+        >
+          关闭
+        </button>
+      </div>
     </div>
   );
 }

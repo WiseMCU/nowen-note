@@ -510,9 +510,14 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
     const line = lines[i];
     const trimmed = line.trim();
 
-    // 空行 → 保留为空段落（每个空行都产出一个空段落，保持与原文一致）
+    // 空行 → 直接跳过，不产出 <p></p>
+    // 之前的做法是每个空行生成一个空段落，但标准 Markdown 里空行是
+    // "块级分隔符"（让段落/列表/代码块分块）而不是可见空行。
+    // 生成空段落会导致：
+    // 1) 列表项之间隔空行时被打断成多个 <ol>/<ul>（视觉上是多组"1."）；
+    // 2) 列表与代码块、标题与段落之间出现多余的可见空白行。
+    // 块级元素之间的天然间距交给 Tiptap 的 CSS 处理即可。
     if (!trimmed) {
-      htmlParts.push("<p></p>");
       i++;
       continue;
     }
@@ -522,6 +527,12 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
     if (codeBlockMatch) {
       const fence = codeBlockMatch[1];
       const lang = codeBlockMatch[2] || "";
+      // 围栏行的前导缩进宽度（tab 记为 4 列）。
+      // 用于剥除代码行中与围栏等量的前导空白，避免"列表项内嵌代码块"
+      // （常见的 3/4 空格缩进）被原样塞进 <code>，产生看起来空格过多的缩进。
+      const fenceLeading = line.match(/^[ \t]*/)?.[0] ?? "";
+      let fenceIndent = 0;
+      for (const ch of fenceLeading) fenceIndent += ch === "\t" ? 4 : 1;
       const codeLines: string[] = [];
       i++;
       while (i < lines.length) {
@@ -529,8 +540,21 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
           i++;
           break;
         }
+        // 安全剥除：最多去掉与围栏同量的前导空白，不误伤代码本身的缩进
+        let raw = lines[i];
+        if (fenceIndent > 0) {
+          let stripped = 0;
+          let k = 0;
+          while (k < raw.length && stripped < fenceIndent) {
+            const ch = raw[k];
+            if (ch === " ") { stripped += 1; k += 1; }
+            else if (ch === "\t") { stripped += 4; k += 1; }
+            else break;
+          }
+          raw = raw.slice(k);
+        }
         codeLines.push(
-          lines[i]
+          raw
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;")
@@ -619,15 +643,28 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
     // 待办列表（- [x] / - [ ]）
     if (/^[-*]\s+\[[ xX]\]\s+/.test(trimmed)) {
       const taskItems: string[] = [];
-      while (i < lines.length && /^[-*]\s+\[[ xX]\]\s+/.test(lines[i].trim())) {
-        const taskMatch = lines[i].trim().match(/^[-*]\s+\[([xX ])\]\s+(.+)$/);
-        if (taskMatch) {
-          const checked = taskMatch[1].toLowerCase() === "x";
-          taskItems.push(
-            `<li data-type="taskItem" data-checked="${checked}"><label><input type="checkbox" ${checked ? "checked" : ""}><span></span></label><div><p>${inlineMarkdown(taskMatch[2], imageMap)}</p></div></li>`
-          );
+      while (i < lines.length) {
+        const cur = lines[i].trim();
+        if (/^[-*]\s+\[[ xX]\]\s+/.test(cur)) {
+          const taskMatch = cur.match(/^[-*]\s+\[([xX ])\]\s+(.+)$/);
+          if (taskMatch) {
+            const checked = taskMatch[1].toLowerCase() === "x";
+            taskItems.push(
+              `<li data-type="taskItem" data-checked="${checked}"><label><input type="checkbox" ${checked ? "checked" : ""}><span></span></label><div><p>${inlineMarkdown(taskMatch[2], imageMap)}</p></div></li>`
+            );
+          }
+          i++;
+          continue;
         }
-        i++;
+        if (!cur) {
+          let j = i + 1;
+          while (j < lines.length && !lines[j].trim()) j++;
+          if (j < lines.length && /^[-*]\s+\[[ xX]\]\s+/.test(lines[j].trim())) {
+            i = j;
+            continue;
+          }
+        }
+        break;
       }
       htmlParts.push(`<ul data-type="taskList">${taskItems.join("")}</ul>`);
       continue;
@@ -636,24 +673,57 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
     // 无序列表（- / * / +）
     if (/^[-*+]\s+/.test(trimmed)) {
       const listItems: string[] = [];
-      while (i < lines.length && /^[-*+]\s+/.test(lines[i].trim())) {
-        const itemText = lines[i].trim().replace(/^[-*+]\s+/, "");
-        listItems.push(`<li><p>${inlineMarkdown(itemText, imageMap)}</p></li>`);
-        i++;
+      while (i < lines.length) {
+        const cur = lines[i].trim();
+        if (/^[-*+]\s+/.test(cur)) {
+          const itemText = cur.replace(/^[-*+]\s+/, "");
+          listItems.push(`<li><p>${inlineMarkdown(itemText, imageMap)}</p></li>`);
+          i++;
+          continue;
+        }
+        // 空行：前瞻，若下一个非空行仍是同类型列表项，则吞掉空行继续采集
+        if (!cur) {
+          let j = i + 1;
+          while (j < lines.length && !lines[j].trim()) j++;
+          if (j < lines.length && /^[-*+]\s+/.test(lines[j].trim())) {
+            i = j;
+            continue;
+          }
+        }
+        break;
       }
       htmlParts.push(`<ul>${listItems.join("")}</ul>`);
       continue;
     }
 
     // 有序列表（1. / 2. ...）
+    // 读取首项的真实数字作为 <ol start="N">，这样当原始 MD 里列表被
+    // 代码块/段落打断（→ 进到不同的 <ol>）时，编号仍可延续
+    // 例："1. A\n\n```代码```\n\n2. B"  → <ol>1</ol> ... <ol start="2">2</ol>
     if (/^\d+\.\s+/.test(trimmed)) {
+      const firstNumMatch = trimmed.match(/^(\d+)\.\s+/);
+      const startNum = firstNumMatch ? parseInt(firstNumMatch[1], 10) : 1;
       const listItems: string[] = [];
-      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
-        const itemText = lines[i].trim().replace(/^\d+\.\s+/, "");
-        listItems.push(`<li><p>${inlineMarkdown(itemText, imageMap)}</p></li>`);
-        i++;
+      while (i < lines.length) {
+        const cur = lines[i].trim();
+        if (/^\d+\.\s+/.test(cur)) {
+          const itemText = cur.replace(/^\d+\.\s+/, "");
+          listItems.push(`<li><p>${inlineMarkdown(itemText, imageMap)}</p></li>`);
+          i++;
+          continue;
+        }
+        if (!cur) {
+          let j = i + 1;
+          while (j < lines.length && !lines[j].trim()) j++;
+          if (j < lines.length && /^\d+\.\s+/.test(lines[j].trim())) {
+            i = j;
+            continue;
+          }
+        }
+        break;
       }
-      htmlParts.push(`<ol>${listItems.join("")}</ol>`);
+      const startAttr = startNum > 1 ? ` start="${startNum}"` : "";
+      htmlParts.push(`<ol${startAttr}>${listItems.join("")}</ol>`);
       continue;
     }
 

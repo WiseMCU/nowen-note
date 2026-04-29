@@ -24,7 +24,7 @@ import {
   Quote, ImagePlus, CheckSquare, Highlighter, Minus, Undo, Redo,
   FileCode, Sparkles, X, ZoomIn, ZoomOut, RotateCcw,
   Table2, Indent, Outdent, AlignLeft, AlignCenter, AlignRight, Trash2,
-  FileType, Check, AlertCircle
+  FileType, Check, AlertCircle, Info
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
@@ -313,7 +313,11 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
   );
 
   // Markdown 粘贴提示 toast
-  const [pasteToast, setPasteToast] = useState<{ type: "converting" | "success" | "error"; message: string } | null>(null);
+  // "confirm" 变体：检测到 MD 语法后询问用户是否转换，携带 action 按钮回调
+  type PasteToastState =
+    | { type: "converting" | "success" | "error"; message: string }
+    | { type: "confirm"; message: string; actionLabel: string; onAction: () => void };
+  const [pasteToast, setPasteToast] = useState<PasteToastState | null>(null);
   const pasteToastTimer = useRef<NodeJS.Timeout | null>(null);
 
   const showPasteToast = useCallback((type: "converting" | "success" | "error", message: string, duration = 2500) => {
@@ -322,6 +326,21 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     if (type !== "converting") {
       pasteToastTimer.current = setTimeout(() => setPasteToast(null), duration);
     }
+  }, []);
+
+  // confirm 变体专用：8 秒自动消失，点按钮或 × 立即关闭
+  const showPasteConfirmToast = useCallback(
+    (message: string, actionLabel: string, onAction: () => void, duration = 8000) => {
+      if (pasteToastTimer.current) clearTimeout(pasteToastTimer.current);
+      setPasteToast({ type: "confirm", message, actionLabel, onAction });
+      pasteToastTimer.current = setTimeout(() => setPasteToast(null), duration);
+    },
+    []
+  );
+
+  const dismissPasteToast = useCallback(() => {
+    if (pasteToastTimer.current) clearTimeout(pasteToastTimer.current);
+    setPasteToast(null);
   }, []);
 
   const editorScrollRef = useRef<HTMLDivElement | null>(null);
@@ -603,26 +622,44 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             return true;
           }
 
-          // 4) Markdown 纯文本：转 HTML 后插入
+          // 4) Markdown 纯文本：不自动转换，先原样插入纯文本并弹 confirm toast，
+          //    用户点击"立即转换样式"时再用原始文本替换刚插入的那段范围。
           if (text && looksLikeMarkdown(text)) {
-            showPasteToast("converting", t("tiptap.markdownConverting"));
-            try {
-              const convertedHtml = markdownToSimpleHtml(text);
-              const { state, dispatch } = view;
-              const parser = ProseMirrorDOMParser.fromSchema(state.schema);
-              const tempDiv = document.createElement("div");
-              tempDiv.innerHTML = convertedHtml;
-              const slice = parser.parseSlice(tempDiv);
-              const tr = state.tr.replaceSelection(slice);
-              dispatch(tr);
-              showPasteToast("success", t("tiptap.markdownConvertSuccess"));
-            } catch (err) {
-              console.error("Markdown paste conversion failed:", err);
-              showPasteToast("error", t("tiptap.markdownConvertError"));
-              const { state, dispatch } = view;
-              const tr = state.tr.insertText(text);
-              dispatch(tr);
-            }
+            const { state, dispatch } = view;
+            // 记录插入起点，用于后续按 from..to 范围替换
+            const insertFrom = state.selection.from;
+            const tr = state.tr.insertText(text);
+            dispatch(tr);
+            const insertTo = insertFrom + text.length;
+
+            // 构造转换动作：把 [insertFrom, insertTo] 替换为转换后的 HTML 切片。
+            // 注意 view 在此闭包中长期有效（React 卸载时编辑器会 destroy，届时 isDestroyed 为真）。
+            const doConvert = () => {
+              try {
+                if (view.isDestroyed) return;
+                const convertedHtml = markdownToSimpleHtml(text);
+                const parser = ProseMirrorDOMParser.fromSchema(view.state.schema);
+                const tempDiv = document.createElement("div");
+                tempDiv.innerHTML = convertedHtml;
+                const slice = parser.parseSlice(tempDiv);
+                // 替换范围要 clamp 到当前文档长度，防止用户此后又编辑/删除了部分内容
+                const docSize = view.state.doc.content.size;
+                const from = Math.min(insertFrom, docSize);
+                const to = Math.min(insertTo, docSize);
+                const replaceTr = view.state.tr.replaceRange(from, to, slice).scrollIntoView();
+                view.dispatch(replaceTr);
+                showPasteToast("success", t("tiptap.markdownConvertSuccess"));
+              } catch (err) {
+                console.error("Markdown paste conversion failed:", err);
+                showPasteToast("error", t("tiptap.markdownConvertError"));
+              }
+            };
+
+            showPasteConfirmToast(
+              t("tiptap.markdownDetected"),
+              t("tiptap.markdownConvertNow"),
+              doConvert
+            );
             return true;
           }
 
@@ -806,6 +843,21 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
   //   1) 本编辑器打字保存：content 回填 == lastEmitted → 守卫命中 → 不重放。
   //   2) 对侧编辑器保存后切回来：content 不等于 lastEmitted → 正常 setContent。
   //   3) 版本恢复 / 切换笔记 / 外部修改：同上，走正常 setContent。
+
+  // ---------- 标题单独同步 ----------
+  //
+  // 标题 input 是非受控的（`defaultValue={note.title}`），
+  // 上面的主 effect 只在 [note.id, note.content] 变化时才会跑。
+  // 当外部只改动 title（典型：点"AI 生成标题"按钮，后端返回新标题 → setActiveNote），
+  // content 没变，主 effect 不触发，DOM 里的标题永远保持旧值——用户会以为
+  //「AI 生成标题没生效」。这里加一个专用 effect 监听 note.title 即可。
+  useEffect(() => {
+    const el = titleRef.current;
+    if (!el) return;
+    if (el.value !== note.title) {
+      el.value = note.title;
+    }
+  }, [note.title]);
 
   // 组件卸载时清理 debounce timer
   useEffect(() => {
@@ -1673,7 +1725,8 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
               "fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-xl shadow-lg border text-sm font-medium backdrop-blur-sm",
               pasteToast.type === "converting" && "bg-accent-primary/10 border-accent-primary/20 text-accent-primary",
               pasteToast.type === "success" && "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400",
-              pasteToast.type === "error" && "bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400"
+              pasteToast.type === "error" && "bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400",
+              pasteToast.type === "confirm" && "bg-sky-500/10 border-sky-500/20 text-sky-600 dark:text-sky-400"
             )}
           >
             {pasteToast.type === "converting" && (
@@ -1681,7 +1734,31 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             )}
             {pasteToast.type === "success" && <Check size={16} />}
             {pasteToast.type === "error" && <AlertCircle size={16} />}
+            {pasteToast.type === "confirm" && <Info size={16} />}
             <span>{pasteToast.message}</span>
+            {pasteToast.type === "confirm" && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const action = pasteToast.onAction;
+                    dismissPasteToast();
+                    action();
+                  }}
+                  className="ml-1 font-semibold underline-offset-2 hover:underline focus:outline-none"
+                >
+                  {pasteToast.actionLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={dismissPasteToast}
+                  aria-label="close"
+                  className="ml-1 p-0.5 rounded hover:bg-sky-500/10 focus:outline-none"
+                >
+                  <X size={14} />
+                </button>
+              </>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

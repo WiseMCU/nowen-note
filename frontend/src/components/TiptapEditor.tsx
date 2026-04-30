@@ -85,6 +85,71 @@ if (!(ProseMirrorNode.prototype as any)[RESOLVE_PATCHED]) {
 
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// rescuePastedImages：从论坛/懒加载页面复制 HTML 时，<img src> 经常是
+// 1x1 占位图（如 Discuz 的 static/image/common/none.gif），真正的图片地址
+// 藏在 file / zoomfile / data-src / data-original / data-lazy-src 等自定义
+// 属性里。这里把这些属性提升回 src，并尝试把相对路径补成绝对 URL，
+// 避免粘贴后图片完全消失或显示为 1x1 透明块。
+// ---------------------------------------------------------------------------
+function rescuePastedImages(root: Element): void {
+  let pasteBaseOrigin: string | null = null;
+  const pickOrigin = (raw: string | null) => {
+    if (pasteBaseOrigin || !raw) return;
+    if (!/^https?:\/\//i.test(raw)) return;
+    try { pasteBaseOrigin = new URL(raw).origin; } catch { /* ignore */ }
+  };
+  root.querySelectorAll("a[href]").forEach((a) => pickOrigin(a.getAttribute("href")));
+  root.querySelectorAll("img").forEach((img) => {
+    pickOrigin(img.getAttribute("src"));
+    pickOrigin(img.getAttribute("file"));
+    pickOrigin(img.getAttribute("zoomfile"));
+    pickOrigin(img.getAttribute("data-src"));
+    pickOrigin(img.getAttribute("data-original"));
+  });
+
+  const isPlaceholderSrc = (src: string | null): boolean => {
+    if (!src) return true;
+    const s = src.trim();
+    if (!s || s === "about:blank") return true;
+    if (/^data:image\/(gif|png);base64,/i.test(s) && s.length < 200) return true;
+    if (/\/none\.gif(\?|$)/i.test(s)) return true;
+    if (/\/(blank|placeholder|spacer|grey|loading)\.(gif|png|svg)(\?|$)/i.test(s)) return true;
+    return false;
+  };
+
+  const toAbsolute = (url: string): string => {
+    const u = url.trim();
+    if (!u) return u;
+    if (/^(https?:|data:|blob:)/i.test(u)) return u;
+    if (u.startsWith("//")) return `https:${u}`;
+    if (!pasteBaseOrigin) return u;
+    if (u.startsWith("/")) return `${pasteBaseOrigin}${u}`;
+    return `${pasteBaseOrigin}/${u.replace(/^\.?\//, "")}`;
+  };
+
+  root.querySelectorAll("img").forEach((img) => {
+    const currentSrc = img.getAttribute("src");
+    if (currentSrc && /^(https?:|data:|blob:)/i.test(currentSrc) && !isPlaceholderSrc(currentSrc)) return;
+    const candidates = ["zoomfile","file","data-src","data-original","data-lazy-src","data-actualsrc","data-echo"];
+    let picked: string | null = null;
+    for (const attr of candidates) {
+      const v = img.getAttribute(attr);
+      if (v && v.trim()) { picked = v.trim(); break; }
+    }
+    if (!picked && currentSrc && !isPlaceholderSrc(currentSrc)) picked = currentSrc;
+    if (!picked) return;
+    const abs = toAbsolute(picked);
+    if (abs && /^(https?:|data:|blob:)/i.test(abs)) img.setAttribute("src", abs);
+  });
+
+  root.querySelectorAll("ignore_js_op").forEach((el) => {
+    const span = el.ownerDocument.createElement("span");
+    while (el.firstChild) span.appendChild(el.firstChild);
+    el.replaceWith(span);
+  });
+}
+
 // 粘贴 HTML 归一化：把"伪多行段落"拆成真正的多个 <p>
 // ---------------------------------------------------------------------------
 // 很多来源（微信/QQ/钉钉/飞书网页复制、Word、部分浏览器富文本）在 clipboard
@@ -104,6 +169,9 @@ function normalizePastedHtmlForBlocks(html: string): string {
     const doc = new DOMParser().parseFromString(`<div id="__root">${html}</div>`, "text/html");
     const root = doc.getElementById("__root");
     if (!root) return html;
+
+    // 0) 先抢救图片：把 Forum/Discuz 懒加载图片的占位 src 替换为真实地址
+    rescuePastedImages(root);
 
     // 1) 顶层 <div> 直接替换为 <p>（保留内部内联内容）
     //    注意只处理"直接子节点层"，不递归改动引用/表格内的 <div>。
@@ -432,6 +500,8 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
   const [showAI, setShowAI] = useState(false);
   const [aiSelectedText, setAiSelectedText] = useState("");
   const [aiPosition, setAiPosition] = useState<{ top: number; left: number } | undefined>();
+  // 记录 AI 处理的是全文（未选中）还是选区；Replace 行为据此区分
+  const isFullDocRef = useRef(false);
   // 图片预览状态
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [imageZoom, setImageZoom] = useState(1);
@@ -1450,7 +1520,13 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     if (!editor) return;
     const { from, to } = editor.state.selection;
     const selected = editor.state.doc.textBetween(from, to, " ");
-    setAiSelectedText(selected || editor.getText().slice(0, 500));
+    if (selected) {
+      setAiSelectedText(selected);
+      isFullDocRef.current = false;
+    } else {
+      setAiSelectedText(editor.getText());
+      isFullDocRef.current = true;
+    }
 
     // 获取选区在屏幕上的位置
     const coords = editor.view.coordsAtPos(from);
@@ -1507,14 +1583,25 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
 
   const handleAIInsert = useCallback((text: string) => {
     if (!editor) return;
-    const { to } = editor.state.selection;
-    insertWithMarkdownDetect(text, to, to);
+    if (isFullDocRef.current) {
+      // 全文场景：插入到文档开头
+      insertWithMarkdownDetect(text, 0, 0);
+    } else {
+      const { to } = editor.state.selection;
+      insertWithMarkdownDetect(text, to, to);
+    }
   }, [editor, insertWithMarkdownDetect]);
 
   const handleAIReplace = useCallback((text: string) => {
     if (!editor) return;
-    const { from, to } = editor.state.selection;
-    insertWithMarkdownDetect(text, from, to);
+    if (isFullDocRef.current) {
+      // 全文场景：替换整个文档
+      const docSize = editor.state.doc.content.size;
+      insertWithMarkdownDetect(text, 0, docSize);
+    } else {
+      const { from, to } = editor.state.selection;
+      insertWithMarkdownDetect(text, from, to);
+    }
   }, [editor, insertWithMarkdownDetect]);
 
   if (!editor) return null;

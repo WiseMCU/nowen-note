@@ -2,6 +2,10 @@
 
 自托管私有知识库，对标群晖 Note Station。支持 Docker 一键部署、Electron 桌面客户端、Android 移动端。
 
+> **本项目基于 [cropflre/nowen-note](https://github.com/cropflre/nowen-note) 二次开发。**
+> This project is a fork of [cropflre/nowen-note](https://github.com/cropflre/nowen-note).
+> 上游仓库 / Upstream: <https://github.com/cropflre/nowen-note>
+
 ## 核心功能
 
 - 富文本编辑器（Tiptap）+ Markdown 编辑器（CodeMirror 6）双模式
@@ -35,6 +39,14 @@ docker run -d --name nowen-note --restart unless-stopped \
 | `DISABLE_MDNS` | （空） | 设为 `1` 禁用局域网发现 |
 
 ## 更新日志
+
+### v1.0.23
+
+- AI Markdown 格式化不再改动原文措辞，仅添加格式标记
+- AI 助手悬浮面板支持拖拽移动
+- 未选中内容时 AI 助手默认处理全文，替换/插入行为适配
+- Docker 镜像体积优化（运行时切换 Alpine，约 236MB → 100MB）
+- 导出功能增强：图片 base64 内联、下划线转义修复、双空行折叠
 
 ### v1.0.22
 

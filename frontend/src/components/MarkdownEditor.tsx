@@ -22,7 +22,7 @@
  */
 
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { EditorState, Compartment, StateEffect } from "@codemirror/state";
+import { EditorState, Compartment, StateEffect, EditorSelection } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -394,6 +394,8 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
   const [aiSelectedText, setAiSelectedText] = useState("");
   const [aiFullText, setAiFullText] = useState("");
   const [aiPosition, setAiPosition] = useState<{ top: number; left: number }>({ top: 100, left: 100 });
+  // 记录 AI 处理的是全文（未选中）还是选区；Replace 行为据此区分
+  const isFullDocRef = useRef(false);
 
   /** 打开 AI 浮层：若外部提供 onAIAssistant 则转给外部 */
   const openAIAssistant = useCallback(() => {
@@ -408,7 +410,13 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
     const doc = view.state.doc;
     const selected = doc.sliceString(sel.from, sel.to);
     const full = doc.toString();
-    setAiSelectedText(selected || full.slice(0, 500));
+    if (selected) {
+      setAiSelectedText(selected);
+      isFullDocRef.current = false;
+    } else {
+      setAiSelectedText(full);
+      isFullDocRef.current = true;
+    }
     setAiFullText(full);
     // 坐标：优先选区起点，落到屏幕内
     const coords = view.coordsAtPos(sel.from);
@@ -421,22 +429,31 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
     setAiOpen(true);
   }, [isGuest, onAIAssistant]);
 
-  /** AI 将生成内容插入到当前选区尾部 */
+  /** AI 将生成内容插入到文档开头（全文场景）或选区尾部 */
   const handleAIInsert = useCallback((text: string) => {
     const view = viewRef.current;
     if (!view) return;
-    const { to } = view.state.selection.main;
-    view.dispatch({
-      changes: { from: to, to, insert: text },
-    });
+    if (isFullDocRef.current) {
+      view.dispatch({ changes: { from: 0, to: 0, insert: text } });
+    } else {
+      const { to } = view.state.selection.main;
+      view.dispatch({ changes: { from: to, to, insert: text } });
+    }
     queueMicrotask(() => view.focus());
   }, []);
 
-  /** AI 将生成内容替换当前选区 */
+  /** AI 将生成内容替换当前选区，或全文场景下替换整个文档 */
   const handleAIReplace = useCallback((text: string) => {
     const view = viewRef.current;
     if (!view) return;
-    replaceSelection(view, text);
+    if (isFullDocRef.current) {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        selection: EditorSelection.cursor(text.length),
+      });
+    } else {
+      replaceSelection(view, text);
+    }
   }, []);
 
   // slash 菜单项（依赖 tr / openAIAssistant / 图片上传回调）

@@ -40,6 +40,44 @@ export default function AIWritingAssistant({
   const panelRef = useRef<HTMLDivElement>(null);
   const customInputRef = useRef<HTMLTextAreaElement>(null);
 
+  // ---------- 拖拽 ----------
+  const [panelPos, setPanelPos] = useState<{ top: number; left: number } | null>(null);
+  const isDragging = useRef(false);
+  const dragStart = useRef({ mouseX: 0, mouseY: 0, panelX: 0, panelY: 0 });
+
+  const onHeaderMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!panelRef.current) return;
+    isDragging.current = true;
+    dragStart.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      panelX: panelRef.current.offsetLeft,
+      panelY: panelRef.current.offsetTop,
+    };
+    e.preventDefault();
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isDragging.current) return;
+      const dx = e.clientX - dragStart.current.mouseX;
+      const dy = e.clientY - dragStart.current.mouseY;
+      setPanelPos({
+        left: dragStart.current.panelX + dx,
+        top: dragStart.current.panelY + dy,
+      });
+    };
+    const onUp = () => { isDragging.current = false; };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
+  const actualPos = panelPos || position || { top: window.innerHeight / 2 - 240, left: window.innerWidth / 2 - 200 };
+
   const actions: { id: AIAction; icon: React.ElementType; label: string; group: string }[] = [
     { id: "continue", icon: ArrowRight, label: t("ai.actionContinue"), group: "write" },
     { id: "rewrite", icon: PenLine, label: t("ai.actionRewrite"), group: "write" },
@@ -126,10 +164,13 @@ export default function AIWritingAssistant({
       exit={{ opacity: 0, y: 8, scale: 0.96 }}
       transition={{ duration: 0.15 }}
       className="fixed z-[60] w-[400px] max-h-[480px] flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl overflow-hidden"
-      style={position ? { top: position.top, left: position.left } : { top: "50%", left: "50%", transform: "translate(-50%, -50%)" }}
+      style={{ top: actualPos.top, left: actualPos.left }}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+      {/* Header — 可拖拽 */}
+      <div
+        onMouseDown={onHeaderMouseDown}
+        className="flex items-center justify-between px-3 py-2 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30 cursor-grab active:cursor-grabbing select-none"
+      >
         <div className="flex items-center gap-1.5">
           <Sparkles size={14} className="text-accent-primary" />
           <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">{t("ai.assistant")}</span>

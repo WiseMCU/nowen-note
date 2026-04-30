@@ -713,11 +713,25 @@ html[data-code-theme="solarized-light"] {
   margin: 1.25rem auto;
   display: block;
   cursor: zoom-in;
-  transition: box-shadow 0.2s ease;
+  outline: 1px solid rgba(0, 0, 0, 0.18) !important;
+  outline-offset: 0;
+  transition: box-shadow 0.2s ease, outline-color 0.2s ease;
 }
 
 .ProseMirror img:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  outline-color: rgba(0, 0, 0, 0.32) !important;
+}
+
+.dark .ProseMirror img {
+  outline-color: rgba(255, 255, 255, 0.22) !important;
+}
+.dark .ProseMirror img:hover {
+  outline-color: rgba(255, 255, 255, 0.4) !important;
+}
+
+.ProseMirror .resizable-image-wrapper {
+  border-radius: 8px;
 }
 
 /* ===== Task List ===== */

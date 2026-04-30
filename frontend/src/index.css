@@ -163,9 +163,20 @@ body {
 }
 
 .ProseMirror p {
-  margin: 0.625rem 0;
-  line-height: 1.8;
+  margin: 0;
+  line-height: 1.6;
   color: var(--pm-text);
+}
+
+.ProseMirror p + p {
+  margin-top: 0.375rem;
+}
+
+/* 段落后紧跟标题：避免 h1/h2/h3 自带上边距与段落间距叠加过大 */
+.ProseMirror p + h1,
+.ProseMirror p + h2,
+.ProseMirror p + h3 {
+  margin-top: 0.5rem;
 }
 
 .ProseMirror ul {

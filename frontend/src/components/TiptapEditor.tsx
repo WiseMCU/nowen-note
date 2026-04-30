@@ -636,6 +636,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     editorProps: {
       attributes: {
         class: "prose prose-sm max-w-none focus:outline-none min-h-[300px] px-1",
+        spellcheck: "false",
       },
       // 在 heading / blockquote 等块级节点行首按 Backspace 时，
       // 统一把当前节点转为普通段落，避免某些导入/InputRule 后的
@@ -2159,23 +2160,39 @@ function looksLikeCode(text: string): boolean {
   // 如果中文字符占比 > 20%，大概率是自然语言文本而非代码
   if (cjkRatio > 0.2) return false;
 
+  const lines = text.split("\n");
+
+  // 若大量行包含 URL（>30% 的非空行），大概率是文档/参考清单而非代码
+  const nonBlank = lines.filter((l) => l.trim().length > 0);
+  let urlLineCount = 0;
+  for (const l of nonBlank) {
+    if (/https?:\/\//.test(l)) urlLineCount++;
+  }
+  if (nonBlank.length >= 4 && urlLineCount / nonBlank.length > 0.3) return false;
+
+  // 统计代码特征信号
+  let codeSignals = 0;
+  for (const line of lines) {
+    const trimmed = line.trimEnd();
+    // 缩进（至少2空格或tab开头）
+    if (/^(\s{2,}|\t)/.test(line) && trimmed.length > 0) codeSignals++;
+    // 行尾分号、大括号
+    if (/[;{}]\s*$/.test(trimmed)) codeSignals++;
+    // 赋值语句（箭头、比较、赋值运算符）
+    if (/[=!<>]=|=>|->/.test(trimmed)) codeSignals++;
+    // 函数调用 xxx(...)
+    if (/\w+\(.*\)\s*[;{]?\s*$/.test(trimmed)) codeSignals++;
+  }
+
+  // 如果中文字符占比 > 20%，大概率是自然语言文本而非代码
+  if (cjkRatio > 0.2) return false;
+
   // 如果中文字符占比 > 8% 且没有明显的代码特征，也不当做代码
   if (cjkRatio > 0.08) {
-    const lines = text.split("\n");
-    let codeSignals = 0;
-    for (const line of lines) {
-      const trimmed = line.trimEnd();
-      // 缩进（至少2空格或tab开头）
-      if (/^(\s{2,}|\t)/.test(line) && trimmed.length > 0) codeSignals++;
-      // 行尾分号、大括号
-      if (/[;{}]\s*$/.test(trimmed)) codeSignals++;
-      // 赋值语句
-      if (/[=!<>]=|=>|->/.test(trimmed)) codeSignals++;
-      // 函数调用 xxx(...)
-      if (/\w+\(.*\)\s*[;{]?\s*$/.test(trimmed)) codeSignals++;
-    }
-    // 如果代码特征不够多，不当做代码
     if (codeSignals < lines.length * 0.3) return false;
+  } else {
+    // 低 CJK 文本也需要至少有一些代码信号，避免纯 reference/config 类笔记被误判
+    if (codeSignals === 0) return false;
   }
 
   return true;

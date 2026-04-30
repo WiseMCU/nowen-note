@@ -12,7 +12,7 @@ import {
 } from "../middleware/acl";
 import { broadcastNoteUpdated, broadcastNoteDeleted, broadcastYjsUpdate } from "../services/realtime";
 import { yFlush, yDestroyDoc, yReplaceContentAsUpdate } from "../services/yjs";
-import { deleteAttachmentFilesByNoteIds } from "./attachments";
+import { deleteAttachmentFilesByNoteIds, extractInlineBase64Images } from "./attachments";
 
 const app = new Hono();
 
@@ -229,6 +229,23 @@ app.post("/", async (c) => {
     id, userId, inheritedWorkspaceId, body.notebookId,
     body.title || "无标题笔记", body.content || "{}", body.contentText || "",
   );
+
+  // A2: 自动抽取 content 里的内联 data:image base64 → attachments 表 + 物理文件。
+  // 创建路径同样可能携带 base64（如：富文本编辑器粘贴图片后立即新建笔记保存）。
+  // 必须放在 INSERT 之后，attachments.noteId 外键要求 note 行先存在。
+  // 短路保证常规无内联图的创建零额外成本。
+  if (typeof body.content === "string" && body.content.indexOf("data:image") >= 0) {
+    try {
+      const r = extractInlineBase64Images(body.content, userId, id);
+      if (r.replacedCount > 0) {
+        db.prepare("UPDATE notes SET content = ? WHERE id = ?").run(r.content, id);
+      }
+    } catch (e) {
+      // 抽取失败不阻断创建——base64 仍在 content 里，未来某次 PUT 会再尝试。
+      console.warn("[notes.post] extractInlineBase64Images failed:", e instanceof Error ? e.message : e);
+    }
+  }
+
   const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(id);
 
   emitWebhook("note.created", userId, { noteId: id, title: body.title || "无标题笔记" });
@@ -354,6 +371,26 @@ app.put("/:id", async (c) => {
 
   const fields: string[] = [];
   const params: any[] = [];
+
+  // A2: 自动抽取 body.content 里的内联 data:image base64 为 attachments。
+  // 必须先做：UPDATE 拼参数前替换掉 data URI，避免再把 MB 级 blob 写进 notes.content。
+  // 注意：
+  //   - 仅当本次 PUT 真的带了 content 才尝试（短路 indexOf("data:image")）；
+  //   - extractInlineBase64Images 内部会 INSERT attachments 行，要求 noteId 已存在
+  //     ——PUT 自然成立；
+  //   - 失败保留原 data URI 不阻断保存；
+  //   - 抽取改写后会让 contentText 与 content 体积出现"不对称变化"——但 contentText 是
+  //     纯文本不含 base64，本身不受影响，FTS 重排逻辑（notes_au）也不会被打扰。
+  if (typeof body.content === "string" && body.content.indexOf("data:image") >= 0) {
+    try {
+      const r = extractInlineBase64Images(body.content, userId, id);
+      if (r.replacedCount > 0) {
+        body.content = r.content;
+      }
+    } catch (e) {
+      console.warn("[notes.put] extractInlineBase64Images failed:", e instanceof Error ? e.message : e);
+    }
+  }
 
   if (body.title !== undefined) { fields.push("title = ?"); params.push(body.title); }
   if (body.content !== undefined) { fields.push("content = ?"); params.push(body.content); }

@@ -30,6 +30,8 @@
  *   --limit N               最多处理 N 条 note。
  *   --ids a,b,c             仅处理指定笔记 ID。
  *   --verbose               打印每条笔记的替换细节。
+ *   --vacuum                apply 完成后强制 VACUUM（apply 模式下默认开启）。
+ *   --no-vacuum             apply 完成后跳过 VACUUM。VACUUM 在大库上可能耗时数十秒。
  *   --rollback <backup>     用指定 .bak 文件覆盖数据库。
  *                           ⚠️ 回滚数据库不会删除已落盘的附件文件；
  *                              需要自己清理 attachments 目录中
@@ -53,10 +55,43 @@ import path from "node:path";
 import readline from "node:readline";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import Database from "better-sqlite3";
+import { createRequire } from "node:module";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// ----------------------------------------------------------------------------
+// 解析 better-sqlite3：
+//   ESM 的 `import` 只在脚本所在目录向上找 node_modules，scripts/ 自己没装
+//   依赖；而项目实际把 better-sqlite3 装在 backend/ 与可能装在 root/。
+//   先尝试沿 backend/package.json 的 require 锚点解析，再退回 root，再退回
+//   scripts 自身目录的默认行为。这样脚本就可以从仓库任意位置直接 `node ...mjs`
+//   调用，无需先 cd 到 backend。
+// ----------------------------------------------------------------------------
+function resolveBetterSqlite3() {
+  const candidates = [
+    path.join(__dirname, "..", "backend", "package.json"),
+    path.join(__dirname, "..", "package.json"),
+    import.meta.url,
+  ];
+  for (const anchor of candidates) {
+    try {
+      const requireFrom = createRequire(
+        anchor.startsWith("file:") ? anchor : "file:///" + anchor.replace(/\\/g, "/"),
+      );
+      return requireFrom("better-sqlite3");
+    } catch {
+      /* try next anchor */
+    }
+  }
+  console.error(
+    "[x] 找不到 better-sqlite3 模块。请先在 backend/ 下安装依赖：\n" +
+      "      cd backend && npm install\n" +
+      "    然后再运行本脚本。",
+  );
+  process.exit(1);
+}
+const Database = resolveBetterSqlite3();
 
 // ---------- 参数解析 ----------
 
@@ -71,6 +106,12 @@ function parseArgs(argv) {
     help: false,
     rollback: null,
     yes: false,
+    // VACUUM 控制：
+    //   - apply 模式默认 true（清理后真正释放 page，否则 sqlite 文件不缩水，
+    //     管理员看了会觉得"清了几百 MB 怎么 .db 还是这么大"）；
+    //   - dry-run 默认 false（看不出体积变化，没必要跑）；
+    //   - 用 --vacuum 强制开 / --no-vacuum 强制关。
+    vacuum: null, // null = 走默认，true/false = 显式
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -103,6 +144,12 @@ function parseArgs(argv) {
       case "-y":
         args.yes = true;
         break;
+      case "--vacuum":
+        args.vacuum = true;
+        break;
+      case "--no-vacuum":
+        args.vacuum = false;
+        break;
       case "-h":
       case "--help":
         args.help = true;
@@ -132,6 +179,8 @@ function printHelp() {
   --limit N            最多处理 N 条笔记
   --ids a,b            仅处理指定笔记 ID
   --verbose            打印每条笔记的替换详情
+  --vacuum             apply 后强制 VACUUM（apply 模式默认开启）
+  --no-vacuum          apply 后跳过 VACUUM（不会缩小文件，但更快）
   --rollback           用指定 .bak 文件覆盖数据库
   --yes                跳过回滚前的交互确认`);
 }
@@ -391,6 +440,37 @@ async function runMigrate(args) {
       process.exitCode = 1;
     } else {
       console.log("[✓] 迁移完成。");
+    }
+
+    // ---------- VACUUM ----------
+    // 仅 apply 模式且至少处理过一条笔记时才有意义；dry-run 不动 DB 就别瞎缩了。
+    // 默认：apply=on / dry-run=off，可被 --vacuum / --no-vacuum 显式覆盖。
+    const wantVacuum =
+      args.vacuum === true || (args.vacuum === null && !args.dryRun && totalNotes > 0);
+
+    if (wantVacuum) {
+      try {
+        const beforeBytes = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
+        console.log("");
+        console.log(`[i] 开始 VACUUM (当前 ${formatBytes(beforeBytes)})...`);
+        const t0 = Date.now();
+        // VACUUM 不能在事务内执行；这里独立调用即可。
+        // WAL 模式下 SQLite 会在 VACUUM 前自动 checkpoint，无需额外处理。
+        db.exec("VACUUM");
+        const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
+        const afterBytes = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
+        const freed = beforeBytes - afterBytes;
+        console.log(
+          `[✓] VACUUM 完成: ${formatBytes(beforeBytes)} → ${formatBytes(afterBytes)} ` +
+            `(${freed >= 0 ? "释放" : "增加"} ${formatBytes(Math.abs(freed))}, 用时 ${elapsed}s)`,
+        );
+      } catch (err) {
+        console.error(`[x] VACUUM 失败: ${err?.message || err}`);
+        // VACUUM 失败不视为致命错误——数据已经迁移完，体积没缩而已。
+      }
+    } else if (!args.dryRun && args.vacuum === false) {
+      console.log("[i] 已显式跳过 VACUUM（--no-vacuum）。如需缩小 .db 文件，稍后手动执行：");
+      console.log(`    sqlite3 "${dbPath}" "VACUUM"`);
     }
   } finally {
     db.close();

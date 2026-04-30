@@ -1,6 +1,16 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { getDb } from "../db/schema";
+import {
+  getEmbeddingStats,
+  rebuildAllEmbeddings,
+  embedQuery,
+} from "../services/embedding-worker";
+import {
+  isVecAvailable,
+  knnSearch,
+  reindexAllVectors,
+} from "../services/vec-store";
 
 const ai = new Hono();
 
@@ -8,9 +18,16 @@ const ai = new Hono();
 
 export interface AISettings {
   ai_provider: string;       // "openai" | "ollama" | "custom" | "qwen" | "deepseek" | "gemini" | "doubao"
-  ai_api_url: string;        // API 端点
+  ai_api_url: string;        // 对话 API 端点
   ai_api_key: string;        // API Key（Ollama 可为空）
-  ai_model: string;          // 模型名称
+  ai_model: string;          // 对话模型名称
+  // RAG Phase 1：embedding 配置（独立于对话模型）。
+  //   - 三个字段全空 → embedding-worker 直接 noop，不做向量化（行为兼容老版）
+  //   - ai_embedding_url / ai_embedding_key 留空时回退到 ai_api_url / ai_api_key
+  //   - 推荐模型：text-embedding-3-small (OpenAI)、bge-m3 (Ollama)、text-embedding-v3 (通义)
+  ai_embedding_url: string;
+  ai_embedding_key: string;
+  ai_embedding_model: string;
 }
 
 const AI_DEFAULTS: AISettings = {
@@ -18,6 +35,9 @@ const AI_DEFAULTS: AISettings = {
   ai_api_url: "https://api.openai.com/v1",
   ai_api_key: "",
   ai_model: "gpt-4o-mini",
+  ai_embedding_url: "",
+  ai_embedding_key: "",
+  ai_embedding_model: "",
 };
 
 // 不需要 API Key 的 Provider
@@ -48,6 +68,8 @@ ai.get("/settings", (c) => {
     ...settings,
     ai_api_key: settings.ai_api_key ? "sk-****" + settings.ai_api_key.slice(-4) : "",
     ai_api_key_set: !!settings.ai_api_key,
+    ai_embedding_key: settings.ai_embedding_key ? "sk-****" + settings.ai_embedding_key.slice(-4) : "",
+    ai_embedding_key_set: !!settings.ai_embedding_key,
   });
 });
 
@@ -75,6 +97,16 @@ ai.put("/settings", async (c) => {
     if (body.ai_model !== undefined) {
       upsert.run("ai_model", body.ai_model);
     }
+    // Embedding 三件套：URL 同样去尾斜杠；带掩码（****）的 key 视作"未修改"，不覆盖
+    if (body.ai_embedding_url !== undefined) {
+      upsert.run("ai_embedding_url", body.ai_embedding_url.replace(/\/+$/, ""));
+    }
+    if (body.ai_embedding_key !== undefined && !body.ai_embedding_key.includes("****")) {
+      upsert.run("ai_embedding_key", body.ai_embedding_key);
+    }
+    if (body.ai_embedding_model !== undefined) {
+      upsert.run("ai_embedding_model", body.ai_embedding_model);
+    }
   });
   tx();
 
@@ -83,6 +115,8 @@ ai.put("/settings", async (c) => {
     ...settings,
     ai_api_key: settings.ai_api_key ? "sk-****" + settings.ai_api_key.slice(-4) : "",
     ai_api_key_set: !!settings.ai_api_key,
+    ai_embedding_key: settings.ai_embedding_key ? "sk-****" + settings.ai_embedding_key.slice(-4) : "",
+    ai_embedding_key_set: !!settings.ai_embedding_key,
   });
 });
 
@@ -397,15 +431,45 @@ ai.post("/ask", async (c) => {
     return c.json({ error: "请输入问题" }, 400);
   }
 
-  // 1. 使用 FTS5 检索相关笔记
+  // 1. 检索相关笔记
+  //
+  //   优先级：向量召回（语义） > FTS5（关键词精确） > LIKE 兜底（容错） > 最近笔记（兜底兜底）
+  //
+  //   - 向量召回需要：sqlite-vec 加载成功 + embedding 配置完整 + 至少 indexed 过几篇笔记
+  //   - 命中阈值：只要 vec 拿到 ≥1 个 hit 就直接用，不再触发后面的关键词路径
+  //     （语义命中 1 篇通常远优于 FTS 命中 N 篇但都偏题）
+  //   - 拿不到/失败时静默降级，与 Phase 1 行为完全一致
   const db = getDb();
   const userId = c.req.header("X-User-Id") || "demo";
 
+  let relatedNotes: { id: string; title: string; snippet: string }[] = [];
+  let retrieval: "vector" | "fts" | "like" | "recent" | "none" = "none";
+
+  // ---- 路径 A：向量召回 ----
+  if (isVecAvailable()) {
+    try {
+      const qvec = await embedQuery(question);
+      if (qvec) {
+        const hits = knnSearch(qvec, userId, 20, 5);
+        if (hits.length > 0) {
+          relatedNotes = hits.map((h) => ({
+            id: h.noteId,
+            title: h.title,
+            // 命中的 chunk 已经是最相关片段；直接拿来当 snippet 比 contentText.slice(0,500) 信息密度高
+            snippet: (h.chunkText || "").slice(0, 600),
+          }));
+          retrieval = "vector";
+        }
+      }
+    } catch (e) {
+      console.warn("[/ask] vector retrieval failed, falling back:", e);
+    }
+  }
+
   const keywords = extractKeywords(question);
 
-  let relatedNotes: { id: string; title: string; snippet: string }[] = [];
-
-  if (keywords.length > 0) {
+  // ---- 路径 B：FTS5（仅当 vec 未命中时走）----
+  if (relatedNotes.length === 0 && keywords.length > 0) {
     // FTS5 查询：每个关键词加前缀通配符 *，用 OR 连接，提高命中率
     // 例如：「"前端"* OR "性能"* OR "优化"*」
     const ftsQuery = keywords
@@ -431,6 +495,7 @@ ai.post("/ask", async (c) => {
           title: n.title,
           snippet: (n.contentText || "").slice(0, 500),
         }));
+        retrieval = "fts";
       }
     } catch {
       // FTS query failed, continue without context
@@ -460,6 +525,7 @@ ai.post("/ask", async (c) => {
         title: n.title,
         snippet: (n.contentText || "").slice(0, 500),
       }));
+      if (relatedNotes.length > 0) retrieval = "like";
     } catch {
       // fallback failed
     }
@@ -483,6 +549,7 @@ ai.post("/ask", async (c) => {
         title: n.title,
         snippet: (n.contentText || "").slice(0, 500),
       }));
+      if (relatedNotes.length > 0) retrieval = "recent";
     } catch {
       // nothing to do
     }
@@ -544,6 +611,11 @@ ai.post("/ask", async (c) => {
         await stream.writeSSE({
           data: JSON.stringify(relatedNotes.map(n => ({ id: n.id, title: n.title }))),
           event: "references",
+        });
+        // 单独事件传 retrieval mode（前端可选监听；老前端会自动忽略未知 event 类型）
+        await stream.writeSSE({
+          data: JSON.stringify({ mode: retrieval }),
+          event: "retrieval",
         });
       }
 
@@ -1033,6 +1105,54 @@ ai.get("/knowledge-stats", (c) => {
     recentTopics: recentNotes.map(n => n.title).filter(Boolean),
     indexed: ftsCount > 0,
   });
+});
+
+// ==============================================================
+// RAG Phase 1：向量索引管理
+// ==============================================================
+//
+// 这里只暴露"看进度"和"重建"两个端点，真正的算向量逻辑都在
+// services/embedding-worker.ts 里后台跑，请求链路完全异步。
+//
+// 端点：
+//   GET  /api/ai/embeddings/stats     —— 当前用户的向量索引统计 + 队列状态
+//   POST /api/ai/embeddings/rebuild   —— 把当前用户全部笔记重新入队（可选清空老向量）
+//
+// 没有删除单条向量的端点：当笔记被删/移入回收站时，FK CASCADE + worker 自身的
+// "笔记已删则 DELETE 队列项"逻辑已经能自洽清理。
+
+// GET /api/ai/embeddings/stats
+ai.get("/embeddings/stats", (c) => {
+  const userId = c.req.header("X-User-Id") || "demo";
+  const stats = getEmbeddingStats(userId);
+  return c.json(stats);
+});
+
+// POST /api/ai/embeddings/rebuild
+// body: { clearExisting?: boolean }  默认 true（切模型场景下老向量必须清，否则
+// note_embeddings 里会同时存在多种维度的向量，后续检索会乱）
+ai.post("/embeddings/rebuild", async (c) => {
+  let body: { clearExisting?: boolean } = {};
+  try { body = await c.req.json(); } catch { /* 允许空 body */ }
+  const clearExisting = body.clearExisting !== false; // 默认 true
+  const result = rebuildAllEmbeddings({ clearExisting });
+  return c.json({ ok: true, ...result, clearedExisting: clearExisting });
+});
+
+// POST /api/ai/embeddings/reindex-vec
+// 仅重建 vec0 虚表（从 note_embeddings.vectorJson 全量灌入），不重新调 embedding API。
+// 用途：
+//   - 用户从老版本升级（有 note_embeddings 但还没 vec_note_chunks）
+//   - vec 表损坏 / 维度漂移后修复
+//   - 重启发现 sqlite-vec 加载成功但 KNN 查不到东西时手动救场
+// 不消耗 AI provider 配额，秒级完成。
+ai.post("/embeddings/reindex-vec", (c) => {
+  if (!isVecAvailable()) {
+    // 即使 sqlite-vec 没加载，也允许调用 reindex（会在内部 noop），返回明确状态
+    return c.json({ ok: false, error: "sqlite-vec 不可用（扩展未加载或维度未初始化）" }, 400);
+  }
+  const result = reindexAllVectors();
+  return c.json({ ok: true, ...result });
 });
 
 // ==============================================================

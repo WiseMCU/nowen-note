@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { runMigrations, getCurrentSchemaVersion, CURRENT_SCHEMA_VERSION } from "./migrations.js";
 
 const DB_PATH = process.env.DB_PATH || path.join(process.env.ELECTRON_USER_DATA || path.join(process.cwd(), "data"), "nowen-note.db");
 
@@ -18,11 +19,22 @@ export function getDbPath(): string {
 }
 
 /**
- * 关闭当前数据库连接。数据库导入替换文件前必须先关闭，否则 Windows 上
- * 文件被占用无法重命名。调用后下次 getDb() 会重新打开。
+ * 关闭当前数据库连接。
+ *
+ * 用于：
+ *   1. 数据库导入替换文件前必须先关闭——Windows 上文件被占用无法重命名；
+ *   2. 进程优雅关停时主动 checkpoint WAL，确保 .db 主文件包含所有事务，
+ *      避免"用户拿 cp .db 做冷备结果丢最近事务"的隐藏故障。
+ *
+ * 调用后下次 getDb() 会重新打开。
  */
 export function closeDb(): void {
   if (db) {
+    try {
+      // TRUNCATE 模式：把 -wal 内的事务全部 checkpoint 进 .db，并把 -wal 截断到 0；
+      // 之后冷拷贝 .db 单文件就是完整的一致性快照。
+      db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch { /* ignore：实例已损坏或只读时不阻塞关停 */ }
     try { db.close(); } catch { /* ignore */ }
     // @ts-expect-error: 允许重新打开
     db = undefined;
@@ -38,9 +50,71 @@ export function getDb(): Database.Database {
     db = new Database(DB_PATH);
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
+    // ---- P1 加固 PRAGMA ----
+    // busy_timeout：极短时间窗口内允许 SQLite 内部重试，避免多连接 / 多进程
+    // 同时写时直接抛 SQLITE_BUSY。better-sqlite3 单例本身已串行化所有 SQL，
+    // 但当出现"主进程 + 备份子进程""主进程 + CLI 工具""Electron 主 + 子"
+    // 这类多连接场景时，没有 busy_timeout 会立刻报错；5s 是一个安全窗口。
+    db.pragma("busy_timeout = 5000");
+    // synchronous = NORMAL：WAL 模式下 NORMAL 已经能在断电时保证持久化，
+    // 性能比 FULL 好得多；这是 SQLite 官方对 WAL 的推荐值。
+    db.pragma("synchronous = NORMAL");
+    // 完整性快速自检：5~50ms 量级，能发现绝大多数 page-level 损坏。
+    // 损坏时直接抛错让进程拒绝启动——比"看似能跑、读到一半才报错"安全得多。
+    try {
+      const r = db.prepare("PRAGMA quick_check").get() as { quick_check: string } | undefined;
+      const result = r?.quick_check;
+      if (result && result !== "ok") {
+        throw new Error(
+          `[db] SQLite quick_check failed: ${result}\n` +
+          `数据库文件可能已损坏：${DB_PATH}\n` +
+          `修复指引：\n` +
+          `  1) 立即停止服务，避免进一步写入；\n` +
+          `  2) 备份当前文件（含 -wal/-shm）到只读介质；\n` +
+          `  3) 优先使用 nowen-note 的备份恢复功能（POST /api/backups/<file>/restore?dryRun=1 预览）；\n` +
+          `  4) 若无可用备份，可尝试：\n` +
+          `       sqlite3 ${path.basename(DB_PATH)} ".recover" | sqlite3 recovered.db\n` +
+          `     再用 recovered.db 替换原文件。`
+        );
+      }
+    } catch (e) {
+      // quick_check 自身抛错（极端损坏）也让启动失败。
+      if (e instanceof Error && e.message.startsWith("[db]")) throw e;
+      throw new Error(
+        `[db] SQLite quick_check 执行异常: ${e instanceof Error ? e.message : String(e)}\n` +
+        `数据库文件可能已损坏：${DB_PATH}`
+      );
+    }
     initSchema(db);
+    // ---- D3：版本化迁移 ----
+    // initSchema 内部用 IF NOT EXISTS / ALTER 兜底负责"基线 + 历史增量"，
+    // 之后所有新 schema 演化通过 migrations.ts 的 MIGRATIONS 数组登记，
+    // 由 runMigrations 在事务里串行执行并把版本写进 schema_migrations。
+    // 拒绝降级：发现 DB 版本高于程序支持版本时直接抛错，避免旧程序写坏新库。
+    try {
+      runMigrations(db);
+    } catch (e) {
+      // 让进程启动失败：迁移失败比"看似能跑"安全得多。
+      try { db.close(); } catch { /* ignore */ }
+      // @ts-expect-error: 允许重新打开
+      db = undefined;
+      throw e;
+    }
   }
   return db;
+}
+
+/**
+ * 返回当前数据库文件实际应用到的 schema 版本号。
+ * 备份系统用它写入 meta.json，恢复时校验"备份的 schema 是否与当前程序兼容"。
+ */
+export function getDbSchemaVersion(): number {
+  return getCurrentSchemaVersion(getDb());
+}
+
+/** 当前程序代码已知的最高 schema 版本号（== max(MIGRATIONS.version)）。 */
+export function getCodeSchemaVersion(): number {
+  return CURRENT_SCHEMA_VERSION;
 }
 
 function initSchema(db: Database.Database) {
@@ -170,11 +244,33 @@ function initSchema(db: Database.Database) {
       userId TEXT NOT NULL,
       contentText TEXT DEFAULT '',
       mood TEXT DEFAULT '',
+      -- 图片：JSON 数组字符串，元素是 diary_attachments.id（uuid）。
+      -- 默认 '[]' 而不是 NULL，方便 SQL/前端无脑 JSON.parse。
+      images TEXT NOT NULL DEFAULT '[]',
       createdAt TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS idx_diaries_user_created ON diaries(userId, createdAt DESC);
+
+    -- 说说图片附件表（与 notes 的 attachments 表平行，避免 noteId NOT NULL 限制）
+    --   diaryId 可空：发布前先上传（拿到 id 后再 attach 到 diary），
+    --                 配合 createdAt 做"超时未绑定 → 视为孤儿清理"
+    --   path 与 attachments 表语义一致：相对 ATTACHMENTS_DIR 的文件名
+    CREATE TABLE IF NOT EXISTS diary_attachments (
+      id TEXT PRIMARY KEY,
+      diaryId TEXT,
+      userId TEXT NOT NULL,
+      mimeType TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      path TEXT NOT NULL,
+      createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (diaryId) REFERENCES diaries(id) ON DELETE CASCADE,
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_diary_attachments_diary ON diary_attachments(diaryId);
+    CREATE INDEX IF NOT EXISTS idx_diary_attachments_user_created ON diary_attachments(userId, createdAt);
 
     -- 分享记录表
     CREATE TABLE IF NOT EXISTS shares (
@@ -460,6 +556,7 @@ function initSchema(db: Database.Database) {
         userId TEXT NOT NULL,
         contentText TEXT DEFAULT '',
         mood TEXT DEFAULT '',
+        images TEXT NOT NULL DEFAULT '[]',
         createdAt TEXT NOT NULL DEFAULT (datetime('now')),
         FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
       );
@@ -468,6 +565,60 @@ function initSchema(db: Database.Database) {
   } catch {
     // 新表或表不存在，跳过
   }
+
+  // 迁移：旧版 diaries 表（date 已清理但还没有 images 列）补加 images 列。
+  // 与 notes.isLocked / users.lockedUntil 等迁移同款 ALTER TABLE 模式。
+  try {
+    db.prepare("SELECT images FROM diaries LIMIT 1").get();
+  } catch {
+    db.prepare("ALTER TABLE diaries ADD COLUMN images TEXT NOT NULL DEFAULT '[]'").run();
+  }
+
+  // 迁移：补建 diary_attachments 表（旧库初始化时这张表还不存在）。
+  // CREATE TABLE IF NOT EXISTS 是幂等的，直接 exec 即可。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS diary_attachments (
+      id TEXT PRIMARY KEY,
+      diaryId TEXT,
+      userId TEXT NOT NULL,
+      mimeType TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      path TEXT NOT NULL,
+      createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (diaryId) REFERENCES diaries(id) ON DELETE CASCADE,
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_diary_attachments_diary ON diary_attachments(diaryId);
+    CREATE INDEX IF NOT EXISTS idx_diary_attachments_user_created ON diary_attachments(userId, createdAt);
+  `);
+
+  // 任务附件表（待办事项模块支持插入图片）
+  // ----------------------------------------------------------------------
+  // 设计要点：
+  //   - 与 attachments / diary_attachments 同款：文件落盘到 ATTACHMENTS_DIR，
+  //     行里只存元数据。
+  //   - taskId 可空：允许"先上传图片、再随新任务一起提交"的链路（典型场景：
+  //     用户在新建任务输入框里粘贴图片，那一刻 task 行还没创建）。前端创建
+  //     任务后再把附件 id 关联回 task。未关联的附件由定期清理脚本处理。
+  //   - userId NOT NULL：用于上传 ACL（自己上传的自己能删）+ 孤儿清理审计。
+  //   - 不与 attachments 表合并：attachments 强外键到 notes，语义耦合度太高
+  //     （ACL、CASCADE、迁移工具）。新表保持解耦更简单。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_attachments (
+      id TEXT PRIMARY KEY,
+      taskId TEXT,
+      userId TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      mimeType TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      path TEXT NOT NULL,
+      createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (taskId) REFERENCES tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments(taskId);
+    CREATE INDEX IF NOT EXISTS idx_task_attachments_user_created ON task_attachments(userId, createdAt);
+  `);
 
   // ==============================================================
   // 安全加固 Phase 6：2FA（TOTP）+ 会话管理
@@ -548,4 +699,103 @@ function initSchema(db: Database.Database) {
 
     CREATE INDEX IF NOT EXISTS idx_ai_chat_user_created ON ai_chat_messages(userId, createdAt);
   `);
+
+  // ==============================================================
+  // RAG Phase 1：笔记向量化（Embedding）基础表
+  // ==============================================================
+  //
+  // 设计要点：
+  //   - note_embeddings：每个 chunk 一行；当前 Phase 1 还没接 sqlite-vec，
+  //     向量先以 JSON 文本形式存在 vectorJson（一维 float 数组）。
+  //     Phase 2 接入 sqlite-vec 时会再建一个虚表 vec_note_chunks 并按 rowid
+  //     关联，本表的 vectorJson 列保留作"原始向量备份"。
+  //   - embedding_queue：异步任务队列，单条 noteId 对应一行。
+  //     status: 'pending' | 'processing' | 'done' | 'failed'
+  //     用 ON CONFLICT(noteId) DO UPDATE 实现"覆盖入队"——
+  //     笔记连续修改 5 次只会留 1 条 pending。
+  //   - 触发器：notes INSERT / contentText 或 title 变化时自动入队。
+  //     和现有的 notes_au FTS 触发器同款条件，避免无意义重排。
+  //   - 删除笔记 → CASCADE 清理 note_embeddings；队列也加触发器同步删除。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS note_embeddings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      noteId TEXT NOT NULL,
+      userId TEXT NOT NULL,
+      model TEXT NOT NULL,
+      dim INTEGER NOT NULL,
+      chunkIndex INTEGER NOT NULL DEFAULT 0,
+      chunkText TEXT NOT NULL DEFAULT '',
+      vectorJson TEXT NOT NULL DEFAULT '[]',
+      createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (noteId) REFERENCES notes(id) ON DELETE CASCADE,
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_note_embeddings_note ON note_embeddings(noteId);
+    CREATE INDEX IF NOT EXISTS idx_note_embeddings_user ON note_embeddings(userId);
+    CREATE INDEX IF NOT EXISTS idx_note_embeddings_model ON note_embeddings(model);
+
+    CREATE TABLE IF NOT EXISTS embedding_queue (
+      noteId TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      retries INTEGER NOT NULL DEFAULT 0,
+      lastError TEXT,
+      enqueuedAt TEXT NOT NULL DEFAULT (datetime('now')),
+      updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (noteId) REFERENCES notes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_embedding_queue_status ON embedding_queue(status, enqueuedAt);
+
+    -- INSERT 触发：新笔记入队（contentText 可能为空，由 worker 决定是否真的算 embedding）
+    DROP TRIGGER IF EXISTS notes_embed_ai;
+    CREATE TRIGGER notes_embed_ai AFTER INSERT ON notes
+    WHEN new.isTrashed = 0
+    BEGIN
+      INSERT INTO embedding_queue (noteId, userId, status, retries, enqueuedAt, updatedAt)
+      VALUES (new.id, new.userId, 'pending', 0, datetime('now'), datetime('now'))
+      ON CONFLICT(noteId) DO UPDATE SET
+        status = 'pending',
+        retries = 0,
+        lastError = NULL,
+        updatedAt = datetime('now');
+    END;
+
+    -- UPDATE 触发：仅当 title/contentText 真正变化时才重新入队
+    -- isTrashed: 0→1 进回收站时不重排（也可以选择删除，简单起见交给 worker 跳过）
+    DROP TRIGGER IF EXISTS notes_embed_au;
+    CREATE TRIGGER notes_embed_au AFTER UPDATE ON notes
+    WHEN (old.title IS NOT new.title OR old.contentText IS NOT new.contentText)
+         AND new.isTrashed = 0
+    BEGIN
+      INSERT INTO embedding_queue (noteId, userId, status, retries, enqueuedAt, updatedAt)
+      VALUES (new.id, new.userId, 'pending', 0, datetime('now'), datetime('now'))
+      ON CONFLICT(noteId) DO UPDATE SET
+        status = 'pending',
+        retries = 0,
+        lastError = NULL,
+        updatedAt = datetime('now');
+    END;
+  `);
+
+  // 一次性回填：老库存量笔记入队，方便首次启动后台 worker 后能逐步建立索引。
+  // 仅在 embedding_queue 完全为空时执行，避免重启时反复回填。
+  // 注意：只入队没有任何 embedding 的笔记，避免破坏已建好的索引。
+  try {
+    const queued = db.prepare("SELECT COUNT(*) as c FROM embedding_queue").get() as { c: number };
+    if (queued.c === 0) {
+      db.prepare(`
+        INSERT INTO embedding_queue (noteId, userId, status, retries, enqueuedAt, updatedAt)
+        SELECT n.id, n.userId, 'pending', 0, datetime('now'), datetime('now')
+        FROM notes n
+        WHERE n.isTrashed = 0
+          AND NOT EXISTS (SELECT 1 FROM note_embeddings e WHERE e.noteId = n.id)
+        ON CONFLICT(noteId) DO NOTHING
+      `).run();
+    }
+  } catch (e) {
+    // 回填失败不影响主流程
+    console.warn("[schema] backfill embedding_queue failed:", e);
+  }
 }

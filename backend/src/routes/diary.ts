@@ -1,91 +1,544 @@
+/**
+ * 说说（diary）路由
+ * ---------------------------------------------------------------------------
+ * 模块组成：
+ *   - diaryRouter（默认导出）：受 JWT 保护的业务接口（发布 / 时间线 / 删除 /
+ *     统计 / 图片上传 / 删除孤儿图片）。挂在 /api/diary。
+ *   - handleDownloadDiaryImage：不走 JWT 的下载 handler。原因同
+ *     attachments.handleDownloadAttachment：<img> 标签的原生请求不会自动带
+ *     Authorization header。授权模型也保持一致 ——「id 不可枚举（uuid）」。
+ *
+ * 图片上传时序：
+ *   1) 前端选好图后立刻 POST /api/diary/attachments 上传，拿到 { id, url }
+ *      → 此时 diary_attachments 行的 diaryId 是 NULL（"悬空"状态）
+ *   2) 用户点"发布" → POST /api/diary 把 images: string[]（uuid 数组）一起提交
+ *      → 后端把这些 id 的 diaryId 字段更新为新建的 diary.id
+ *   3) 上传后超过 24h 仍未绑定的孤儿，由模块加载时启动的轻量清理器扫除磁盘 + DB 行
+ *
+ * 与 notes 的 attachments 对比：
+ *   - 这里 diaryId 允许 NULL（先上传后绑定），attachments 的 noteId 是 NOT NULL
+ *   - 这里没有 ACL 中间件，因为说说本来就是个人空间产物（无协作 / 分享）
+ *   - 文件落盘复用同一个 ATTACHMENTS_DIR（共用磁盘目录但各自管自己的 DB 表）
+ */
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { getDb } from "../db/schema";
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
+import {
+  ensureAttachmentsDir,
+  getAttachmentsDir,
+  MIME_TO_EXT,
+} from "./attachments";
 
 const diary = new Hono();
 
-// 发布一条说说
-diary.post("/", (c) => {
+// 单条说说最多 9 张图（朋友圈风格；前端也应该卡同样的上限做"快速失败"）
+const MAX_IMAGES_PER_DIARY = 9;
+
+// 单张图片大小上限（字节）。比 notes 的 50MB 更保守，因为说说量大、不应被截图怼爆磁盘
+const MAX_DIARY_IMAGE_SIZE = 10 * 1024 * 1024;
+
+// 允许的图片 MIME（与 attachments 路由对齐，但不收 svg —— 防止 XSS 飘到时间线）
+const ALLOWED_DIARY_IMAGE_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+]);
+
+// 上传超过这么久仍未绑定 diaryId 视为孤儿，会被清理器扫除
+const ORPHAN_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+
+// ---------------------------------------------------------------------------
+// 工具：把数据库行（含 images 文本字段）规整成前端期望的形状
+// ---------------------------------------------------------------------------
+interface DiaryRow {
+  id: string;
+  userId: string;
+  contentText: string;
+  mood: string;
+  images: string;
+  createdAt: string;
+}
+
+function rowToDiary(row: DiaryRow) {
+  let images: string[] = [];
+  try {
+    const parsed = JSON.parse(row.images || "[]");
+    if (Array.isArray(parsed)) {
+      images = parsed.filter((x): x is string => typeof x === "string");
+    }
+  } catch {
+    /* 旧数据脏 → 当作没图，避免接口 500 */
+  }
+  return {
+    id: row.id,
+    userId: row.userId,
+    contentText: row.contentText,
+    mood: row.mood,
+    images,
+    createdAt: row.createdAt,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 工具：删除一组 diary_attachments 行对应的磁盘文件
+//   外键 ON DELETE CASCADE 只清 DB 行，磁盘文件需要手动收拾，否则积累孤儿。
+//   返回真正 unlink 成功的文件数（仅用于日志）。
+// ---------------------------------------------------------------------------
+function deleteDiaryImageFilesByIds(ids: string[]): number {
+  if (!ids.length) return 0;
+  const db = getDb();
+  const placeholders = ids.map(() => "?").join(",");
+  let rows: { path: string }[] = [];
+  try {
+    rows = db
+      .prepare(`SELECT path FROM diary_attachments WHERE id IN (${placeholders})`)
+      .all(...ids) as { path: string }[];
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  const dir = getAttachmentsDir();
+  for (const r of rows) {
+    if (!r?.path) continue;
+    const abs = path.join(dir, r.path);
+    try {
+      if (fs.existsSync(abs)) {
+        fs.unlinkSync(abs);
+        removed++;
+      }
+    } catch {
+      /* 单个失败不阻塞批量 */
+    }
+  }
+  return removed;
+}
+
+// ===========================================================================
+// 说说基础接口
+// ===========================================================================
+
+/**
+ * 发布一条说说
+ *   body: { contentText: string, mood?: string, images?: string[] }
+ *   - images 是先通过 POST /api/diary/attachments 上传得到的 uuid 数组；
+ *     这里把它们的 diaryId 字段 UPDATE 为新 diary.id，完成"绑定"。
+ *   - 只更新真正属于当前 userId 且当前 diaryId 仍为 NULL 的行（防止有人偷接别人的图）。
+ */
+diary.post("/", async (c) => {
   const db = getDb();
   const userId = c.req.header("X-User-Id")!;
 
-  return c.req.json().then((body: any) => {
-    const { contentText, mood } = body;
-    if (!contentText || !contentText.trim()) {
-      return c.json({ error: "Content is required" }, 400);
-    }
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  const { contentText, mood } = body;
+  const rawImages = Array.isArray(body.images) ? body.images : [];
+  const images: string[] = rawImages
+    .filter((x: unknown) => typeof x === "string")
+    .slice(0, MAX_IMAGES_PER_DIARY);
 
-    const id = crypto.randomUUID();
+  // 内容与图片至少一项非空（纯图片说说也允许）
+  const hasText = typeof contentText === "string" && contentText.trim().length > 0;
+  if (!hasText && images.length === 0) {
+    return c.json({ error: "Content or images required" }, 400);
+  }
+
+  const id = crypto.randomUUID();
+
+  // 把整批写入放进事务：要么 diary 行 + 图片 attach 一起成功，要么全部回滚
+  const tx = db.transaction(() => {
     db.prepare(
-      "INSERT INTO diaries (id, userId, contentText, mood) VALUES (?, ?, ?, ?)"
-    ).run(id, userId, contentText.trim(), mood || "");
+      "INSERT INTO diaries (id, userId, contentText, mood, images) VALUES (?, ?, ?, ?, ?)",
+    ).run(
+      id,
+      userId,
+      hasText ? contentText.trim() : "",
+      typeof mood === "string" ? mood : "",
+      JSON.stringify(images),
+    );
 
-    const created = db.prepare("SELECT * FROM diaries WHERE id = ?").get(id);
-    return c.json(created, 201);
+    if (images.length > 0) {
+      // 只 attach 真正"属于本人 + 仍悬空"的图片，杜绝越权 / 重复绑定。
+      // 然后再读回真实更新成功的 id 列表覆写 images 字段，防止前端塞进无效 uuid
+      // 后展示时拉到 404。
+      const placeholders = images.map(() => "?").join(",");
+      const upd = db.prepare(
+        `UPDATE diary_attachments
+            SET diaryId = ?
+          WHERE id IN (${placeholders})
+            AND userId = ?
+            AND diaryId IS NULL`,
+      );
+      upd.run(id, ...images, userId);
+
+      const validRows = db
+        .prepare(
+          `SELECT id FROM diary_attachments
+            WHERE id IN (${placeholders}) AND userId = ? AND diaryId = ?`,
+        )
+        .all(...images, userId, id) as { id: string }[];
+      const validIds = validRows.map((r) => r.id);
+      // 保留前端传入的顺序（朋友圈宫格的视觉顺序由用户决定）
+      const orderedValid = images.filter((i) => validIds.includes(i));
+      if (orderedValid.length !== images.length) {
+        db.prepare("UPDATE diaries SET images = ? WHERE id = ?").run(
+          JSON.stringify(orderedValid),
+          id,
+        );
+      }
+    }
   });
+
+  try {
+    tx();
+  } catch (err: any) {
+    return c.json({ error: `发布失败：${err?.message || err}` }, 500);
+  }
+
+  const created = db.prepare("SELECT * FROM diaries WHERE id = ?").get(id) as DiaryRow;
+  return c.json(rowToDiary(created), 201);
 });
 
-// 获取时间线（分页，按时间倒序）
+// ---------------------------------------------------------------------------
+// 时间筛选：把前端传入的 from/to 规整成"可与 createdAt 字符串比较"的形式。
+//   - createdAt 入库形如 "YYYY-MM-DD HH:MM:SS"（UTC，由 SQLite datetime('now')）
+//   - 前端可以传：
+//       * "YYYY-MM-DD"  → from 视为 00:00:00、to 视为 23:59:59（同 UTC 字符串语义）
+//       * "YYYY-MM-DD HH:MM:SS" / "YYYY-MM-DDTHH:MM:SS[Z]" → 全部归一到空格分隔的形式
+//   - 非法值直接忽略（返回 null），不报错，避免前端日期组件偶尔出脏值阻塞列表
+// ---------------------------------------------------------------------------
+function normalizeDateBound(raw: string | undefined, kind: "from" | "to"): string | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  if (!s) return null;
+  // 纯日期：补时分秒
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return kind === "from" ? `${s} 00:00:00` : `${s} 23:59:59`;
+  }
+  // 完整时间：把 T/Z 去掉，统一成 SQLite 习惯的空格分隔
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?Z?$/);
+  if (m) return `${m[1]} ${m[2]}`;
+  return null; // 形态不认识就当没传
+}
+
+// 公用：把 userId + 可选 from/to 拼成 WHERE 子句 + 参数数组（cursor 由调用方追加）
+function buildTimeRangeWhere(
+  userId: string,
+  from: string | null,
+  to: string | null,
+): { sql: string; args: unknown[] } {
+  let sql = "userId = ?";
+  const args: unknown[] = [userId];
+  if (from) {
+    sql += " AND createdAt >= ?";
+    args.push(from);
+  }
+  if (to) {
+    sql += " AND createdAt <= ?";
+    args.push(to);
+  }
+  return { sql, args };
+}
+
+// 获取时间线（分页，按时间倒序，可按 from/to 过滤）
 diary.get("/timeline", (c) => {
   const db = getDb();
   const userId = c.req.header("X-User-Id")!;
   const cursor = c.req.query("cursor"); // 上次最后一条的 createdAt
   const limit = Math.min(parseInt(c.req.query("limit") || "20"), 50);
+  const from = normalizeDateBound(c.req.query("from"), "from");
+  const to = normalizeDateBound(c.req.query("to"), "to");
 
-  let rows;
+  const { sql: whereSql, args } = buildTimeRangeWhere(userId, from, to);
+  let finalWhere = whereSql;
+  const finalArgs = [...args];
   if (cursor) {
-    rows = db.prepare(
-      `SELECT * FROM diaries 
-       WHERE userId = ? AND createdAt < ?
-       ORDER BY createdAt DESC
-       LIMIT ?`
-    ).all(userId, cursor, limit);
-  } else {
-    rows = db.prepare(
-      `SELECT * FROM diaries 
-       WHERE userId = ?
-       ORDER BY createdAt DESC
-       LIMIT ?`
-    ).all(userId, limit);
+    finalWhere += " AND createdAt < ?";
+    finalArgs.push(cursor);
   }
 
-  const hasMore = rows.length === limit;
-  const nextCursor = rows.length > 0 ? (rows[rows.length - 1] as any).createdAt : null;
+  const rows = db
+    .prepare(
+      `SELECT * FROM diaries
+       WHERE ${finalWhere}
+       ORDER BY createdAt DESC
+       LIMIT ?`,
+    )
+    .all(...finalArgs, limit) as DiaryRow[];
 
-  return c.json({ items: rows, hasMore, nextCursor });
+  const hasMore = rows.length === limit;
+  const nextCursor = rows.length > 0 ? rows[rows.length - 1].createdAt : null;
+
+  return c.json({
+    items: rows.map(rowToDiary),
+    hasMore,
+    nextCursor,
+  });
 });
 
-// 删除一条说说
+// 删除一条说说（同时清理它名下所有图片：磁盘 + DB 行）
 diary.delete("/:id", (c) => {
   const db = getDb();
   const userId = c.req.header("X-User-Id")!;
   const id = c.req.param("id");
 
-  const row = db.prepare(
-    "SELECT * FROM diaries WHERE id = ? AND userId = ?"
-  ).get(id, userId);
+  const row = db
+    .prepare("SELECT id FROM diaries WHERE id = ? AND userId = ?")
+    .get(id, userId);
   if (!row) return c.json({ error: "Not found" }, 404);
 
+  // 先查出图片 id（DELETE CASCADE 之后行就没了，查不到 path）
+  const imgRows = db
+    .prepare("SELECT id FROM diary_attachments WHERE diaryId = ?")
+    .all(id) as { id: string }[];
+  const imgIds = imgRows.map((r) => r.id);
+
+  // 必须**先**删磁盘文件，再删 DB（删 DB 后 path 就查不到了）
+  deleteDiaryImageFilesByIds(imgIds);
+
+  // diary_attachments 通过 ON DELETE CASCADE 自动清理
   db.prepare("DELETE FROM diaries WHERE id = ?").run(id);
   return c.json({ success: true });
 });
 
 // 统计
+//   - 不带 from/to：返回"全部 + 今日"两个数（保留旧行为，兼容已有调用）
+//   - 带 from/to：返回当前筛选范围内的总数（todayCount 仍按"今日"统计，不受筛选影响）
 diary.get("/stats", (c) => {
   const db = getDb();
   const userId = c.req.header("X-User-Id")!;
+  const from = normalizeDateBound(c.req.query("from"), "from");
+  const to = normalizeDateBound(c.req.query("to"), "to");
 
-  const total = (db.prepare(
-    "SELECT COUNT(*) as count FROM diaries WHERE userId = ?"
-  ).get(userId) as any).count;
+  const { sql: whereSql, args } = buildTimeRangeWhere(userId, from, to);
+  const total = (
+    db
+      .prepare(`SELECT COUNT(*) as count FROM diaries WHERE ${whereSql}`)
+      .get(...args) as any
+  ).count;
 
-  // 今日发布数
+  // 今日发布数：始终按"今天"统计，独立于筛选范围（前端用作活跃度参考）
   const today = new Date().toISOString().split("T")[0];
-  const todayCount = (db.prepare(
-    "SELECT COUNT(*) as count FROM diaries WHERE userId = ? AND createdAt >= ?"
-  ).get(userId, today) as any).count;
+  const todayCount = (
+    db
+      .prepare("SELECT COUNT(*) as count FROM diaries WHERE userId = ? AND createdAt >= ?")
+      .get(userId, today) as any
+  ).count;
 
   return c.json({ total, todayCount });
 });
+
+// ===========================================================================
+// 说说图片上传（受 JWT 保护）
+//   挂在 /api/diary/attachments，返回的 url 走下面 handleDownloadDiaryImage。
+// ===========================================================================
+
+/**
+ * 上传一张说说图片。
+ *   POST /api/diary/attachments
+ *   multipart: file
+ *
+ * 此时返回的附件 diaryId 是 NULL，等用户实际点"发布"时 POST /api/diary
+ * 再带上 images: [id...] 完成绑定（见上面 diary.post 注释）。
+ */
+diary.post("/attachments", async (c) => {
+  const userId = c.req.header("X-User-Id") || "";
+  const db = getDb();
+
+  let body: Record<string, any>;
+  try {
+    body = await c.req.parseBody();
+  } catch {
+    return c.json({ error: "invalid multipart body" }, 400);
+  }
+
+  const file = body.file;
+  if (!(file instanceof File)) {
+    return c.json({ error: "file 字段缺失或非文件" }, 400);
+  }
+
+  if (file.size > MAX_DIARY_IMAGE_SIZE) {
+    return c.json(
+      { error: `图片过大（最大 ${MAX_DIARY_IMAGE_SIZE / 1024 / 1024}MB）` },
+      413,
+    );
+  }
+  const mime = (file.type || "application/octet-stream").toLowerCase();
+  if (!ALLOWED_DIARY_IMAGE_MIMES.has(mime)) {
+    return c.json({ error: `不支持的 MIME 类型: ${mime}` }, 415);
+  }
+
+  // 单用户当前悬空附件数限制：防止恶意客户端只上传不发布把磁盘怼爆。
+  // 这里用一个简单上限 50 张：正常用户撑死也就一次发 9 张；触发就回 429。
+  const orphanCount = (
+    db
+      .prepare(
+        "SELECT COUNT(*) as count FROM diary_attachments WHERE userId = ? AND diaryId IS NULL",
+      )
+      .get(userId) as any
+  ).count;
+  if (orphanCount >= 50) {
+    return c.json(
+      { error: "上传过于频繁，请稍后再试", code: "TOO_MANY_PENDING" },
+      429,
+    );
+  }
+
+  ensureAttachmentsDir();
+  const id = crypto.randomUUID();
+  const ext = MIME_TO_EXT[mime] || "bin";
+  const filename = `${id}.${ext}`;
+  const savePath = path.join(getAttachmentsDir(), filename);
+
+  try {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    fs.writeFileSync(savePath, buffer);
+  } catch (err: any) {
+    return c.json({ error: `写入文件失败: ${err?.message || err}` }, 500);
+  }
+
+  try {
+    db.prepare(
+      `INSERT INTO diary_attachments (id, diaryId, userId, mimeType, size, path)
+       VALUES (?, NULL, ?, ?, ?, ?)`,
+    ).run(id, userId, mime, file.size, filename);
+  } catch (err: any) {
+    try {
+      fs.unlinkSync(savePath);
+    } catch {
+      /* ignore */
+    }
+    return c.json({ error: `写入数据库失败: ${err?.message || err}` }, 500);
+  }
+
+  return c.json(
+    {
+      id,
+      url: `/api/diary/attachments/${id}`,
+      mimeType: mime,
+      size: file.size,
+    },
+    201,
+  );
+});
+
+/**
+ * 删除一张悬空（未绑定 diary）的图片。前端在用户预览时点 × 会调用此接口。
+ * 已绑定 diary 的图片不允许通过这里删除（要走 DELETE /api/diary/:id 整条删）。
+ */
+diary.delete("/attachments/:id", (c) => {
+  const db = getDb();
+  const userId = c.req.header("X-User-Id") || "";
+  const id = c.req.param("id");
+
+  const row = db
+    .prepare(
+      "SELECT id, userId, diaryId, path FROM diary_attachments WHERE id = ?",
+    )
+    .get(id) as
+    | { id: string; userId: string; diaryId: string | null; path: string }
+    | undefined;
+  if (!row) return c.json({ error: "图片不存在" }, 404);
+  if (row.userId !== userId) {
+    return c.json({ error: "无权删除该图片" }, 403);
+  }
+  if (row.diaryId) {
+    return c.json(
+      { error: "图片已发布，请删除整条说说", code: "ALREADY_BOUND" },
+      400,
+    );
+  }
+
+  const abs = path.join(getAttachmentsDir(), row.path);
+  try {
+    if (fs.existsSync(abs)) fs.unlinkSync(abs);
+  } catch {
+    /* 磁盘删失败不阻塞 DB 删 */
+  }
+  db.prepare("DELETE FROM diary_attachments WHERE id = ?").run(id);
+  return c.json({ success: true });
+});
+
+// ===========================================================================
+// 下载（不走 JWT；index.ts 会显式挂在 JWT 之前）
+// ===========================================================================
+
+/**
+ * 下载一张说说图片。授权模型同 attachments.handleDownloadAttachment：
+ *   - id 是 uuid，不可枚举即天然权限；
+ *   - <img> 标签拿不到 Authorization header 所以不能走 JWT；
+ *   - 浏览器可以走长缓存（uuid 文件名不可变）。
+ */
+export function handleDownloadDiaryImage(c: Context): Response {
+  const id = c.req.param("id");
+  const db = getDb();
+  const row = db
+    .prepare("SELECT id, mimeType, path FROM diary_attachments WHERE id = ?")
+    .get(id) as { id: string; mimeType: string; path: string } | undefined;
+  if (!row) return c.json({ error: "图片不存在" }, 404);
+
+  const absPath = path.join(getAttachmentsDir(), row.path);
+  if (!fs.existsSync(absPath)) {
+    return c.json({ error: "图片文件丢失" }, 404);
+  }
+
+  const buffer = fs.readFileSync(absPath);
+  return new Response(buffer, {
+    headers: {
+      "Content-Type": row.mimeType || "application/octet-stream",
+      "Cache-Control": "public, max-age=31536000, immutable",
+    },
+  });
+}
+
+// ===========================================================================
+// 孤儿清理：进程启动时跑一次 + 每 6 小时跑一次
+//   清理超过 ORPHAN_TTL_MS 仍未绑定 diaryId 的悬空附件（DB 行 + 磁盘文件）。
+//   这里用 setInterval 而不是 cron，单进程部署够用；多进程部署只会有一个把活干掉，
+//   重复执行也是幂等的（已删的找不到行就跳过），无副作用。
+// ===========================================================================
+function sweepOrphanDiaryImages(): number {
+  try {
+    const db = getDb();
+    const cutoffIso = new Date(Date.now() - ORPHAN_TTL_MS)
+      .toISOString()
+      .slice(0, 19)
+      .replace("T", " ");
+    const orphans = db
+      .prepare(
+        `SELECT id FROM diary_attachments
+          WHERE diaryId IS NULL AND createdAt < ?`,
+      )
+      .all(cutoffIso) as { id: string }[];
+    if (!orphans.length) return 0;
+    const ids = orphans.map((o) => o.id);
+    const removed = deleteDiaryImageFilesByIds(ids);
+    const placeholders = ids.map(() => "?").join(",");
+    db.prepare(
+      `DELETE FROM diary_attachments WHERE id IN (${placeholders})`,
+    ).run(...ids);
+    if (removed > 0) {
+      console.log(
+        `[diary] swept ${ids.length} orphan diary images (unlinked ${removed} files)`,
+      );
+    }
+    return ids.length;
+  } catch (err) {
+    console.warn("[diary] sweepOrphanDiaryImages failed:", err);
+    return 0;
+  }
+}
+
+// 启动后延后 30 秒跑第一次（避开服务刚起来时的拥塞），之后每 6 小时一次
+setTimeout(sweepOrphanDiaryImages, 30_000);
+setInterval(sweepOrphanDiaryImages, 6 * 60 * 60 * 1000);
 
 export default diary;

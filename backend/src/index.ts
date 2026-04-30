@@ -16,11 +16,12 @@ import dataFileRouter from "./routes/data-file";
 import settingsRouter from "./routes/settings";
 import fontsRouter from "./routes/fonts";
 import attachmentsRouter, { handleDownloadAttachment } from "./routes/attachments";
+import taskAttachmentsRouter, { handleDownloadTaskAttachment } from "./routes/task-attachments";
 import micloudRouter from "./routes/micloud";
 import oppoCloudRouter from "./routes/oppocloud";
 import icloudRouter from "./routes/icloud";
 import mindmapsRouter from "./routes/mindmaps";
-import diaryRouter from "./routes/diary";
+import diaryRouter, { handleDownloadDiaryImage } from "./routes/diary";
 
 import aiRouter from "./routes/ai";
 import pluginsRouter from "./routes/plugins";
@@ -34,7 +35,7 @@ import usersRouter from "./routes/users";
 import tokensRouter from "./routes/tokens";
 import { seedDatabase } from "./db/seed";
 import { initApiTokensTable, looksLikeApiToken, resolveApiToken } from "./lib/api-tokens";
-import { getDb } from "./db/schema";
+import { getDb, closeDb } from "./db/schema";
 import { generateOpenAPISpec } from "./services/openapi";
 import { getBackupManager } from "./services/backup";
 import { attachRealtimeServer, getRealtimeStats, shutdownRealtime } from "./services/realtime";
@@ -42,6 +43,8 @@ import { getYjsStats } from "./services/yjs";
 import { initWebhookTables } from "./services/webhook";
 import { initAuditTables } from "./services/audit";
 import { publishMdns, stopMdns } from "./services/discovery";
+import { startEmbeddingWorker, stopEmbeddingWorker } from "./services/embedding-worker";
+import { initVecStore, reindexAllVectors, isVecAvailable } from "./services/vec-store";
 
 const app = new Hono();
 
@@ -192,6 +195,15 @@ app.get("/api/fonts/file/:id", (c) => {
 //     走 JWT 中间件必然 401。和字体一样把下载 handler 注册在 JWT 中间件之前。
 //   - 授权靠附件 id 不可枚举（uuid）保护；详细权衡见 routes/attachments.ts 顶部注释。
 app.get("/api/attachments/:id", handleDownloadAttachment);
+
+// 任务附件下载（无需 JWT），与 attachments 同款"id 不可枚举"授权模型。
+// 任务列表里的图片缩略图通过 <img src="/api/task-attachments/<id>"> 拉取。
+app.get("/api/task-attachments/:id", handleDownloadTaskAttachment);
+
+// 说说图片下载（同样不走 JWT，授权模型同上）。
+//   注意路径具体：/api/diary/attachments/:id，必须比 diaryRouter（在 JWT 之后挂的
+//   /api/diary/*）注册得**更早**，否则会被 JWT 中间件拦截。
+app.get("/api/diary/attachments/:id", handleDownloadDiaryImage);
 
 // JWT 鉴权中间件：保护所有 /api/* 路由（auth 和 health 已在上方注册，不受影响）
 //
@@ -363,6 +375,7 @@ app.route("/api/tokens", tokensRouter);
 app.route("/api/settings", settingsRouter);
 app.route("/api/fonts", fontsRouter);
 app.route("/api/attachments", attachmentsRouter);
+app.route("/api/task-attachments", taskAttachmentsRouter);
 
 // 获取当前登录用户信息
 app.get("/api/me", (c) => {
@@ -441,10 +454,50 @@ if (process.env.NODE_ENV === "production") {
   });
 }
 
-// 启动自动备份（每24小时）
+// 启动自动备份：按 system_settings + ENV 决定是否启动及间隔
+// （管理员可在备份页关闭/调整间隔，重启后仍生效；首次安装走 ENV 默认 24h）
 try {
-  getBackupManager().startAutoBackup(24);
+  const mgr = getBackupManager();
+  const cfg = mgr.readEffectiveAutoConfig();
+  if (cfg.enabled) {
+    mgr.startAutoBackup(cfg.intervalHours, { persist: false });
+  } else {
+    console.log("[Backup] 自动备份已禁用（system_settings 或 ENV 配置）");
+  }
 } catch { /* 备份启动失败不阻塞服务 */ }
+
+// 启动 RAG Phase 2：sqlite-vec 扩展加载 + worker
+//   - initVecStore：把 sqlite-vec 加载进当前 db 连接；失败时自动 noop（worker
+//     仍能正常算 embedding 写 note_embeddings.vectorJson，只是没有 KNN 加速）
+//   - 加载成功后若 note_embeddings 已有数据但 vec 表是空（升级场景）→ 自动 reindex
+//   - startEmbeddingWorker：完全异步、不阻塞主流程
+//   - 进程退出时由 gracefulShutdown 调 stopEmbeddingWorker 清理 timer
+try {
+  const vecInit = initVecStore();
+  if (vecInit.loaded && isVecAvailable()) {
+    // 检查是否需要冷启动重建（vec 表为空但 note_embeddings 非空）
+    try {
+      const db = getDb();
+      const vecCount = (db.prepare("SELECT COUNT(*) as c FROM vec_note_chunks").get() as { c: number }).c;
+      const embCount = (db.prepare("SELECT COUNT(*) as c FROM note_embeddings").get() as { c: number }).c;
+      if (vecCount === 0 && embCount > 0) {
+        console.log(`[init] vec_note_chunks empty but ${embCount} embeddings present, reindexing...`);
+        const r = reindexAllVectors();
+        console.log(`[init] reindex done: ${r.written}/${r.total} rows, dim=${r.dim}`);
+      }
+    } catch (e) {
+      console.warn("[init] vec cold-start reindex check failed:", e);
+    }
+  }
+} catch (e) {
+  console.warn("[init] initVecStore failed:", e);
+}
+
+try {
+  startEmbeddingWorker();
+} catch (e) {
+  console.warn("[init] startEmbeddingWorker failed:", e);
+}
 
 console.log(`🚀 nowen-note API running on http://localhost:${port}`);
 console.log(`📖 OpenAPI 文档: http://localhost:${port}/api/openapi.json`);
@@ -486,8 +539,14 @@ async function gracefulShutdown(signal: string) {
   } catch (e) {
     console.warn("[shutdown] failed:", e);
   } finally {
+    // 停掉 embedding worker 的轮询定时器，避免 process.exit 之前还在发起 fetch
+    try { stopEmbeddingWorker(); } catch { /* ignore */ }
     // mDNS 停播放在最后：即使 realtime shutdown 抛错，也要尽量通知网络"下线"
     try { stopMdns(); } catch { /* ignore */ }
+    // 关停 DB 连接：内部会先 wal_checkpoint(TRUNCATE)，把 -wal 中的事务全部
+    // 写回主 .db 文件。这样无论用户接下来是 cp 冷备、docker volume snapshot
+    // 还是直接关机，拿到的 .db 都是完整的一致快照，不会丢最近事务。
+    try { closeDb(); } catch (e) { console.warn("[shutdown] closeDb failed:", e); }
     clearTimeout(timeoutId);
     process.exit(0);
   }

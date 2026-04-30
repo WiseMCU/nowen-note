@@ -36,6 +36,12 @@ docker run -d --name nowen-note --restart unless-stopped \
 
 ## 更新日志
 
+### v1.0.22
+
+- Docker 镜像体积优化：运行时切换至 Alpine，从约 236MB 降至约 100MB
+- README 补充原始项目来源说明
+- 修复 v1.0.21 提交记录中的编码问题
+
 ### v1.0.21
 
 - 禁用编辑器拼写检查，消除 API Key / URL 下红色波浪线

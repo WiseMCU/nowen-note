@@ -4,6 +4,9 @@
 
 A self-hosted private knowledge base, inspired by Synology Note Station.
 
+> 本项目基于 [cropflre/nowen-note](https://github.com/cropflre/nowen-note) 二次开发。
+> This project is a fork of [cropflre/nowen-note](https://github.com/cropflre/nowen-note).
+
 > **问题反馈 QQ 群 / Support QQ Group：`1093473044`**
 
 ## 语言 / Language

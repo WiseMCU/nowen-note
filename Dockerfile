@@ -1,26 +1,15 @@
 # =============================================================================
-# nowen-note 多架构 Dockerfile
+# nowen-note 多架构 Dockerfile（精简版）
 # -----------------------------------------------------------------------------
-# 支持 linux/amd64 与 linux/arm64（aarch64）。典型 arm64 目标设备：
-#   - Amlogic A311D（Cortex-A73 + A53）
-#   - Rockchip RK3566（Cortex-A55）
-#   - 基于 Debian/Ubuntu 的 OES / Armbian / OpenKylin 发行版
+# 支持 linux/amd64 与 linux/arm64
 #
-# 构建方式（x86 主机交叉构建）：
-#   docker buildx build --platform linux/arm64 -t nowen-note:arm64 --load .
-#   或用统一脚本：scripts/release.sh --build-only --arch arm64
-#
-# 关键设计：
-#   - 使用 BuildKit 自动注入的 TARGETARCH 选择正确的 rollup 原生二进制；
-#     旧版本写死 @rollup/rollup-linux-x64-gnu 会导致 arm64 构建中 vite 报
-#     "Cannot find module @rollup/rollup-linux-x64-gnu"。
-#   - better-sqlite3 不提供预编译 arm64 二进制（至少本项目锁定的版本没命中），
-#     会在 npm ci 时触发 node-gyp 本地编译；因此无论哪条流水线都保留
-#     python3/make/g++ 工具链，安装完再清理以缩小镜像。
-#   - QEMU 模拟 arm64 构建 better-sqlite3 会显著变慢（数分钟级别），属于预期。
+# 优化：
+#   - 后端运行时使用 node:20-alpine（~50MB vs ~200MB）
+#   - 后端构建阶段编译 TypeScript 后 npm prune --production，
+#     运行时直接复制 node_modules，不再重装依赖
+#   - 构建工具（python3/make/g++）仅在构建阶段安装
 # =============================================================================
 
-# BuildKit 自动传入的变量。未启用 buildx 时 TARGETARCH 为空，回退到 amd64。
 ARG TARGETARCH=amd64
 
 # ---------- Stage 1: 前端构建 ----------
@@ -28,20 +17,10 @@ FROM --platform=$BUILDPLATFORM node:20-slim AS frontend-build
 ARG TARGETARCH
 WORKDIR /app/frontend
 
-# 根 package.json 被 vite.config.ts 读取用于注入 __APP_VERSION__（真实版本号来源）。
-# 必须在 vite build 之前放到 /app/package.json，否则 vite 配置加载阶段就 ENOENT。
 COPY package.json /app/package.json
-
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
-# 按目标架构补装 rollup 的原生绑定。
-# 原因：package-lock.json 可能来自 Windows/Mac，不包含 Linux 原生可选依赖；
-# 而 vite 4.x+ 用的 rollup 需要对应平台的 N-API 绑定才能启动。
-# 用 $TARGETARCH 而不是写死 x64，确保 arm64 构建也能拿到 @rollup/rollup-linux-arm64-gnu。
-# 注意：必须锁定版本号与 package-lock.json 中的 rollup 版本一致（当前 4.59.0），
-# 否则 npm install 可能拉到含 "source phase imports" 等 breaking change 的新版绑定，
-# 导致 vite build 报 "Source phase import ... must be external" 错误。
 RUN ROLLUP_VER=$(node -e "try{const l=require('./package-lock.json');const v=(l.packages||{})['node_modules/rollup']||(l.dependencies||{}).rollup||{};console.log(v.version||'')}catch(e){console.log('')}") && \
     [ -z "$ROLLUP_VER" ] && ROLLUP_VER="4.59.0" ; \
     case "$TARGETARCH" in \
@@ -55,49 +34,32 @@ RUN ROLLUP_VER=$(node -e "try{const l=require('./package-lock.json');const v=(l.
     fi
 
 COPY frontend/ .
-# 这一步完全发生在 BUILDPLATFORM（x86 主机），速度快；产物是纯静态 JS/CSS，架构无关。
 RUN npx vite build
 
 # ---------- Stage 2: 后端构建 ----------
-# 使用 TARGETPLATFORM：tsc 本身虽然也架构无关，但 npm ci 会下载 better-sqlite3
-# 的原生依赖；让它在目标架构下跑，产物才能原生加载。
-FROM node:20-slim AS backend-build
+FROM node:20-alpine AS backend-build
+RUN apk add --no-cache python3 make g++
 WORKDIR /app/backend
-# 安装原生模块编译工具链（better-sqlite3 需要）
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 COPY backend/package.json backend/package-lock.json ./
 RUN npm ci
 COPY backend/ .
-RUN npx tsc
+RUN npx tsc && npm prune --production
 
 # ---------- Stage 3: 运行时镜像 ----------
-FROM node:20-slim
+FROM node:20-alpine
 WORKDIR /app
 
-# 安装原生模块编译工具链，安装依赖后清理；
-# 在 arm64（QEMU 模拟）下这一步是最慢的，但是一次性的。
-COPY backend/package.json backend/package-lock.json ./backend/
-RUN apt-get update && apt-get install -y python3 make g++ \
-    && cd backend && npm ci --omit=dev \
-    && apt-get purge -y python3 make g++ && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/* /root/.npm /tmp/*
-
+# 只需复制编译产物和生产依赖（已 prune）
+COPY --from=backend-build /app/backend/node_modules ./backend/node_modules
 COPY --from=backend-build /app/backend/dist ./backend/dist
+COPY --from=backend-build /app/backend/package.json ./backend/package.json
 COPY backend/templates ./backend/templates
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 RUN mkdir -p /app/data
 
-# 声明数据卷，作用：
-#   1. 绿联 / 群晖 / 威联通 / 极空间 / 飞牛 等 NAS 的 Docker 面板在"创建容器"
-#      时会读取镜像的 VOLUME 列表，自动把 /app/data 填入"容器目录"下拉框，
-#      用户只需选择主机路径即可，避免手填成 /data 导致数据不持久化。
-#   2. 即使用户忘记挂载，Docker 也会创建匿名卷承接数据，容器重建时数据仍在匿名卷里。
-#   3. 对 docker run / docker-compose 用户无任何副作用 —— 他们显式 -v 的挂载
-#      会覆盖匿名卷。
 VOLUME ["/app/data"]
 
-# 启动脚本：首启自动生成并持久化 JWT_SECRET，使镜像开箱即用（同时保持安全基线）
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

@@ -261,7 +261,9 @@ ai.post("/chat", async (c) => {
         messages,
         stream: true,
         temperature: action === "fix_grammar" ? 0.1 : action === "format_code" ? 0.2 : 0.7,
-        max_tokens: action === "title" ? 50 : action === "tags" ? 100 : action === "summarize" ? 300 : action === "custom" ? 4000 : 2000,
+        ...(action !== "title" && action !== "tags"
+          ? { max_tokens: action === "summarize" ? 500 : action === "custom" ? 4000 : 2000 }
+          : {}),
       }),
     });
 
@@ -285,25 +287,36 @@ ai.post("/chat", async (c) => {
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith("data: ")) continue;
-            const data = trimmed.slice(6);
-            if (data === "[DONE]") {
-              await stream.writeSSE({ data: "[DONE]", event: "done" });
-              return;
-            }
-            try {
-              const json = JSON.parse(data);
-              const content = json.choices?.[0]?.delta?.content;
-              if (content) {
-                // 同 /ask：用 JSON 包裹，避免换行被 SSE 行分隔符吞掉。
-                await stream.writeSSE({ data: JSON.stringify({ t: content }), event: "message" });
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+
+              // 辅助函数：处理和转发一个来自 AI 的 delta
+              const forwardDelta = (rawData: string) => {
+                if (rawData === "[DONE]") {
+                  stream.writeSSE({ data: "[DONE]", event: "done" });
+                  return true;
+                }
+                try {
+                  const json = JSON.parse(rawData);
+                  const delta = json.choices?.[0]?.delta;
+                  if (!delta) return false;
+                  // 优先 content（推理模型的最终答案），reasoning_content 是思考过程不取
+                  const text = delta.content;
+                  if (text) {
+                    stream.writeSSE({ data: JSON.stringify({ t: text }), event: "message" });
+                    return true;
+                  }
+                  return false;
+                } catch { return false; }
+              };
+
+              if (trimmed.startsWith("data: ")) {
+                if (forwardDelta(trimmed.slice(6))) continue;
+              } else if (trimmed.startsWith("data:") && trimmed.length > 5) {
+                if (forwardDelta(trimmed.slice(5).trim())) continue;
               }
-            } catch {
-              // skip malformed JSON
             }
-          }
         }
         await stream.writeSSE({ data: "[DONE]", event: "done" });
       } catch (err) {

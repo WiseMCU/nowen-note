@@ -186,6 +186,7 @@
     "aiGenerateTitle": "AI 生成标题",
     "aiTitleApplied": "已应用 AI 生成的标题",
     "aiTitleFailed": "AI 生成标题失败",
+    "aiNotConfigured": "请先在设置中配置 AI 服务",
     "aiSuggestTags": "AI 推荐标签",
     "outline": "大纲",
     "noHeadings": "暂无标题",

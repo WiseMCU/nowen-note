@@ -179,6 +179,7 @@
     "aiGenerateTitle": "AI Generate Title",
     "aiTitleApplied": "AI title applied",
     "aiTitleFailed": "AI title generation failed",
+    "aiNotConfigured": "Please configure AI service in Settings",
     "aiSuggestTags": "AI Suggest Tags",
     "outline": "Outline",
     "noHeadings": "No headings",

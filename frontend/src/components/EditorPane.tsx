@@ -807,9 +807,22 @@ export default function EditorPane() {
   // AI 生成标题
   const [aiTitleLoading, setAiTitleLoading] = useState(false);
   const handleAITitle = useCallback(async () => {
-    if (!activeNote || !activeNote.contentText || aiTitleLoading) return;
+    if (!activeNote || aiTitleLoading) return;
+    if (!activeNote.contentText) {
+      toast.error(t("editor.aiTitleFailed") || "请先输入笔记内容");
+      return;
+    }
     setAiTitleLoading(true);
     try {
+      // 0) 预检查 AI 是否已配置，避免根本未配置时报通用错误
+      try {
+        const aiSettings = await api.getAISettings();
+        if (!aiSettings.ai_api_url) {
+          toast.error(t("editor.aiNotConfigured") || "请先在设置中配置 AI 服务");
+          return;
+        }
+      } catch { /* 如果获取设置也失败，继续让 /chat 返回具体错误 */ }
+
       // 1) 先把编辑器里 pending 的 debounce 改动 flush 出去，避免：
       //    - AI 基于过期的 contentText 生成标题
       //    - 稍后 updateNote 因 version 落后被后端返回 409 "Version conflict"

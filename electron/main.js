@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, ipcMain, Menu } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain, Menu, session } = require("electron");
 const path = require("path");
 const { spawn } = require("child_process");
 const fs = require("fs");
@@ -12,6 +12,8 @@ const { initAutoUpdater, checkForUpdatesManually } = require("./updater");
 const { initLogger, getLogDir } = require("./logger");
 const { handleArgv, setupMacOpenFile, flushPending } = require("./fileAssoc");
 const { registerDiscoveryIpc, shutdown: shutdownDiscovery } = require("./discovery");
+const { setSettingsPath, readSettings, writeSettings } = require("./settings");
+const { openSetupWindow } = require("./setupWindow");
 
 // 日志 & 崩溃上报需尽早初始化（crashReporter.start 建议在 ready 之前）
 initLogger({
@@ -24,6 +26,9 @@ let mainWindow = null;
 let splashWindow = null;
 let backendProcess = null;
 let backendPort = 0;
+// 当前运行模式快照（在 ready 时读 settings.json 后赋值）
+let currentMode = "full";   // "full" | "lite"
+let currentRemoteUrl = "";  // lite 模式下的远端 URL
 
 // ---------- 单实例锁（防止多开损坏 SQLite） ----------
 const gotTheLock = app.requestSingleInstanceLock();
@@ -189,6 +194,110 @@ function waitForBackendReady(port, timeoutMs = 30000) {
   });
 }
 
+// ---------- Lite 模式：远端可达性探测 ----------
+//
+// 与 waitForBackendReady 不同：
+//   - 远端可能是 https 自签证书，要走 https 模块；
+//   - 路径优先 /api/health，失败兜底 /；
+//   - 失败时不立刻 retry，而是给较长间隔（1s），避免在网络中断时狂打目标服务器。
+function waitForRemoteReady(remoteUrl, timeoutMs = 15000) {
+  if (!remoteUrl) {
+    return Promise.reject(new Error("远端 URL 为空（请在'选择服务器'里设置）"));
+  }
+  let parsed;
+  try {
+    parsed = new URL(remoteUrl);
+  } catch (e) {
+    return Promise.reject(new Error(`远端 URL 无效：${remoteUrl}`));
+  }
+
+  // 在浏览器端通常用 fetch；Node 主进程这边用 http/https 即可
+  const lib = parsed.protocol === "https:" ? require("https") : require("http");
+  const baseOpts = {
+    host: parsed.hostname,
+    port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+    timeout: 3000,
+    rejectUnauthorized: false, // 容忍自签
+  };
+
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    let lastErr = null;
+    const tick = () => {
+      const req = lib.get({ ...baseOpts, path: "/api/health" }, (res) => {
+        // 任何 2xx/3xx/4xx 都说明服务器在跑（4xx 可能是没鉴权的健康端点）
+        if (res.statusCode < 500) {
+          res.resume();
+          return resolve();
+        }
+        res.resume();
+        lastErr = new Error(`HTTP ${res.statusCode}`);
+        retry();
+      });
+      req.on("error", (e) => {
+        lastErr = e;
+        retry();
+      });
+      req.on("timeout", () => {
+        req.destroy();
+        lastErr = new Error("连接超时");
+        retry();
+      });
+    };
+    const retry = () => {
+      if (Date.now() - start > timeoutMs) {
+        return reject(
+          new Error(
+            `远端服务无法连接：${remoteUrl}` +
+              (lastErr ? `（${lastErr.message}）` : "")
+          )
+        );
+      }
+      setTimeout(tick, 1000);
+    };
+    tick();
+  });
+}
+
+// 把任意 URL 截成 "host:port" 用于展示（splash / 错误弹窗），失败兜底原串
+function safeHost(url) {
+  try {
+    const u = new URL(url);
+    return u.port ? `${u.hostname}:${u.port}` : u.hostname;
+  } catch {
+    return url || "(未配置)";
+  }
+}
+
+// Lite 启动失败后的恢复路径：让用户选择"换服务器 / 回到本地模式 / 退出"
+async function offerLiteRecovery() {
+  const r = await dialog.showMessageBox({
+    type: "warning",
+    buttons: ["更换服务器…", "回到本地模式", "退出"],
+    defaultId: 0,
+    cancelId: 2,
+    title: "无法连接到远端服务",
+    message: `远端服务 ${safeHost(currentRemoteUrl)} 当前不可达。`,
+    detail: "你可以更换服务器、切回内置本地模式，或者退出应用稍后再试。",
+  });
+  if (r.response === 0) {
+    const sel = await openSetupWindow({ initialUrl: currentRemoteUrl });
+    if (sel.ok) {
+      writeSettings({ mode: "lite", remoteUrl: sel.url });
+      await clearWebStorage();
+      relaunchApp();
+    } else {
+      app.quit();
+    }
+  } else if (r.response === 1) {
+    writeSettings({ mode: "full", remoteUrl: "" });
+    await clearWebStorage();
+    relaunchApp();
+  } else {
+    app.quit();
+  }
+}
+
 // ---------- 启动后端 ----------
 async function startBackend() {
   backendPort = await getFreePort();
@@ -285,7 +394,8 @@ function stopBackend() {
 }
 
 // ---------- 启动闪屏 ----------
-function createSplash() {
+function createSplash(message) {
+  const hint = message || "正在启动本地服务";
   splashWindow = new BrowserWindow({
     width: 420,
     height: 260,
@@ -310,7 +420,7 @@ function createSplash() {
       @keyframes b{0%,80%,100%{transform:scale(.5);opacity:.4}40%{transform:scale(1);opacity:1}}
     </style></head><body><div class="box">
       <div class="title">Nowen Note</div>
-      <div class="hint">正在启动本地服务 <span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+      <div class="hint">${hint} <span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
     </div></body></html>`;
   splashWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
 }
@@ -389,7 +499,14 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadURL(`http://127.0.0.1:${backendPort}`);
+  // 根据当前模式决定加载哪个 URL：
+  //   full → 本机后端 http://127.0.0.1:{backendPort}
+  //   lite → 用户在 setup 窗里选择并写入 settings.json 的 remoteUrl
+  const targetUrl =
+    currentMode === "lite" && currentRemoteUrl
+      ? currentRemoteUrl
+      : `http://127.0.0.1:${backendPort}`;
+  mainWindow.loadURL(targetUrl);
 
   // ---------- macOS：全屏进出时通知 renderer 调整 Traffic Light 让位 ----------
   // 全屏模式下 Traffic Light 自动隐藏，顶部 72px 左 padding 应回收；离开全屏再恢复。
@@ -462,13 +579,113 @@ function showStartupError(err) {
   closeSplash();
   const logDir = getLogDir();
   const tail = tailLogFile(20);
+  const isLite = currentMode === "lite";
   const detail =
-    `本地服务未能正常启动。\n\n` +
+    (isLite
+      ? `连接远端服务失败：${currentRemoteUrl}\n\n`
+      : `本地服务未能正常启动。\n\n`) +
     `${err?.message || err}\n\n` +
     (tail ? `— 最近日志（尾 20 行）—\n${tail}\n\n` : "") +
     `日志目录：\n${logDir}\n\n` +
     `数据目录：\n${getUserDataPath()}`;
-  dialog.showErrorBox("Nowen Note 启动失败", detail);
+  dialog.showErrorBox(
+    isLite ? "Nowen Note 连接失败" : "Nowen Note 启动失败",
+    detail
+  );
+}
+
+// ---------- 模式切换 ----------
+//
+// 设计：
+//   - 切换 = 写 settings.json + relaunch + exit。
+//     不在运行时"热切换"，因为：
+//       1) full → lite 时要杀 backend、关 SQLite，重新初始化窗口/IPC，复杂度高；
+//       2) lite → full 时要重新跑 startBackend()，且 renderer 已经登录到远端，
+//          各种缓存（cookie/localStorage/IndexedDB）会和本地后端冲突。
+//     重启是最干净也最快的方式（< 2s）。
+//   - 切换前清登录态：调用方决定（switchToLite 接受 url 后清，switchToFull 也清）
+//     —— 用户的需求是"切换服务器 = 清空登录态"。
+async function clearWebStorage() {
+  // 清掉默认 session 的 cookie / localStorage / IndexedDB / cache，
+  // 这样切到新服务器后是全新登录态。
+  // 不动 partition，因为本期只支持单一服务器。
+  try {
+    await session.defaultSession.clearStorageData({
+      storages: [
+        "cookies",
+        "localstorage",
+        "indexdb",
+        "websql",
+        "shadercache",
+        "serviceworkers",
+        "cachestorage",
+      ],
+    });
+    await session.defaultSession.clearCache();
+    console.log("[mode-switch] storage cleared");
+  } catch (e) {
+    console.warn("[mode-switch] clearStorageData failed:", e?.message || e);
+  }
+}
+
+function relaunchApp() {
+  // 标记退出意图，避免 close → hide 拦截
+  markQuitting();
+  // 先停掉 backend（如果有），关闭托盘 / discovery
+  try { stopBackend(); } catch { /* ignore */ }
+  try { destroyTray(); } catch { /* ignore */ }
+  try { shutdownDiscovery(); } catch { /* ignore */ }
+
+  app.relaunch();
+  app.exit(0);
+}
+
+/**
+ * 切换到 Lite 模式。会弹出 setup 窗，让用户选远端 URL。
+ * @param {Electron.BrowserWindow | null} parentWin 父窗口（可空）
+ */
+async function switchToLite(parentWin) {
+  const r = await openSetupWindow({
+    parent: parentWin || null,
+    initialUrl: currentRemoteUrl || "",
+  });
+  if (!r.ok) return; // 用户取消
+  writeSettings({ mode: "lite", remoteUrl: r.url });
+  await clearWebStorage();
+  relaunchApp();
+}
+
+/**
+ * 切换到 Full（本地）模式。
+ */
+async function switchToFull() {
+  const choice = await dialog.showMessageBox(mainWindow || undefined, {
+    type: "question",
+    buttons: ["切换", "取消"],
+    defaultId: 0,
+    cancelId: 1,
+    title: "切换到本地模式",
+    message: "切换到本地模式将启动内置后端并使用本机数据库。",
+    detail: "当前的远端登录态会被清除（重新打开时需要登录本地账号）。",
+  });
+  if (choice.response !== 0) return;
+  writeSettings({ mode: "full", remoteUrl: "" });
+  await clearWebStorage();
+  relaunchApp();
+}
+
+/**
+ * 仅更换 lite 模式下的服务器地址（不退出 lite 模式）。
+ */
+async function changeRemoteServer() {
+  const r = await openSetupWindow({
+    parent: mainWindow || null,
+    initialUrl: currentRemoteUrl || "",
+  });
+  if (!r.ok) return;
+  writeSettings({ mode: "lite", remoteUrl: r.url });
+  await clearWebStorage();
+  relaunchApp();
 }
 
 // ---------- IPC：app 信息 ----------
@@ -482,6 +699,8 @@ function registerAppIpc() {
     userData: getUserDataPath(),
     logDir: getLogDir(),
     backendPort,
+    mode: currentMode,
+    remoteUrl: currentRemoteUrl,
   }));
 
   ipcMain.removeHandler("app:open-log-dir");
@@ -509,6 +728,26 @@ function registerAppIpc() {
       console.warn("[main] applyFormatState failed:", err);
     }
   });
+
+  // ---------- 模式切换：renderer 主动触发 ----------
+  // 前端"设置 / 关于"页可以放一个按钮调用这些接口，等价于走系统菜单。
+  ipcMain.removeHandler("mode:switch-to-lite");
+  ipcMain.handle("mode:switch-to-lite", async () => {
+    await switchToLite(mainWindow);
+    return { ok: true };
+  });
+
+  ipcMain.removeHandler("mode:switch-to-full");
+  ipcMain.handle("mode:switch-to-full", async () => {
+    await switchToFull();
+    return { ok: true };
+  });
+
+  ipcMain.removeHandler("mode:change-server");
+  ipcMain.handle("mode:change-server", async () => {
+    await changeRemoteServer();
+    return { ok: true };
+  });
 }
 
 // ---------- 生命周期 ----------
@@ -516,15 +755,44 @@ function registerAppIpc() {
 setupMacOpenFile(() => mainWindow);
 
 app.whenReady().then(async () => {
-  createSplash();
+  // 先把 settings 路径定下来（依赖 app.getPath("userData")，必须 ready 后调）
+  setSettingsPath(getUserDataPath());
+  const settings = readSettings();
+  currentMode = settings.mode;
+  currentRemoteUrl = settings.remoteUrl;
+  console.log(
+    `[Electron] mode=${currentMode}` +
+      (currentMode === "lite" ? ` remoteUrl=${currentRemoteUrl}` : "")
+  );
+
+  createSplash(
+    currentMode === "lite"
+      ? `正在连接 ${safeHost(currentRemoteUrl)}`
+      : "正在启动本地服务"
+  );
+
+  // discovery IPC 必须先注册：setup 窗口（首启失败 / 切换模式时）依赖它做 mDNS 列表。
+  // 它本身不会启动 mDNS 浏览器，只有 renderer 调 discovery:start 才会启动，因此空跑无副作用。
+  registerDiscoveryIpc();
+
   try {
-    await startBackend();
+    if (currentMode === "lite") {
+      // Lite：探测远端可达后直接建窗口；不启 backend、不建 DB
+      await waitForRemoteReady(currentRemoteUrl, 15000);
+    } else {
+      await startBackend();
+    }
     createWindow();
   } catch (err) {
     console.error("[Electron] Startup failed:", err);
     showStartupError(err);
     stopBackend();
-    app.quit();
+    // Lite 启动失败时给用户机会改服务器或回退到本地
+    if (currentMode === "lite") {
+      await offerLiteRecovery();
+    } else {
+      app.quit();
+    }
     return;
   }
 
@@ -532,6 +800,10 @@ app.whenReady().then(async () => {
   buildMenu({
     onCheckForUpdates: () => checkForUpdatesManually(),
     openAboutWindow,
+    mode: currentMode,
+    onSwitchToLite: () => switchToLite(mainWindow),
+    onSwitchToFull: () => switchToFull(),
+    onChangeServer: () => changeRemoteServer(),
   });
 
   // ---------- macOS Dock Quick Action（HIG：Dock 右键菜单） ----------
@@ -579,13 +851,15 @@ app.whenReady().then(async () => {
         mainWindow.webContents.send("menu:new-note");
       }
     },
+    mode: currentMode,
+    onSwitchToLite: () => switchToLite(mainWindow),
+    onSwitchToFull: () => switchToFull(),
+    onChangeServer: () => changeRemoteServer(),
   });
 
   // IPC
   registerAppIpc();
-  // 局域网服务发现（mDNS）：注册 discovery:start / stop / list，
-  // renderer 端通过 window.nowenDesktop.discovery.* 使用
-  registerDiscoveryIpc();
+  // 局域网服务发现的 IPC 已在更早处注册（setup 窗口依赖它）；这里不重复注册
 
   // 自动更新（生产环境生效）
   initAutoUpdater({

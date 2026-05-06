@@ -15,7 +15,14 @@ function getIsQuitting() {
 
 /**
  * 创建托盘。
- * @param {{ getMainWindow: () => BrowserWindow | null, onNewNote: () => void }} deps
+ * @param {{
+ *   getMainWindow: () => BrowserWindow | null,
+ *   onNewNote: () => void,
+ *   mode?: "full" | "lite",
+ *   onSwitchToLite?: () => void,
+ *   onSwitchToFull?: () => void,
+ *   onChangeServer?: () => void,
+ * }} deps
  */
 function createTray(deps) {
   const iconPath = path.join(__dirname, "icon.png");
@@ -26,6 +33,17 @@ function createTray(deps) {
 
   tray = new Tray(trayImage);
   tray.setToolTip("Nowen Note");
+
+  const isLite = deps.mode === "lite";
+  // 模式相关项：与系统菜单的"模式"子菜单保持一致
+  const modeItems = isLite
+    ? [
+        { label: "更换服务器…", click: () => deps.onChangeServer?.() },
+        { label: "切换到本地模式", click: () => deps.onSwitchToFull?.() },
+      ]
+    : [
+        { label: "切换到轻量模式…", click: () => deps.onSwitchToLite?.() },
+      ];
 
   const contextMenu = Menu.buildFromTemplate([
     {
@@ -38,6 +56,11 @@ function createTray(deps) {
         showMain(deps.getMainWindow);
         deps.onNewNote?.();
       },
+    },
+    { type: "separator" },
+    {
+      label: `当前模式：${isLite ? "轻量（远端）" : "本地"}`,
+      submenu: modeItems,
     },
     { type: "separator" },
     {

@@ -117,4 +117,24 @@ contextBridge.exposeInMainWorld("nowenDesktop", {
       return () => ipcRenderer.removeListener("discovery:update", wrapped);
     },
   },
+
+  /**
+   * 模式切换：前端"设置/关于"页可以放按钮调用这些接口，等价于走系统菜单。
+   * 调用任意一个都会写入 settings.json + 清登录态 + relaunch（不会立刻 resolve）。
+   *
+   *   switchToLite:    弹出"选择服务器"窗，用户选完后切到 lite 并重启
+   *   switchToFull:    确认后切回内置本地模式并重启
+   *   changeServer:    仅更换 lite 模式下的远端 URL（依然停留在 lite）
+   */
+  mode: {
+    switchToLite() {
+      return ipcRenderer.invoke("mode:switch-to-lite");
+    },
+    switchToFull() {
+      return ipcRenderer.invoke("mode:switch-to-full");
+    },
+    changeServer() {
+      return ipcRenderer.invoke("mode:change-server");
+    },
+  },
 });

@@ -24,7 +24,7 @@ import {
   Quote, ImagePlus, CheckSquare, Highlighter, Minus, Undo, Redo,
   FileCode, Sparkles, X, ZoomIn, ZoomOut, RotateCcw,
   Table2, Indent, Outdent, AlignLeft, AlignCenter, AlignRight, Trash2,
-  FileType, Check, AlertCircle, Info
+  FileType, Check, AlertCircle, Info, ArrowUp
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
@@ -1660,12 +1660,29 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     insertWithMarkdownDetect(text, from, to);
   }, [editor, insertWithMarkdownDetect]);
 
+  // 回到顶部：监听滚动容器的 scrollTop，超过阈值后展示悬浮按钮
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => setShowBackToTop(el.scrollTop > 240);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [editor]);
+  const scrollToTop = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
   if (!editor) return null;
 
   const iconSize = 15;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
       {/* Toolbar
           键盘弹起时（仅原生）隐藏，改由底部 MobileFloatingToolbar 提供常用命令。
           CSS 变量 --keyboard-height 由 useKeyboardLayout 维护；此处通过 state 读取，
@@ -2048,11 +2065,32 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
           不被键盘或底部浮动工具栏遮挡（`--mobile-toolbar-h` 由 MobileFloatingToolbar
           按显示状态维护，未显示时为 0）。详见 useKeyboardLayout 注释。 */}
       <div
+        ref={scrollContainerRef}
         className="flex-1 overflow-auto px-4 md:px-8 pb-12"
         style={{ paddingBottom: "calc(3rem + var(--keyboard-height, 0px) + var(--mobile-toolbar-h, 0px))" }}
       >
         <EditorContent editor={editor} />
       </div>
+
+      {/* 回到顶部按钮：滚动超过阈值后显示在编辑区右下角 */}
+      <AnimatePresence>
+        {showBackToTop && (
+          <motion.button
+            type="button"
+            initial={{ opacity: 0, y: 8, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.9 }}
+            transition={{ duration: 0.15 }}
+            onClick={scrollToTop}
+            title={t("tiptap.backToTop", "回到顶部")}
+            aria-label={t("tiptap.backToTop", "回到顶部")}
+            className="absolute right-4 md:right-6 z-30 w-9 h-9 flex items-center justify-center rounded-full bg-app-elevated border border-app-border text-tx-secondary hover:text-accent-primary hover:border-accent-primary/50 shadow-lg backdrop-blur-sm transition-colors"
+            style={{ bottom: "calc(1rem + var(--keyboard-height, 0px) + var(--mobile-toolbar-h, 0px))" }}
+          >
+            <ArrowUp size={16} />
+          </motion.button>
+        )}
+      </AnimatePresence>
 
       {/* Markdown 粘贴转换提示 Toast */}
       <AnimatePresence>

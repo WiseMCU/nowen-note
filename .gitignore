@@ -18,3 +18,7 @@ frontend/android/build_output.txt
 # 打包产物
 nowen-note-*.zip
 
+# 本地导入测试样本（用户私人数据，不应入库）
+docs/samples/
+
+

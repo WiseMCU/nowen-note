@@ -21,13 +21,14 @@ export function useContextMenu() {
   });
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const openMenu = useCallback(
-    (e: React.MouseEvent, targetId: string, targetType?: string) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      let x = e.clientX;
-      let y = e.clientY;
+  /**
+   * 直接按坐标打开菜单（移动端长按场景使用）。
+   * 桌面右键路径请用 openMenu，会自动处理 preventDefault/stopPropagation。
+   */
+  const openMenuAt = useCallback(
+    (clientX: number, clientY: number, targetId: string, targetType?: string) => {
+      let x = clientX;
+      let y = clientY;
 
       // 边缘碰撞检测
       if (window.innerWidth - x < MENU_WIDTH) x -= MENU_WIDTH;
@@ -38,6 +39,15 @@ export function useContextMenu() {
       setMenu({ isOpen: true, x, y, targetId, targetType: targetType || null });
     },
     []
+  );
+
+  const openMenu = useCallback(
+    (e: React.MouseEvent, targetId: string, targetType?: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openMenuAt(e.clientX, e.clientY, targetId, targetType);
+    },
+    [openMenuAt]
   );
 
   const closeMenu = useCallback(() => {
@@ -70,5 +80,5 @@ export function useContextMenu() {
     };
   }, [closeMenu]);
 
-  return { menu, menuRef, openMenu, closeMenu };
+  return { menu, menuRef, openMenu, openMenuAt, closeMenu };
 }

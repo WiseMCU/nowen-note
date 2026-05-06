@@ -11,7 +11,9 @@
     "prebuild": "npm run gen-icons",
     "dev": "vite build --watch --mode development",
     "build": "vite build && npm run flatten-html && npm run copy-public",
+    "build:firefox": "vite build && npm run flatten-html && node scripts/copy-public.mjs --browser=firefox",
     "pack": "npm run build && node scripts/pack.mjs",
+    "pack:firefox": "npm run build:firefox && node scripts/pack.mjs",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

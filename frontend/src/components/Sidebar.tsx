@@ -301,7 +301,7 @@ function MoveNotebookModal({
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="relative w-full max-w-[360px] mx-4 max-h-[480px] bg-app-elevated border border-app-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
+        className="relative w-full max-w-[360px] mx-4 max-h-[80vh] bg-app-elevated border border-app-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
         style={{ animation: "contextMenuIn 0.15s ease-out" }}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-app-border">
@@ -318,7 +318,7 @@ function MoveNotebookModal({
         <div className="px-4 py-2 text-xs text-tx-tertiary truncate border-b border-app-border">
           {notebook.icon} {notebook.name}
         </div>
-        <ScrollArea className="flex-1 max-h-[300px]">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
           <div className="p-2">
             {/* 根级选项 */}
             <button
@@ -357,7 +357,7 @@ function MoveNotebookModal({
               <p className="text-xs text-tx-tertiary text-center py-4">{/* 无数据 */}</p>
             )}
           </div>
-        </ScrollArea>
+        </div>
         <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-app-border">
           <Button variant="ghost" size="sm" onClick={onClose}>{t('common.cancel')}</Button>
           <Button
@@ -377,7 +377,7 @@ function MoveNotebookModal({
 
 
 function NotebookItem({
-  notebook, depth, onSelect, selectedId, onToggle, onContextMenu,
+  notebook, depth, onSelect, selectedId, onToggle, onContextMenu, onLongPress,
   editingId, editValue, onEditChange, onEditSubmit, onEditCancel,
   onIconChange,
   draggable, onDragStart, onDragOver, onDragEnd, onDrop, dragOverId, dragOverZone,
@@ -385,6 +385,12 @@ function NotebookItem({
   notebook: Notebook; depth: number; onSelect: (id: string) => void;
   selectedId: string | null; onToggle: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, id: string) => void;
+  /**
+   * 移动端长按触发，与 onContextMenu 等价但携带的是 touch 坐标。
+   * Android WebView 上不会派发 contextmenu 事件，因此必须有这条手动通路，
+   * 否则在手机上"建立的笔记本不能在手机端删除"。
+   */
+  onLongPress?: (clientX: number, clientY: number, id: string) => void;
   editingId: string | null; editValue: string;
   onEditChange: (v: string) => void; onEditSubmit: () => void; onEditCancel: () => void;
   onIconChange: (id: string, emoji: string) => void;
@@ -407,6 +413,22 @@ function NotebookItem({
   const inputRef = useRef<HTMLInputElement>(null);
   const iconRef = useRef<HTMLButtonElement>(null);
   const [showIconPicker, setShowIconPicker] = useState(false);
+
+  // 移动端长按 → 触发上下文菜单（删除/重命名/导出 等）。
+  // - 600ms 阈值与笔记列表 (NoteList) / 思维导图项保持一致，避免用户跨场景手感不同。
+  // - touchmove / touchend / touchcancel 任一触发都要清掉计时器，否则用户只是
+  //   在列表上滑动也会误触菜单。
+  // - 计时器记录起始坐标：iOS/Android 在长按期间触摸点会有几像素抖动，
+  //   超过 ~10px 视为"用户在滚动"，主动取消。
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressStart = useRef<{ x: number; y: number } | null>(null);
+  const cancelLongPress = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+    longPressStart.current = null;
+  };
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -444,6 +466,31 @@ function NotebookItem({
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={() => onSelect(notebook.id)}
         onContextMenu={(e) => onContextMenu(e, notebook.id)}
+        onTouchStart={(e) => {
+          if (isEditing || !onLongPress) return;
+          const touch = e.touches[0];
+          if (!touch) return;
+          longPressStart.current = { x: touch.clientX, y: touch.clientY };
+          longPressTimer.current = setTimeout(() => {
+            const start = longPressStart.current;
+            if (!start) return;
+            // 长按命中：把 touch 坐标交给上层 openMenuAt
+            onLongPress(start.x, start.y, notebook.id);
+            longPressTimer.current = null;
+          }, 600);
+        }}
+        onTouchMove={(e) => {
+          const start = longPressStart.current;
+          if (!start) return;
+          const touch = e.touches[0];
+          if (!touch) return;
+          // 抖动容差：> 10px 视为用户在滚动 / 拖动，撤销长按
+          const dx = touch.clientX - start.x;
+          const dy = touch.clientY - start.y;
+          if (dx * dx + dy * dy > 100) cancelLongPress();
+        }}
+        onTouchEnd={cancelLongPress}
+        onTouchCancel={cancelLongPress}
         draggable={draggable && !isEditing}
         // framer-motion 的 motion.div 把 onDragStart/onDrag/onDragEnd 的类型
         // 重载为手势系统签名（MouseEvent | PointerEvent | TouchEvent + PanInfo），
@@ -526,6 +573,7 @@ function NotebookItem({
                 selectedId={selectedId}
                 onToggle={onToggle}
                 onContextMenu={onContextMenu}
+                onLongPress={onLongPress}
                 editingId={editingId}
                 editValue={editValue}
                 onEditChange={onEditChange}
@@ -628,8 +676,8 @@ export default function Sidebar() {
     { id: "delete", label: t('sidebar.deleteNotebook'), icon: <Trash2 size={14} />, danger: true },
   ];
 
-  // 右键菜单
-  const { menu, menuRef, openMenu, closeMenu } = useContextMenu();
+  // 右键菜单（桌面）/ 长按菜单（移动端共用同一份 state）
+  const { menu, menuRef, openMenu, openMenuAt, closeMenu } = useContextMenu();
 
   // 重命名状态
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1271,6 +1319,7 @@ export default function Sidebar() {
               selectedId={state.selectedNotebookId}
               onToggle={handleToggle}
               onContextMenu={(e, id) => openMenu(e, id, "notebook")}
+              onLongPress={(x, y, id) => openMenuAt(x, y, id, "notebook")}
               editingId={editingId}
               editValue={editValue}
               onEditChange={setEditValue}

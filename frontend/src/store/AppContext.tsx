@@ -2,7 +2,7 @@ import React, { createContext, useContext, useReducer, useMemo } from "react";
 import { Notebook, NoteListItem, Note, Tag, ViewMode } from "@/types";
 import { api } from "@/lib/api";
 
-export type SyncStatus = "idle" | "saving" | "saved" | "error";
+export type SyncStatus = "idle" | "saving" | "saved" | "error" | "offline" | "queued";
 export type MobileView = "list" | "editor";
 
 interface AppState {

@@ -21,6 +21,39 @@ interface SettingsModalProps {
   defaultTab?: TabId;
 }
 
+/**
+ * Panel 级错误兜底：
+ *
+ * 背景：移动端（Capacitor / Android WebView）实测，部分 panel（尤其是 Data，
+ * 由于其顶层 import 了 exportService / importService / 三个云盘组件，链路里包含
+ * lowlight、tiptap、sessionStorage 等可能在受限 WebView 环境下抛错的依赖）
+ * 在 mount 时同步抛错。由于全应用没有 ErrorBoundary，这种异常会冒泡到根，
+ * 导致 createPortal 出去的整个 SettingsModal 子树被 React 卸载——表现为
+ * "用户切到该 tab 后整个设置弹窗消失，回到笔记主界面"。
+ *
+ * 这里就地实现一个最小 ErrorBoundary，把"卸载整个 modal"的硬故障降级为
+ * "该 panel 显示一句加载失败"的软故障，让其它 panel 仍然可用，并把错误
+ * 留在 console 便于排查（不静默吞）。activeTab 变化时通过 key 重置状态，
+ * 避免一次失败后切换到正常 panel 仍卡在错误态。
+ */
+class PanelErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // 故意保留 console.error：移动端连 USB 调试时，这是唯一能拿到原始 stack 的途径。
+    console.error("[SettingsModal] panel render failed:", error, info.componentStack);
+  }
+  render() {
+    if (this.state.hasError) return this.props.fallback;
+    return this.props.children;
+  }
+}
+
 function AboutPanel() {
   const { t } = useTranslation();
   return (
@@ -92,6 +125,18 @@ function AppearancePanel() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 站点标识属于全站共享配置，只有系统管理员能改。
+  // 这里独立拉一次身份（不依赖父组件传 props），与 DataManager 的做法保持一致，
+  // 避免修改 SettingsModal 主体的渲染契约。
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    api.getMe()
+      .then((u) => { if (!cancelled) setIsAdmin((u as any)?.role === "admin"); })
+      .catch(() => { if (!cancelled) setIsAdmin(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   // 字体状态
   const [customFonts, setCustomFonts] = useState<CustomFont[]>([]);
@@ -218,15 +263,26 @@ function AppearancePanel() {
       {/* 站点标识 */}
       <div>
         <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-1">{t('settings.siteIdentity')}</h3>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-6">{t('settings.siteIdentityDesc')}</p>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-2">{t('settings.siteIdentityDesc')}</p>
+        {!isAdmin && (
+          <p className="text-xs text-amber-600 dark:text-amber-400 mb-4">
+            {t('settings.siteIdentityAdminOnly')}
+          </p>
+        )}
+        {isAdmin && <div className="mb-6" />}
 
         <div className="flex flex-col sm:flex-row gap-6 items-start">
           {/* Logo 上传区域 */}
           <div className="flex flex-col items-center gap-2.5">
             <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{t('settings.siteIcon')}</span>
             <div
-              className="relative w-20 h-20 rounded-2xl border-2 border-dashed border-zinc-300 dark:border-zinc-700 flex items-center justify-center overflow-hidden group cursor-pointer hover:border-accent-primary transition-colors"
-              onClick={() => fileInputRef.current?.click()}
+              className={cn(
+                "relative w-20 h-20 rounded-2xl border-2 border-dashed border-zinc-300 dark:border-zinc-700 flex items-center justify-center overflow-hidden group transition-colors",
+                isAdmin
+                  ? "cursor-pointer hover:border-accent-primary"
+                  : "cursor-not-allowed opacity-60"
+              )}
+              onClick={() => { if (isAdmin) fileInputRef.current?.click(); }}
             >
               {previewIcon ? (
                 <img src={previewIcon} alt="Site Icon" className="w-full h-full object-cover" />
@@ -236,9 +292,11 @@ function AppearancePanel() {
                   <span className="text-[10px]">{t('settings.upload')}</span>
                 </div>
               )}
-              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                <Camera className="w-5 h-5 text-white" />
-              </div>
+              {isAdmin && (
+                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                  <Camera className="w-5 h-5 text-white" />
+                </div>
+              )}
             </div>
             <input
               type="file"
@@ -246,10 +304,11 @@ function AppearancePanel() {
               onChange={handleImageChange}
               accept="image/png,image/jpeg,image/svg+xml,image/x-icon,image/webp"
               className="hidden"
+              disabled={!isAdmin}
             />
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-zinc-400 dark:text-zinc-500">PNG/SVG/ICO · &lt;1MB</span>
-              {previewIcon && (
+              {previewIcon && isAdmin && (
                 <button
                   onClick={handleRemoveIcon}
                   className="text-[10px] text-red-500 hover:text-red-400 transition-colors"
@@ -269,27 +328,30 @@ function AppearancePanel() {
                 value={title}
                 onChange={(e) => { setTitle(e.target.value); setSaveMessage(""); }}
                 maxLength={20}
-                className="w-full px-3 py-2 bg-transparent border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-accent-primary/40 focus:border-accent-primary outline-none transition-all placeholder:text-zinc-400"
+                disabled={!isAdmin}
+                className="w-full px-3 py-2 bg-transparent border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-accent-primary/40 focus:border-accent-primary outline-none transition-all placeholder:text-zinc-400 disabled:opacity-60 disabled:cursor-not-allowed"
                 placeholder={t('settings.siteNamePlaceholder')}
               />
               <p className="text-[10px] text-zinc-400 dark:text-zinc-500 text-right">{title.length} / 20</p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handleSave}
-                disabled={isSaving || !title.trim() || !hasChanges}
-                className="flex items-center justify-center gap-1.5 px-4 py-1.5 bg-accent-primary hover:bg-accent-primary/90 text-white rounded-lg text-xs font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                {t('settings.saveChanges')}
-              </button>
-              {saveMessage && (
-                <span className={`text-xs ${saveMessage === t('settings.saveSuccess') ? "text-emerald-500" : "text-red-500"}`}>
-                  {saveMessage}
-                </span>
-              )}
-            </div>
+            {isAdmin && (
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleSave}
+                  disabled={isSaving || !title.trim() || !hasChanges}
+                  className="flex items-center justify-center gap-1.5 px-4 py-1.5 bg-accent-primary hover:bg-accent-primary/90 text-white rounded-lg text-xs font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                  {t('settings.saveChanges')}
+                </button>
+                {saveMessage && (
+                  <span className={`text-xs ${saveMessage === t('settings.saveSuccess') ? "text-emerald-500" : "text-red-500"}`}>
+                    {saveMessage}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -515,6 +577,20 @@ const SettingsModal = React.forwardRef<HTMLDivElement, SettingsModalProps>(
   //   内部 position: fixed 的 containing block。即使我们已经把 filter 挪到伪元素
   //   减小了冲撞面，Sidebar 子树未来可能加入 transform / filter / contain 等属性，
   //   都会再次困住本模态框。用 Portal 一次性脱离 Sidebar 子树，彻底杜绝此类布局事故。
+  //
+  // 移动端关闭误触防御（重要）：
+  //   实测在 Capacitor / Android & iOS WebView 里，用户在弹窗内"长按 / 滚动 / 横向触摸"
+  //   都会让弹窗瞬间消失。真因不是弹窗自身处理了点击，而是 App.tsx 的 useSwipeGesture
+  //   在 document 上监听全局 touchstart/touchend：打开 SettingsModal 时 mobileSidebarOpen
+  //   仍为 true，任何足够大的 deltaX 都会触发 setMobileSidebar(false)。SettingsModal 虽
+  //   然 portal 到 body，但生命周期挂在 Sidebar 子树——Sidebar 卸载就把弹窗一起带走。
+  //   React 合成事件的 stopPropagation 拦不住 document 原生监听，必须用 data 属性让全局
+  //   hook 主动跳过本子树（见 App.tsx 同名实现）。
+  //
+  //   除此之外仍保留下列分层防御：
+  //     - 桌面端遮罩点击关闭；移动端遮罩 max-md:hidden（视觉上看不见的遮罩没意义）；
+  //     - 模态主体 touch-action: pan-y pinch-zoom，避免被 WebView 当作系统返回手势；
+  //     - 顶层 motion.div 不绑 click，避免漏到外层的点击被解释成关闭。
   return createPortal(
     <motion.div
       ref={ref}
@@ -522,28 +598,44 @@ const SettingsModal = React.forwardRef<HTMLDivElement, SettingsModalProps>(
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       className="fixed inset-0 z-50 flex items-center justify-center p-0 md:p-4 md:sm:p-6"
+      // data-swipe-blocker：让 App.tsx::useSwipeGesture 在本子树内的 touchstart 上主动跳过
+      // 判定。整个 portal 子树（含移动端 tab 栏 / panel 内容）一并受保护。
+      data-swipe-blocker="settings-modal"
     >
-      {/* 背景遮罩 */}
+      {/* 背景遮罩：仅桌面端渲染。移动端模态主体已全屏覆盖，遮罩不可见且只会
+          带来\"轻触即关闭\"的误触，故直接不挂载。 */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={onClose}
-        className="absolute inset-0 bg-zinc-900/40 dark:bg-black/60 backdrop-blur-sm"
+        className="hidden md:block absolute inset-0 bg-zinc-900/40 dark:bg-black/60 backdrop-blur-sm"
       />
 
-      {/* 模态框主体 */}
+      {/* 模态框主体
+          - touch-action: pan-y pinch-zoom：声明本容器内部只允许竖向滚动 + 双指缩放，
+            禁止 WebView 把横向 / 边缘手势解释为系统级返回 / 抽屉手势；
+          - onPointerDownCapture stopPropagation：把指针事件在捕获阶段就拦下，
+            杜绝事件\"绕过\"主体冒到外层 motion.div 上。 */}
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 10 }}
         transition={{ type: "spring", duration: 0.5, bounce: 0 }}
         className="relative w-full max-w-4xl h-[80vh] min-h-[500px] flex flex-col md:flex-row overflow-hidden bg-white dark:bg-zinc-950 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 max-md:h-[100dvh] max-md:max-w-none max-md:rounded-none max-md:border-0"
+        style={{ touchAction: "pan-y pinch-zoom" }}
         onClick={(e) => e.stopPropagation()}
+        onPointerDownCapture={(e) => e.stopPropagation()}
       >
-        {/* 移动端：顶部标签栏 + 关闭按钮 */}
-        <div className="md:hidden flex items-center border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50" style={{ paddingTop: 'var(--safe-area-top)' }}>
-          <div className="flex-1 flex items-center gap-1 px-3 py-2 overflow-x-auto no-scrollbar">
+        {/* 移动端：顶部标签栏 + 关闭按钮
+            - sticky top-0：避免内容滚动时 tab 栏跟着上移露出后面的遮罩；
+            - touch-action: pan-x：仅允许横向滑动（tab 多时可滑），杜绝竖向手势
+              漂移到外层被识别为关闭/系统手势。 */}
+        <div
+          className="md:hidden sticky top-0 z-10 flex items-center border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/95 backdrop-blur"
+          style={{ paddingTop: 'var(--safe-area-top)', touchAction: 'pan-x' }}
+        >
+          <div className="flex-1 flex items-center gap-1 px-3 py-2 overflow-x-auto no-scrollbar" style={{ touchAction: 'pan-x' }}>
             {SETTING_TABS.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -626,12 +718,31 @@ const SettingsModal = React.forwardRef<HTMLDivElement, SettingsModalProps>(
                 exit={{ opacity: 0, x: -12 }}
                 transition={{ duration: 0.15 }}
               >
-                {activeTab === "appearance" && <AppearancePanel />}
-                {activeTab === "ai" && <AISettingsPanel />}
-                {activeTab === "security" && <SecuritySettings />}
-                {activeTab === "users" && isAdmin && <UserManagement currentUserId={currentUser?.id ?? null} />}
-                {activeTab === "data" && <DataManager />}
-                {activeTab === "about" && <AboutPanel />}
+                {/*
+                  PanelErrorBoundary 用 activeTab 做 key：每次切 tab 都重新创建一个
+                  Boundary 实例，已经"中过招"的 panel 不会污染下一个 panel 的状态；
+                  同时把"模态框被整个卸掉退回笔记页"的灾难性体验降级成局部错误提示。
+                */}
+                <PanelErrorBoundary
+                  key={activeTab}
+                  fallback={
+                    <div className="py-12 px-4 text-center">
+                      <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                        {t('settings.panelLoadFailed')}
+                      </p>
+                      <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-2">
+                        {t('settings.panelLoadFailedHint')}
+                      </p>
+                    </div>
+                  }
+                >
+                  {activeTab === "appearance" && <AppearancePanel />}
+                  {activeTab === "ai" && <AISettingsPanel />}
+                  {activeTab === "security" && <SecuritySettings />}
+                  {activeTab === "users" && isAdmin && <UserManagement currentUserId={currentUser?.id ?? null} />}
+                  {activeTab === "data" && <DataManager />}
+                  {activeTab === "about" && <AboutPanel />}
+                </PanelErrorBoundary>
               </motion.div>
             </AnimatePresence>
           </div>

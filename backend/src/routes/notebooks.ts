@@ -25,23 +25,35 @@ app.get("/", (c) => {
 
   let rows: any[];
 
+  // noteCount 采用「递归口径」：每个笔记本的徽标数 = 自身直属笔记 + 所有子孙笔记本下的笔记
+  // 通过递归 CTE 建立 ancestor → descendant 映射，再 JOIN notes 计数
   if (workspaceId === "personal") {
     rows = db
       .prepare(
         `
+        WITH RECURSIVE nb_tree(ancestorId, descendantId) AS (
+          SELECT id, id FROM notebooks
+          WHERE userId = ? AND workspaceId IS NULL
+          UNION ALL
+          SELECT t.ancestorId, n.id
+          FROM nb_tree t
+          INNER JOIN notebooks n ON n.parentId = t.descendantId
+          WHERE n.userId = ? AND n.workspaceId IS NULL
+        )
         SELECT nb.*, COALESCE(nc.noteCount, 0) AS noteCount
         FROM notebooks nb
         LEFT JOIN (
-          SELECT notebookId, COUNT(*) AS noteCount
-          FROM notes
-          WHERE userId = ? AND isTrashed = 0 AND workspaceId IS NULL
-          GROUP BY notebookId
+          SELECT t.ancestorId AS notebookId, COUNT(notes.id) AS noteCount
+          FROM nb_tree t
+          INNER JOIN notes ON notes.notebookId = t.descendantId
+          WHERE notes.userId = ? AND notes.isTrashed = 0 AND notes.workspaceId IS NULL
+          GROUP BY t.ancestorId
         ) nc ON nb.id = nc.notebookId
         WHERE nb.userId = ? AND nb.workspaceId IS NULL
         ORDER BY nb.sortOrder ASC
       `,
       )
-      .all(userId, userId);
+      .all(userId, userId, userId, userId);
   } else if (workspaceId) {
     // 指定工作区：校验成员身份
     const role = getUserWorkspaceRole(workspaceId, userId);
@@ -50,37 +62,56 @@ app.get("/", (c) => {
     rows = db
       .prepare(
         `
+        WITH RECURSIVE nb_tree(ancestorId, descendantId) AS (
+          SELECT id, id FROM notebooks WHERE workspaceId = ?
+          UNION ALL
+          SELECT t.ancestorId, n.id
+          FROM nb_tree t
+          INNER JOIN notebooks n ON n.parentId = t.descendantId
+          WHERE n.workspaceId = ?
+        )
         SELECT nb.*, COALESCE(nc.noteCount, 0) AS noteCount
         FROM notebooks nb
         LEFT JOIN (
-          SELECT notebookId, COUNT(*) AS noteCount
-          FROM notes
-          WHERE isTrashed = 0 AND workspaceId = ?
-          GROUP BY notebookId
+          SELECT t.ancestorId AS notebookId, COUNT(notes.id) AS noteCount
+          FROM nb_tree t
+          INNER JOIN notes ON notes.notebookId = t.descendantId
+          WHERE notes.isTrashed = 0 AND notes.workspaceId = ?
+          GROUP BY t.ancestorId
         ) nc ON nb.id = nc.notebookId
         WHERE nb.workspaceId = ?
         ORDER BY nb.sortOrder ASC
       `,
       )
-      .all(workspaceId, workspaceId);
+      .all(workspaceId, workspaceId, workspaceId, workspaceId);
   } else {
     // 兼容模式：个人空间
     rows = db
       .prepare(
         `
+        WITH RECURSIVE nb_tree(ancestorId, descendantId) AS (
+          SELECT id, id FROM notebooks
+          WHERE userId = ? AND workspaceId IS NULL
+          UNION ALL
+          SELECT t.ancestorId, n.id
+          FROM nb_tree t
+          INNER JOIN notebooks n ON n.parentId = t.descendantId
+          WHERE n.userId = ? AND n.workspaceId IS NULL
+        )
         SELECT nb.*, COALESCE(nc.noteCount, 0) AS noteCount
         FROM notebooks nb
         LEFT JOIN (
-          SELECT notebookId, COUNT(*) AS noteCount
-          FROM notes
-          WHERE userId = ? AND isTrashed = 0 AND workspaceId IS NULL
-          GROUP BY notebookId
+          SELECT t.ancestorId AS notebookId, COUNT(notes.id) AS noteCount
+          FROM nb_tree t
+          INNER JOIN notes ON notes.notebookId = t.descendantId
+          WHERE notes.userId = ? AND notes.isTrashed = 0 AND notes.workspaceId IS NULL
+          GROUP BY t.ancestorId
         ) nc ON nb.id = nc.notebookId
         WHERE nb.userId = ? AND nb.workspaceId IS NULL
         ORDER BY nb.sortOrder ASC
       `,
       )
-      .all(userId, userId);
+      .all(userId, userId, userId, userId);
   }
 
   return c.json(rows);

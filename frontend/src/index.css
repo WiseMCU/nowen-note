@@ -127,6 +127,8 @@ body {
 .ProseMirror {
   outline: none;
   min-height: 300px;
+  /* 底部预留可滚动的空白：写到末尾时仍能把光标行往上滚，避免贴屏幕底部 */
+  padding-bottom: 40vh;
   font-family: var(--editor-font-family);
 }
 
@@ -1083,6 +1085,8 @@ html[data-code-theme="solarized-light"] {
   /* 编辑器内容区域移动端减少水平 padding */
   .ProseMirror {
     min-height: 200px;
+    /* 移动端键盘/浮动工具栏已由滚动容器内联 padding 处理，这里给少量额外底部空间 */
+    padding-bottom: 25vh;
   }
 }
 

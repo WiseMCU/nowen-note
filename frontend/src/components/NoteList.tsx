@@ -1,6 +1,7 @@
-import React, { useEffect, useCallback, useState, useRef } from "react";
+import React, { useEffect, useCallback, useState, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Pin, PinOff, Star, StarOff, Clock, FileText, Trash2, ArchiveRestore, Menu, FolderInput, ChevronRight, ChevronDown, ChevronLeft, Folder, X, Check, Lock, Unlock, CalendarDays, RefreshCw, Share2, GripVertical, Download } from "lucide-react";
+import { Plus, Pin, PinOff, Star, StarOff, Clock, FileText, Trash2, ArchiveRestore, Menu, FolderInput, ChevronRight, ChevronDown, ChevronLeft, Folder, X, Check, Lock, Unlock, CalendarDays, RefreshCw, Share2, GripVertical, Download, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import ContextMenu, { ContextMenuItem } from "@/components/ContextMenu";
@@ -14,6 +15,186 @@ import { haptic } from "@/hooks/useCapacitor";
 import { toast } from "@/lib/toast";
 import { exportSingleNote } from "@/lib/exportService";
 import { realtime } from "@/lib/realtime";
+
+/* ===== 排序模式 ===== */
+type SortBy = "manual" | "updatedAt" | "createdAt" | "title";
+type SortDir = "asc" | "desc";
+const SORT_STORAGE_KEY = "nowen.noteList.sort";
+
+function loadSortPref(): { by: SortBy; dir: SortDir } {
+  try {
+    const raw = localStorage.getItem(SORT_STORAGE_KEY);
+    if (!raw) return { by: "manual", dir: "desc" };
+    const parsed = JSON.parse(raw);
+    const by: SortBy =
+      parsed.by === "updatedAt" || parsed.by === "createdAt" || parsed.by === "title" || parsed.by === "manual"
+        ? parsed.by
+        : "manual";
+    const dir: SortDir = parsed.dir === "asc" ? "asc" : "desc";
+    return { by, dir };
+  } catch {
+    return { by: "manual", dir: "desc" };
+  }
+}
+
+function saveSortPref(pref: { by: SortBy; dir: SortDir }) {
+  try { localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(pref)); } catch {}
+}
+
+/* ===== 排序下拉菜单 =====
+ * 设计要点（针对历史踩坑）：
+ *   1) 用 createPortal 挂到 document.body，绕过任何祖先的 stacking context / overflow 限制；
+ *   2) 用一个全屏透明 backdrop 承载 click-outside 关闭（点 backdrop 时 onMouseDown 关闭），
+ *      不再依赖 document 级 mousedown 监听，避免与菜单内部的 click 事件竞态；
+ *   3) 菜单项的 onClick 用 e.stopPropagation 防止冒泡到 backdrop；
+ *   4) 菜单项使用真正的 <button>，不附加 onMouseDown 干扰 click；
+ *   5) 位置在每次 anchor 变化或 window resize/scroll 时重新计算。
+ */
+function SortMenu({
+  value,
+  onChange,
+  onClose,
+  anchorRef,
+}: {
+  value: { by: SortBy; dir: SortDir };
+  onChange: (next: { by: SortBy; dir: SortDir }) => void;
+  onClose: () => void;
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
+}) {
+  const { t } = useTranslation();
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  // 根据 anchor 按钮位置计算菜单坐标；监听 resize/scroll 保持跟随
+  useEffect(() => {
+    const compute = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      // 菜单宽度 176px（w-44），右对齐于按钮
+      const left = Math.max(4, Math.min(window.innerWidth - 180, rect.right - 176));
+      const top = Math.min(window.innerHeight - 8, rect.bottom + 4);
+      setPos({ top, left });
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    window.addEventListener("scroll", compute, true);
+    return () => {
+      window.removeEventListener("resize", compute);
+      window.removeEventListener("scroll", compute, true);
+    };
+  }, [anchorRef]);
+
+  // ESC 键关闭
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const options: { id: SortBy; label: string }[] = [
+    { id: "manual", label: t("noteList.sortManual") },
+    { id: "updatedAt", label: t("noteList.sortUpdatedAt") },
+    { id: "createdAt", label: t("noteList.sortCreatedAt") },
+    { id: "title", label: t("noteList.sortTitle") },
+  ];
+
+  const handleOptionClick = (
+    e: React.MouseEvent,
+    opt: { id: SortBy; label: string },
+    active: boolean
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    let next: { by: SortBy; dir: SortDir };
+    if (active && opt.id !== "manual") {
+      next = { by: opt.id, dir: value.dir === "asc" ? "desc" : "asc" };
+    } else {
+      const defaultDir: SortDir = opt.id === "title" ? "asc" : "desc";
+      next = { by: opt.id, dir: opt.id === "manual" ? "desc" : defaultDir };
+    }
+    onChange(next);
+    onClose();
+  };
+
+  // pos 还没计算完就先不渲染，避免闪现在 (0,0)
+  if (!pos) return null;
+
+  return createPortal(
+    <>
+      {/* 全屏 backdrop：捕获外部点击关闭，不要遮盖菜单本身 */}
+      <div
+        onMouseDown={(e) => {
+          // 仅当点击的是 backdrop 自身（不是菜单子元素）才关闭
+          if (e.target === e.currentTarget) {
+            e.preventDefault();
+            onClose();
+          }
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 9998,
+          background: "transparent",
+        }}
+      >
+        {/* 菜单本体 */}
+        <div
+          role="menu"
+          className="rounded-lg border border-app-border bg-app-elevated shadow-xl py-1"
+          style={{
+            position: "fixed",
+            top: pos.top,
+            left: pos.left,
+            width: 176,
+            zIndex: 9999,
+            animation: "contextMenuIn 0.12s ease-out",
+          }}
+          // 阻止菜单上的 mousedown 冒泡到 backdrop（双保险，因为已用 e.target===currentTarget 判断）
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-tx-tertiary select-none">
+            {t("noteList.sortBy")}
+          </div>
+          {options.map((opt) => {
+            const active = value.by === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="menuitem"
+                onClick={(e) => handleOptionClick(e, opt, active)}
+                className={cn(
+                  "w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors text-left",
+                  active
+                    ? "text-accent-primary bg-accent-primary/10"
+                    : "text-tx-secondary hover:bg-app-hover hover:text-tx-primary"
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  {active ? <Check size={12} className="shrink-0" /> : <span className="w-3 shrink-0" />}
+                  <span>{opt.label}</span>
+                </span>
+                {active && opt.id !== "manual" && (
+                  <span className="flex items-center gap-1 text-[10px] text-tx-tertiary">
+                    {value.dir === "asc" ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
+                    {value.dir === "asc" ? t("noteList.sortAsc") : t("noteList.sortDesc")}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </>,
+    document.body
+  );
+}
 
 function formatTime(dateStr: string, t: (key: string, opts?: any) => string) {
   const d = new Date(dateStr + "Z");
@@ -132,7 +313,7 @@ function MoveNoteModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-[360px] mx-4 max-h-[480px] bg-app-elevated border border-app-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
+      <div className="relative w-full max-w-[360px] mx-4 max-h-[80vh] bg-app-elevated border border-app-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
         style={{ animation: "contextMenuIn 0.15s ease-out" }}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-app-border">
@@ -151,7 +332,7 @@ function MoveNoteModal({
             ? t('noteList.selectedCount', { count })
             : (noteTitle || t('common.untitledNote'))}
         </div>
-        <ScrollArea className="flex-1 max-h-[300px]">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
           <div className="p-2">
             {tree.map((nb) => (
               <NotebookTreeItem
@@ -167,7 +348,7 @@ function MoveNoteModal({
               <p className="text-xs text-tx-tertiary text-center py-4">{t('noteList.noNotebooks')}</p>
             )}
           </div>
-        </ScrollArea>
+        </div>
         <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-app-border">
           <Button variant="ghost" size="sm" onClick={onClose}>{t('common.cancel')}</Button>
           <Button
@@ -213,7 +394,7 @@ function NotebookPickerModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-[360px] mx-4 max-h-[480px] bg-app-elevated border border-app-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
+      <div className="relative w-full max-w-[360px] mx-4 max-h-[80vh] bg-app-elevated border border-app-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
         style={{ animation: "contextMenuIn 0.15s ease-out" }}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-app-border">
@@ -228,7 +409,7 @@ function NotebookPickerModal({
         <div className="px-4 py-2 text-xs text-tx-tertiary border-b border-app-border">
           {t('common.selectNotebookHint')}
         </div>
-        <ScrollArea className="flex-1 max-h-[300px]">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
           <div className="p-2">
             {tree.map((nb) => (
               <NotebookTreeItem
@@ -244,7 +425,7 @@ function NotebookPickerModal({
               <p className="text-xs text-tx-tertiary text-center py-4">{t('noteList.noNotebooks')}</p>
             )}
           </div>
-        </ScrollArea>
+        </div>
         <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-app-border">
           <Button variant="ghost" size="sm" onClick={onClose}>{t('common.cancel')}</Button>
           <Button
@@ -744,6 +925,10 @@ export default function NoteList() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dateFilter, setDateFilter] = useState<string | null>(null); // YYYY-MM-DD
   const [showCalendar, setShowCalendar] = useState(false);
+  // 排序偏好（持久化到 localStorage，不入 store；用户在不同设备/浏览器下可独立设置）
+  const [sortPref, setSortPref] = useState<{ by: SortBy; dir: SortDir }>(() => loadSortPref());
+  const [showSortMenu, setShowSortMenu] = useState(false);
+  const sortBtnRef = useRef<HTMLButtonElement>(null);
   const [sharedNoteIds, setSharedNoteIds] = useState<Set<string>>(new Set());
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
   const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
@@ -770,16 +955,24 @@ export default function NoteList() {
   const fetchNotes = useCallback(async () => {
     actions.setLoading(true);
     let notes: NoteListItem[] = [];
+    // 通用排序参数：除"搜索"外的视图都附加。
+    // - 搜索：后端走 FTS rowid IN(...)，排序由命中相关性决定，强行覆盖会破坏体验。
+    const sortParams: Record<string, string> = {
+      sortBy: sortPref.by,
+      sortOrder: sortPref.dir,
+    };
     if (state.viewMode === "notebook" && state.selectedNotebookId) {
-      const params: Record<string, string> = { notebookId: state.selectedNotebookId };
+      const params: Record<string, string> = { notebookId: state.selectedNotebookId, ...sortParams };
       if (dateFilter) { params.dateFrom = dateFilter; params.dateTo = dateFilter; }
       notes = await api.getNotes(params);
     } else if (state.viewMode === "favorites") {
-      const params: Record<string, string> = { isFavorite: "1" };
+      const params: Record<string, string> = { isFavorite: "1", ...sortParams };
       if (dateFilter) { params.dateFrom = dateFilter; params.dateTo = dateFilter; }
       notes = await api.getNotes(params);
     } else if (state.viewMode === "trash") {
-      notes = await api.getNotes({ isTrashed: "1" });
+      const params: Record<string, string> = { isTrashed: "1", ...sortParams };
+      if (dateFilter) { params.dateFrom = dateFilter; params.dateTo = dateFilter; }
+      notes = await api.getNotes(params);
     } else if (state.viewMode === "search" && state.searchQuery) {
       const results = await api.search(state.searchQuery);
       notes = results.map((r) => ({
@@ -799,20 +992,48 @@ export default function NoteList() {
         updatedAt: r.updatedAt,
       }));
     } else if (state.viewMode === "tag" && state.selectedTagId) {
-      notes = await api.getNotesWithTag(state.selectedTagId);
-    } else {
-      const params: Record<string, string> = {};
+      const params: Record<string, string> = { ...sortParams };
       if (dateFilter) { params.dateFrom = dateFilter; params.dateTo = dateFilter; }
-      notes = await api.getNotes(Object.keys(params).length > 0 ? params : undefined);
+      notes = await api.getNotesWithTag(state.selectedTagId, params);
+    } else {
+      const params: Record<string, string> = { ...sortParams };
+      if (dateFilter) { params.dateFrom = dateFilter; params.dateTo = dateFilter; }
+      notes = await api.getNotes(params);
     }
     actions.setNotes(notes);
     actions.setLoading(false);
-  }, [state.viewMode, state.selectedNotebookId, state.searchQuery, state.selectedTagId, dateFilter]);
+  }, [state.viewMode, state.selectedNotebookId, state.searchQuery, state.selectedTagId, dateFilter, sortPref.by, sortPref.dir]);
 
   useEffect(() => {
     fetchNotes().catch(console.error);
     // 追加依赖：notesRefreshToken 递增时强制刷新当前视图
   }, [fetchNotes, state.notesRefreshToken]);
+
+  // ─── 本地排序：确保 updateNoteInList 后列表立即按选定顺序排列 ───────
+  // 后端返回的列表已排序，但保存后 EditorPane 只做了 updateNoteInList（原地更新
+  // 字段）不重新拉列表，导致被编辑笔记的 updatedAt 更新了却没挪位置——看起来排序没生效。
+  // 这里用 useMemo 派生一份 sortedNotes，每次 state.notes 变化都重算顺序。
+  const sortedNotes = useMemo(() => {
+    // 搜索视图由 FTS 相关性排序、manual 模式由后端 sortOrder 字段决定——前端无法重排
+    if (state.viewMode === "search" || sortPref.by === "manual") {
+      return state.notes;
+    }
+    const dir = sortPref.dir === "asc" ? 1 : -1;
+    return [...state.notes].sort((a, b) => {
+      // 置顶永远最前
+      if (a.isPinned !== b.isPinned) return b.isPinned - a.isPinned;
+      if (sortPref.by === "title") {
+        const cmp = (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" });
+        return cmp * dir || a.id.localeCompare(b.id);
+      }
+      // updatedAt / createdAt
+      const field = sortPref.by as "updatedAt" | "createdAt";
+      const ta = a[field] || "";
+      const tb = b[field] || "";
+      const cmp = ta < tb ? -1 : ta > tb ? 1 : 0;
+      return cmp * dir || a.id.localeCompare(b.id);
+    });
+  }, [state.notes, sortPref.by, sortPref.dir, state.viewMode]);
 
   // 监听 WebSocket：外部导入笔记（如剪藏器）后自动刷新列表
   useEffect(() => {
@@ -869,7 +1090,7 @@ export default function NoteList() {
 
     // Shift 点击：以 lastClickedId → noteId 的可见范围全部选中
     if (isShift && lastClickedId && lastClickedId !== noteId) {
-      const ids = state.notes.map((n) => n.id);
+      const ids = sortedNotes.map((n) => n.id);
       const a = ids.indexOf(lastClickedId);
       const b = ids.indexOf(noteId);
       if (a >= 0 && b >= 0) {
@@ -1234,8 +1455,11 @@ export default function NoteList() {
     }
   };
 
-  // 是否允许拖拽排序（仅在笔记本视图且非搜索/回收站时）
-  const canDragSort = state.viewMode === "notebook" || state.viewMode === "all" || state.viewMode === "favorites" || state.viewMode === "tag";
+  // 是否允许拖拽排序：仅在 manual 排序模式 + 笔记本/全部/收藏/标签 视图下生效。
+  // 非 manual 模式下，列表顺序由后端 ORDER BY 决定，拖拽完一刷新就被覆盖，没意义。
+  const canDragSort = sortPref.by === "manual" && (
+    state.viewMode === "notebook" || state.viewMode === "all" || state.viewMode === "favorites" || state.viewMode === "tag"
+  );
 
   // 拖拽排序处理（桌面端 HTML5 Drag API）
   const handleDragStart = useCallback((e: React.DragEvent, noteId: string) => {
@@ -1377,7 +1601,7 @@ export default function NoteList() {
   return (
     <div className="w-full h-full bg-app-surface border-r border-app-border flex flex-col transition-colors relative">
       {/* Mobile Header */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-app-border md:hidden" style={{ paddingTop: 'calc(var(--safe-area-top) + 12px)' }}>
+      <header className="flex items-center justify-between px-4 py-3 border-b border-app-border md:hidden relative z-40" style={{ paddingTop: 'calc(var(--safe-area-top) + 12px)' }}>
         <button
           onClick={() => actions.setMobileSidebar(true)}
           className="p-2 -ml-2 rounded-lg text-tx-secondary hover:bg-app-hover active:bg-app-active"
@@ -1385,7 +1609,23 @@ export default function NoteList() {
           <Menu size={24} />
         </button>
         <h2 className="text-sm font-semibold text-tx-primary">{viewTitles[state.viewMode]}</h2>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 relative">
+          {/* 移动端排序按钮（搜索/回收站不显示） */}
+          {state.viewMode !== "trash" && state.viewMode !== "search" && (
+            <button
+              ref={sortBtnRef}
+              onClick={() => setShowSortMenu((v) => !v)}
+              className={cn(
+                "p-1.5 rounded-md transition-colors relative",
+                sortPref.by !== "manual"
+                  ? "text-accent-primary bg-accent-primary/10"
+                  : "text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
+              )}
+              title={t("noteList.sortBy")}
+            >
+              <ArrowUpDown size={18} />
+            </button>
+          )}
           {/* 移动端日历筛选按钮 */}
           {state.viewMode !== "trash" && state.viewMode !== "search" && (
             <button
@@ -1406,16 +1646,44 @@ export default function NoteList() {
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleCreateNote}>
             <Plus size={18} />
           </Button>
+          {/* 排序下拉（移动端） */}
+          {showSortMenu && (
+            <SortMenu
+              value={sortPref}
+              anchorRef={sortBtnRef}
+              onChange={(next) => {
+                setSortPref(next);
+                saveSortPref(next);
+              }}
+              onClose={() => setShowSortMenu(false)}
+            />
+          )}
         </div>
       </header>
 
       {/* Desktop Header */}
-      <div className="hidden md:flex items-center justify-between px-4 py-3 border-b border-app-border">
+      <div className="hidden md:flex items-center justify-between px-4 py-3 border-b border-app-border relative z-40">
         <div className="flex items-center gap-2">
           <FileText size={16} className="text-accent-primary" />
           <h2 className="text-sm font-medium text-tx-primary">{viewTitles[state.viewMode]}</h2>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 relative">
+          {/* 桌面端排序按钮 */}
+          {state.viewMode !== "trash" && state.viewMode !== "search" && (
+            <button
+              ref={sortBtnRef}
+              onClick={() => setShowSortMenu((v) => !v)}
+              className={cn(
+                "p-1.5 rounded-md transition-colors relative",
+                sortPref.by !== "manual"
+                  ? "text-accent-primary bg-accent-primary/10"
+                  : "text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
+              )}
+              title={t("noteList.sortBy")}
+            >
+              <ArrowUpDown size={15} />
+            </button>
+          )}
           {/* 日历筛选按钮 */}
           {state.viewMode !== "trash" && state.viewMode !== "search" && (
             <button
@@ -1437,6 +1705,18 @@ export default function NoteList() {
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleCreateNote}>
             <Plus size={15} />
           </Button>
+          {/* 排序下拉（桌面端） */}
+          {showSortMenu && (
+            <SortMenu
+              value={sortPref}
+              anchorRef={sortBtnRef}
+              onChange={(next) => {
+                setSortPref(next);
+                saveSortPref(next);
+              }}
+              onClose={() => setShowSortMenu(false)}
+            />
+          )}
         </div>
       </div>
 
@@ -1453,7 +1733,7 @@ export default function NoteList() {
 
       {/* Count */}
       <div className="px-4 py-1.5">
-        <span className="text-[10px] text-tx-tertiary">{t('common.noteCount', { count: state.notes.length })}</span>
+        <span className="text-[10px] text-tx-tertiary">{t('common.noteCount', { count: sortedNotes.length })}</span>
       </div>
 
       {/* 多选操作栏 */}
@@ -1538,9 +1818,9 @@ export default function NoteList() {
       {/* List - 包裹下拉刷新（仅移动端生效，桌面端不影响） */}
       <PullToRefresh onRefresh={fetchNotes}>
         {/* 笔记数量较少时使用普通渲染，较多时使用虚拟滚动 */}
-        {state.notes.length > 100 ? (
+        {sortedNotes.length > 100 ? (
           <VirtualNoteList
-            notes={state.notes}
+            notes={sortedNotes}
             activeNoteId={state.activeNote?.id}
             menuState={{ isOpen: menu.isOpen, targetId: menu.targetId }}
             sharedNoteIds={sharedNoteIds}
@@ -1562,7 +1842,7 @@ export default function NoteList() {
         <ScrollArea className="flex-1 min-h-0">
         <div className="px-2 pb-2 space-y-1">
           <AnimatePresence>
-            {state.notes.map((note) => (
+            {sortedNotes.map((note) => (
               <NoteCard
                 key={note.id}
                 ref={(el) => {

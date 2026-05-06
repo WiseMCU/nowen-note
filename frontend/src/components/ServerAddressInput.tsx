@@ -1,7 +1,34 @@
 import React from "react";
 import { Globe, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { ServerAddressParts, ServerScheme } from "@/lib/serverUrl";
+import {
+  parseServerUrl,
+  type ServerAddressParts,
+  type ServerScheme,
+} from "@/lib/serverUrl";
+
+/**
+ * 判定一段文本是否"看起来是一整段 URL"——只要命中其一就尝试自动拆分：
+ *   1) 显式带 scheme：     http://...   https://...
+ *   2) host 后跟 :port：   39.106.81.133:666 / example.com:8080
+ *   3) host 后跟 /path：   example.com/api
+ * 单纯写 IP 或域名（没有冒号、没有斜杠）不命中，避免用户正常逐字符输入
+ * 主机名时被误识别成 URL 反复拆分。
+ *
+ * 注意：IPv6 字面地址（含多个冒号）暂不在此判定，因为 Host 输入框约定不收
+ * IPv6（serverUrl.ts 也明说）。如果以后要支持，需要在这里区分 ":\d+$" 与
+ * IPv6 形式（含括号或多冒号）。
+ */
+function looksLikeFullUrl(raw: string): boolean {
+  const s = raw.trim();
+  if (!s) return false;
+  if (/^https?:\/\//i.test(s)) return true;
+  // 域名/IP 后紧跟 :端口
+  if (/^[^\s:/]+:\d+(\/|$)/.test(s)) return true;
+  // 域名/IP 后紧跟 /
+  if (/^[^\s:/]+\//.test(s)) return true;
+  return false;
+}
 
 /**
  * 登录 / 服务器连接页共用的地址输入组件。
@@ -54,6 +81,55 @@ export default function ServerAddressInput({
 
   const update = (patch: Partial<ServerAddressParts>) => onChange({ ...value, ...patch });
 
+  /**
+   * 用户在 host 输入框里粘贴 / 输入了一整段 URL 时，自动拆成 protocol + host + port
+   * 三段并整体替换。这是为了解决"用户从浏览器复制 http://x.x.x.x:666/ 这种带尾斜杠
+   * 的整段 URL 时，按字段输入要拆三次"的痛点。
+   *
+   * 触发时机：
+   *   - onPaste：监听粘贴事件最稳定，preventDefault 后我们自己把数据写回去。
+   *   - onChange（host 字段）：用户也可能直接键盘输入一段（例如手机上长按复制的
+   *     URL 通过键盘候选词整段贴入），所以 onChange 里 也要做一次"看着像 URL 就
+   *     拆"的兜底。注意只在"明显像 URL"时拆，避免用户正常逐字符输入主机名时
+   *     被反复拆分（参见 looksLikeFullUrl 的注释）。
+   *
+   * 拆分使用 serverUrl.ts 的 parseServerUrl，它已经处理了：
+   *   - 缺 scheme 时默认 http
+   *   - 末尾斜杠 / path / query
+   *   - 解析失败兜底返回空地址（这种情况我们就不替换，按用户原始输入处理）
+   */
+  const tryAutoSplit = (raw: string): boolean => {
+    if (!looksLikeFullUrl(raw)) return false;
+    const parsed = parseServerUrl(raw);
+    if (!parsed.host) return false;
+    onChange(parsed);
+    return true;
+  };
+
+  const handleHostChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    if (tryAutoSplit(raw)) return;
+    update({ host: raw });
+  };
+
+  const handleHostPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (!text) return;
+    if (tryAutoSplit(text)) {
+      // 自己已经把三段都填好了；阻止浏览器把整段塞进 host 字段
+      e.preventDefault();
+    }
+  };
+
+  const handlePortPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    // 粘贴到 port 框时，如果对方也是一整段 URL，同样应该拆分（用户行为预期）
+    const text = e.clipboardData.getData("text");
+    if (!text) return;
+    if (tryAutoSplit(text)) {
+      e.preventDefault();
+    }
+  };
+
   return (
     <div
       className={
@@ -90,7 +166,8 @@ export default function ServerAddressInput({
       <input
         type="text"
         value={value.host}
-        onChange={(e) => update({ host: e.target.value })}
+        onChange={handleHostChange}
+        onPaste={handleHostPaste}
         onBlur={onHostBlur}
         placeholder={t("server.hostPlaceholder")}
         autoFocus={autoFocus}
@@ -119,6 +196,7 @@ export default function ServerAddressInput({
           const v = e.target.value.replace(/\D/g, "").slice(0, 5);
           update({ port: v });
         }}
+        onPaste={handlePortPaste}
         placeholder={t("server.portPlaceholder")}
         disabled={disabled}
         inputMode="numeric"

@@ -35,6 +35,18 @@ app.get("/", (c) => {
   const tagId = c.req.query("tagId");
   const dateFrom = c.req.query("dateFrom"); // YYYY-MM-DD
   const dateTo = c.req.query("dateTo");     // YYYY-MM-DD
+  // 排序：sortBy ∈ {manual, updatedAt, createdAt, title}；sortOrder ∈ {asc, desc}
+  // - manual（默认）：保持历史行为 isPinned DESC, sortOrder ASC, updatedAt DESC，
+  //   保留拖拽排序结果；
+  // - 其他字段：忽略 sortOrder 字段（不影响置顶），按选定字段方向排序，置顶仍优先；
+  //   title 排序对中文用 NOCASE 仅做大小写不敏感，中文按 UTF-8 字节序——可接受。
+  const sortByRaw = c.req.query("sortBy");
+  const sortOrderRaw = c.req.query("sortOrder");
+  const sortBy: "manual" | "updatedAt" | "createdAt" | "title" =
+    sortByRaw === "updatedAt" || sortByRaw === "createdAt" || sortByRaw === "title"
+      ? sortByRaw
+      : "manual";
+  const sortDir: "ASC" | "DESC" = sortOrderRaw === "asc" ? "ASC" : "DESC";
 
   let query = `SELECT id, userId, notebookId, workspaceId, title, contentText, isPinned, isFavorite, isLocked,
     isArchived, isTrashed, version, createdAt, updatedAt FROM notes WHERE 1=1`;
@@ -68,8 +80,25 @@ app.get("/", (c) => {
     query += " AND isTrashed = 0 AND id IN (SELECT noteId FROM note_tags WHERE tagId = ?)";
     params.push(tagId);
   } else if (notebookId) {
-    query += " AND notebookId = ? AND isTrashed = 0";
-    params.push(notebookId);
+    // 递归收集 notebookId 自身 + 全部后代笔记本，使笔记列表能展示子笔记本下的笔记
+    // 用 SQLite 的递归 CTE：从给定 id 出发沿 parentId 反向向下展开
+    const descendantRows = db.prepare(`
+      WITH RECURSIVE descendants(id) AS (
+        SELECT id FROM notebooks WHERE id = ?
+        UNION ALL
+        SELECT n.id FROM notebooks n
+        INNER JOIN descendants d ON n.parentId = d.id
+      )
+      SELECT id FROM descendants
+    `).all(notebookId) as { id: string }[];
+    const ids = descendantRows.map((r) => r.id);
+    if (ids.length === 0) {
+      // 给的 notebookId 不存在 → 直接返回空，避免 IN () 语法错误
+      return c.json([]);
+    }
+    const placeholders = ids.map(() => "?").join(",");
+    query += ` AND notebookId IN (${placeholders}) AND isTrashed = 0`;
+    params.push(...ids);
   } else {
     query += " AND isTrashed = 0";
   }
@@ -84,7 +113,19 @@ app.get("/", (c) => {
     params.push(dateTo + " 23:59:59");
   }
 
-  query += " ORDER BY isPinned DESC, sortOrder ASC, updatedAt DESC";
+  // 拼接 ORDER BY：
+  //   - 置顶笔记永远在最前（不参与按字段排序），符合"置顶=固定置顶"语义；
+  //   - manual 模式回退到历史行为；
+  //   - title 用 COLLATE NOCASE 让 ABC/abc 不分大小写；中文为 UTF-8 字节序，足够稳定；
+  //   - 兜底再加 id 让相等键的顺序不抖动。
+  if (sortBy === "manual") {
+    query += " ORDER BY isPinned DESC, sortOrder ASC, updatedAt DESC, id ASC";
+  } else if (sortBy === "title") {
+    query += ` ORDER BY isPinned DESC, title COLLATE NOCASE ${sortDir}, id ASC`;
+  } else {
+    // updatedAt | createdAt
+    query += ` ORDER BY isPinned DESC, ${sortBy} ${sortDir}, id ASC`;
+  }
   const notes = db.prepare(query).all(...params);
   return c.json(notes);
 });

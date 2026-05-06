@@ -41,7 +41,10 @@ A self-hosted private knowledge base, inspired by Synology Note Station.
 - **知识管理**：无限层级笔记本、彩色标签、任务管理、思维导图、说说动态、FTS5 全文搜索
 - **协作与历史**：笔记分享（密码 / 有效期 / 权限 / 评论批注）、版本历史回溯
 - **自动化**：插件系统（沙箱热加载）、Webhook 事件推送、审计日志
-- **数据治理**：自动定时备份、一键恢复；多平台数据导入（小米云笔记 / OPPO 云便签 / iPhone 备忘录）、Markdown + YAML frontmatter 导出
+- **数据治理**：自动定时备份、一键恢复；多平台数据导入（小米云笔记 / OPPO 云便签 / iPhone 备忘录 / 有道云笔记）、Markdown + YAML frontmatter 导出
+- **离线优先 & 局域网发现**：写入操作离线自动暂存、网络恢复后按 FIFO 自动同步；Electron / Android 客户端通过 mDNS 自动发现局域网内的 nowen-note 服务器
+- **生物识别快速登录**：移动端支持指纹 / 面容快速登录（Capacitor BiometricAuth），密钥仅存放在系统级 Secure Storage
+- **浏览器剪藏扩展**：内置 Chrome / Firefox 双内核网页剪藏（packages/nowen-clipper），一键将网页正文保存到指定笔记本
 - **开发者生态**：MCP Server（22 个 AI 工具）、TypeScript SDK（60+ API）、CLI（8 组命令）、OpenAPI 3.0 规范
 
 ### 技术栈
@@ -508,6 +511,7 @@ docker run -d \
 - **字数统计**：实时显示词数和字符数（中文按字计数，英文按空格分词）
 - **笔记大纲**：自动提取 H1-H3 标题生成大纲面板，点击标题跳转定位
 - **日历筛选**：笔记列表标题栏日历按钮，选择日期后按更新时间筛选笔记
+- **笔记列表排序**：标题栏排序菜单支持 4 种排序方式（手动 / 修改时间 / 创建时间 / 名称）× 升降序切换，使用 Portal + Backdrop 渲染避免被滚动容器裁剪，移动端同样可点
 - **乐观锁**：`version` 字段防止编辑冲突；AI 生成标题等写操作在 409 冲突时会自动以最新版本重试一次
 - **版本写入节流**：5 分钟窗口内的同类 `edit` 版本会合并，避免 debounce 每次保存都落一条版本
 - **快捷键**：`Alt+N` 快速新建笔记
@@ -649,6 +653,7 @@ docker run -d \
 - **iPhone/iCloud 备忘录导入**：提供两种导入方式
   - 方式一：通过 Mac/iPhone 直接导出为 .txt / .md / .html 文件后导入（推荐）
   - 方式二：通过 iCloud 网页端控制台脚本自动提取，支持自动逐条点击 → 提取内容 → 复制到剪贴板 → 粘贴 JSON → 选择导入。自动转换 Apple Notes Checklist 为 Tiptap taskList 格式
+- **有道云笔记导入**：选择有道云笔记 Web/客户端「批量导出」得到的本地目录，自动识别 Markdown / Word / 文本 / HTML 笔记和 PDF / 图片 / 压缩包等附件，按目录结构自动建立嵌套笔记本
 - **恢复出厂设置**：清空所有数据并重置管理员账户，二次确认防误触（需输入 `RESET`）
 
 #### 设置中心
@@ -1034,7 +1039,10 @@ All-in-one capabilities:
 - **Knowledge management**: unlimited nested notebooks, colored tags, tasks, mind maps, moments, and FTS5 full-text search
 - **Collaboration & history**: note sharing (password / expiry / permissions / inline comments) and version history
 - **Automation**: sandboxed hot-reload plugin system, Webhook events, and audit logs
-- **Data governance**: scheduled auto-backups with one-click restore; multi-platform import (Mi / OPPO / iCloud notes) and Markdown + YAML frontmatter export
+- **Data governance**: scheduled auto-backups with one-click restore; multi-platform import (Mi / OPPO / iCloud / Youdao notes) and Markdown + YAML frontmatter export
+- **Offline-first & LAN discovery**: write operations are queued locally when offline and auto-synced (FIFO) once the network recovers; Electron / Android clients auto-discover nowen-note servers on the LAN via mDNS
+- **Biometric quick login**: fingerprint / face quick login on mobile (Capacitor BiometricAuth), with credentials kept in OS-level Secure Storage
+- **Browser web clipper**: built-in Chrome / Firefox web clipper (`packages/nowen-clipper`) that saves the readable article into a chosen notebook with one click
 - **Developer ecosystem**: MCP Server (22 AI tools), TypeScript SDK (60+ APIs), CLI (8 command groups), and OpenAPI 3.0 spec
 
 ### Tech Stack
@@ -1202,6 +1210,7 @@ All NAS platforms with Docker support follow the same general steps:
 - **Word count**: Real-time word and character count (CJK characters counted individually, English by whitespace)
 - **Note outline**: Auto-extract H1-H3 headings into outline panel with click-to-scroll navigation
 - **Calendar filter**: Calendar button in note list header, filter notes by update date
+- **Note list sorting**: Sort menu in the list header supports 4 sort fields (manual / updated / created / title) with asc/desc toggle. Rendered via Portal + Backdrop so it never gets clipped by scroll containers and works on mobile too
 - **Optimistic locking**: `version` field prevents edit conflicts; write operations such as AI title generation automatically retry once with the latest version on a 409 conflict
 - **Version write throttling**: consecutive `edit` versions within a 5-minute window are merged to avoid flooding the version list on every debounce save
 - **Keyboard shortcut**: `Alt+N` for quick note creation
@@ -1343,6 +1352,7 @@ All NAS platforms with Docker support follow the same general steps:
 - **iPhone/iCloud import**: Two import methods
   - Method 1: Export from Mac/iPhone as .txt / .md / .html files and import directly (recommended)
   - Method 2: Browser console script for iCloud web — auto-clicks notes one by one → extracts content → copies JSON to clipboard → paste and import. Automatically converts Apple Notes Checklist to Tiptap taskList format
+- **Youdao Notes import**: Pick the local folder produced by Youdao Notes' Web/desktop "Batch Export". Markdown / Word / TXT / HTML notes and PDF / image / zip attachments are recognized automatically and the directory tree is mirrored as nested notebooks
 - **Factory reset**: Wipe all data and reset admin account, requires typing `RESET` to confirm
 
 #### Settings Center

@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Star, Pin, Trash2, Cloud, CloudOff, RefreshCw, Check, Loader2, ChevronLeft, FolderInput, ChevronRight, ChevronDown, X, ListTree, Lock, Unlock, Tag as TagIcon, Type, MoreHorizontal, Share2, History, MessageCircle, FileCode, Eye, Pencil } from "lucide-react";
+import { Star, Pin, Trash2, Cloud, CloudOff, RefreshCw, Check, Loader2, ChevronLeft, FolderInput, ChevronRight, ChevronDown, X, ListTree, Lock, Unlock, Tag as TagIcon, Type, MoreHorizontal, Share2, History, MessageCircle, FileCode, Eye, Pencil, CloudUpload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import TiptapEditor, { HeadingItem } from "@/components/TiptapEditor";
@@ -1909,6 +1909,8 @@ function SyncIndicator({
       case "saving": return t('editor.saving');
       case "saved": return t('editor.allSaved');
       case "error": return t('editor.saveFailed');
+      case "queued": return t('editor.queued', { defaultValue: '已暂存，等待网络恢复后同步' });
+      case "offline": return t('editor.offline', { defaultValue: '当前离线' });
       default:
         if (lastSyncedAt) {
           const diff = Date.now() - new Date(lastSyncedAt).getTime();
@@ -1924,7 +1926,7 @@ function SyncIndicator({
   return (
     <button
       onClick={onManualSync}
-      disabled={syncStatus === "saving"}
+      disabled={syncStatus === "saving" || syncStatus === "offline"}
       title={getTooltip()}
       className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] transition-colors hover:bg-app-hover group"
     >
@@ -1962,6 +1964,17 @@ function SyncIndicator({
             <CloudOff size={13} className="text-red-500" />
           </motion.div>
         )}
+        {(syncStatus === "queued" || syncStatus === "offline") && (
+          <motion.div
+            key="queued"
+            initial={{ opacity: 0, scale: 0.5 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.5 }}
+            transition={{ duration: 0.15 }}
+          >
+            <CloudUpload size={13} className="text-amber-500" />
+          </motion.div>
+        )}
         {syncStatus === "idle" && (
           <motion.div
             key="idle"
@@ -1980,11 +1993,14 @@ function SyncIndicator({
         syncStatus === "saving" && "text-accent-primary",
         syncStatus === "saved" && "text-green-500",
         syncStatus === "error" && "text-red-500",
+        (syncStatus === "queued" || syncStatus === "offline") && "text-amber-500",
         syncStatus === "idle" && "text-tx-tertiary group-hover:text-tx-secondary",
       )}>
         {syncStatus === "saving" && t('editor.savingStatus')}
         {syncStatus === "saved" && t('editor.savedStatus')}
         {syncStatus === "error" && t('editor.saveFailedStatus')}
+        {syncStatus === "queued" && t('editor.queuedStatus', { defaultValue: '已暂存' })}
+        {syncStatus === "offline" && t('editor.offlineStatus', { defaultValue: '离线' })}
         {syncStatus === "idle" && (lastSyncedAt ? t('editor.synced') : t('editor.sync'))}
       </span>
     </button>

@@ -75,6 +75,7 @@
     "newNote": "New Note",
     "newSubNotebook": "New Sub-Notebook",
     "exportNotebookAsMarkdown": "Export as Markdown",
+    "importMarkdown": "Import Markdown",
     "deleteNotebook": "Delete Notebook",
     "moveNotebook": "Move to...",
     "moveNotebookTitle": "Move Notebook",

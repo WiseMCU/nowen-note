@@ -1201,15 +1201,18 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     const dom = editor.view.dom;
     const COPY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>';
     const CHECK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    // 邮箱和 URL 保持精确匹配；其余用启发式判断
     const PATTERNS: RegExp[] = [
+      /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
       /https?:\/\/[^\s<>"'}\]?]+/g,
-      /sk-[A-Za-z0-9+/=_-]{10,}/g,
-      /tvly-[A-Za-z0-9+/=_-]{10,}/g,
-      /mpg-[A-Za-z0-9+/=_-]{10,}/g,
-      /ark-[A-Za-z0-9+/=_-]{10,}/g,
-      /export\s+\w+=\S+/g,
-      /[A-Z][A-Za-z0-9.-]{3,}\d[A-Za-z0-9.-]*/g,
     ];
+
+    // 启发式：非中文且长度 >= 6 的 token 即可复制
+    const looksCopyable = (s: string): boolean =>
+      s.length >= 6 && !/[\u4e00-\u9fff]/.test(s);
+
+    // 按中文/中文标点拆 token；英文空格不分隔，让整个词组成为一体
+    const tokenRe = /[^\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+/g;
 
     const copyToClipboard = (text: string): Promise<boolean> => {
       if (navigator.clipboard && window.isSecureContext) {
@@ -1269,6 +1272,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
 
       const text = parent.textContent || "";
       const allRanges: Array<{ start: number; end: number; text: string }> = [];
+      // 精确匹配：邮箱 + URL
       for (const pattern of PATTERNS) {
         pattern.lastIndex = 0;
         let m: RegExpExecArray | null;
@@ -1276,11 +1280,43 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
           allRanges.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
         }
       }
+      // 启发式匹配：非中文、非纯单词的较长 token
+      tokenRe.lastIndex = 0;
+      let tm: RegExpExecArray | null;
+      while ((tm = tokenRe.exec(text)) !== null) {
+        const raw = tm[0];
+        const trimmed = raw.trim();
+        if (looksCopyable(trimmed)) {
+          const leading = raw.length - raw.trimStart().length;
+          const trailing = raw.length - raw.trimEnd().length;
+          allRanges.push({
+            start: tm.index + leading,
+            end: tm.index + raw.length - trailing,
+            text: trimmed,
+          });
+        }
+      }
       if (!allRanges.length) return;
 
-      allRanges.sort((a, b) => a.start - b.start || b.end - a.end);
+      // 过滤"夹心" token：被中文前后包围的（如"查看 supernode 进程"中的 supernode）
+      // 整段中文在前则排除（如 "root // ssh端口6022"），但中文打头时保留尾部 token
+      const firstNonCjk = text.search(/[^\u4e00-\u9fff\s]/);
+      const firstCjk = text.search(/[\u4e00-\u9fff]/);
+      if (firstNonCjk >= 0 && firstCjk >= 0 && firstNonCjk < firstCjk) return;
+      // 逐个 token 判断：前后都有中文 → 跳过
+      const filtered = allRanges.filter((r) => {
+        const before = text.substring(0, r.start);
+        const after = text.substring(r.end);
+        const hasCjkBefore = /[\u4e00-\u9fff]/.test(before);
+        const hasCjkAfter = /[\u4e00-\u9fff]/.test(after);
+        return !(hasCjkBefore && hasCjkAfter);
+      });
+      if (!filtered.length) return;
+
+      filtered.sort((a, b) => a.start - b.start || b.end - a.end);
+      // 合并重叠区间（同位置的重复匹配，保留最长）
       const merged: typeof allRanges = [];
-      for (const r of allRanges) {
+      for (const r of filtered) {
         const last = merged[merged.length - 1];
         if (last && r.start < last.end) {
           if (r.text.length > last.text.length) { last.text = r.text; last.end = r.end; }
@@ -1335,7 +1371,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       const textNodes: Text[] = [];
       let tn: Text | null;
       while ((tn = walker.nextNode() as Text | null)) {
-        if ((tn.textContent?.length || 0) > 3 && !tn.parentElement?.closest(".locked-copy-btn")) {
+        if ((tn.textContent?.length || 0) > 3 && !tn.parentElement?.closest(".locked-copy-btn") && !tn.parentElement?.closest("pre, .code-block-wrapper")) {
           textNodes.push(tn);
         }
       }
@@ -1351,10 +1387,15 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       applying = false;
     };
 
-    // 初始应用一次即可（锁定模式下 PM 不再修改 DOM）
-    applyButtons();
+    // 多次扫描确保导入后异步渲染的文本也被覆盖
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const schedule = (ms: number) => timers.push(setTimeout(applyButtons, ms));
+    schedule(100);
+    schedule(500);
+    schedule(1500);
 
     return () => {
+      timers.forEach(clearTimeout);
       dom.querySelectorAll(".locked-copy-btn").forEach((b: Element) => b.remove());
     };
   }, [editor, editable, note.id]);

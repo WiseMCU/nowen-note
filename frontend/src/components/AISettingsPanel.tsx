@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Bot, Loader2, Check, AlertCircle, RefreshCw, Eye, EyeOff, ChevronDown, Zap, CircleCheck } from "lucide-react";
+import { Bot, Loader2, Check, AlertCircle, RefreshCw, Eye, EyeOff, ChevronDown, Zap, CircleCheck, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { toast } from "@/lib/toast";
 
 interface AISettingsState {
   ai_provider: string;
@@ -97,7 +98,6 @@ export default function AISettingsPanel() {
   const [showKey, setShowKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saveMsg, setSaveMsg] = useState("");
   const [models, setModels] = useState<{ id: string; name: string }[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -143,7 +143,6 @@ export default function AISettingsPanel() {
     } else {
       setLocalKey("");
     }
-    setTestResult(null);
   };
 
   const handleSave = async () => {
@@ -172,7 +171,6 @@ export default function AISettingsPanel() {
 
   const handleTest = async () => {
     setIsTesting(true);
-    setTestResult(null);
     try {
       const payload: any = {
         ai_provider: settings.ai_provider,
@@ -182,9 +180,13 @@ export default function AISettingsPanel() {
       if (localKey && !localKey.includes("****")) payload.ai_api_key = localKey;
       await api.updateAISettings(payload);
       const result = await api.testAIConnection();
-      setTestResult({ success: result.success, message: result.message || result.error || "" });
+      if (result.success) {
+        toast.success(result.message || "连接成功");
+      } else {
+        toast.error(result.error || result.message || t("ai.testFailed"));
+      }
     } catch (err: any) {
-      setTestResult({ success: false, message: err.message || t("ai.testFailed") });
+      toast.error(err.message || t("ai.testFailed"));
     } finally {
       setIsTesting(false);
     }
@@ -193,13 +195,12 @@ export default function AISettingsPanel() {
   const fetchModels = async () => {
     setLoadingModels(true);
     try {
-      const payload: any = {
+      await api.updateAISettings({
         ai_provider: settings.ai_provider,
         ai_api_url: settings.ai_api_url,
         ai_model: settings.ai_model,
-      };
-      if (localKey && !localKey.includes("****")) payload.ai_api_key = localKey;
-      await api.updateAISettings(payload);
+        ...(localKey && !localKey.includes("****") ? { ai_api_key: localKey } : {}),
+      });
       const data = await api.getAIModels();
       setModels(data.models || []);
       if (data.models?.length) {
@@ -327,7 +328,7 @@ export default function AISettingsPanel() {
               <input
                 type={showKey ? "text" : "password"}
                 value={localKey}
-                onChange={(e) => { setLocalKey(e.target.value); setTestResult(null); }}
+                onChange={(e) => { setLocalKey(e.target.value); }}
                 placeholder={settings.ai_api_key_set ? t("ai.apiKeySet") : "sk-..."}
                 className="w-full px-3 py-2 pr-10 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-accent-primary/40 focus:border-accent-primary outline-none transition-all placeholder:text-zinc-400"
               />
@@ -420,19 +421,6 @@ export default function AISettingsPanel() {
           </span>
         )}
       </div>
-
-      {/* 测试结果 */}
-      {testResult && (
-        <div className={cn(
-          "flex items-center gap-2 p-3 rounded-lg text-sm",
-          testResult.success
-            ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-            : "bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400"
-        )}>
-          {testResult.success ? <Check size={16} /> : <AlertCircle size={16} />}
-          {testResult.message}
-        </div>
-      )}
     </div>
   );
 }

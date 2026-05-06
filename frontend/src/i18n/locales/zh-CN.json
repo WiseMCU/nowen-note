@@ -75,6 +75,7 @@
     "newNote": "新建笔记",
     "newSubNotebook": "新建子笔记本",
     "exportNotebookAsMarkdown": "导出为 Markdown",
+    "importMarkdown": "导入 Markdown",
     "deleteNotebook": "删除笔记本",
     "moveNotebook": "移动至...",
     "moveNotebookTitle": "移动笔记本",

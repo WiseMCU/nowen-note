@@ -394,4 +394,247 @@ export function extractInlineBase64Images(
   return { content: newContent, attachmentIds, replacedCount };
 }
 
+// ============================================================================
+// 孤儿附件扫描器 + GC（A1）
+// ----------------------------------------------------------------------------
+// 背景：
+//   即使 attachments 表对 notes 是 ON DELETE CASCADE，SQLite 也只删行不删
+//   磁盘文件；而且像"删除整个笔记本"会沿着 notebooks→notes→attachments 两层
+//   级联，业务代码很容易漏掉显式调用 deleteAttachmentFilesByNoteIds()。
+//
+//   "孤儿"分两类：
+//     A. **DB 孤儿**：磁盘上 .png/.jpg... 文件存在，但 attachments 表已查无此 id
+//        → 通常是上面级联删除的产物。可安全 unlink。
+//     B. **内容孤儿**：attachments 表里有行、磁盘也有文件，但已经没有任何
+//        notes.content 引用它了（用户在编辑器里删图但没触发清理）。
+//        → 删除前需要谨慎，因为有可能是"刚上传还没保存到 content"的窗口期；
+//        所以扫描时引入"宽限期"概念：只考虑 createdAt 早于 N 小时（默认 24h）
+//        的附件，避免误杀刚上传的临时附件。
+//
+//   GC 接口：
+//     GET  /api/attachments/_orphans/scan       — 扫描，返回两类孤儿数量+总字节
+//     POST /api/attachments/_orphans/clean      — 执行清理（dryRun 默认 true）
+//
+//   仅管理员可访问。
+// ============================================================================
+
+interface OrphanScanResult {
+  /** 磁盘存在但 DB 无对应行的文件 */
+  dbOrphans: { filename: string; bytes: number }[];
+  /** DB 有行但 notes.content 不再引用 */
+  contentOrphans: { id: string; filename: string; bytes: number; noteId: string; createdAt: string }[];
+  /** 总可回收字节数（dbOrphans + contentOrphans） */
+  reclaimableBytes: number;
+  /** 磁盘附件目录总占用 */
+  totalAttachmentBytes: number;
+  /** 扫描使用的内容孤儿宽限期小时数（早于该窗口的才参与） */
+  graceHours: number;
+}
+
+/**
+ * 扫描孤儿附件。
+ *
+ * @param graceHours 内容孤儿的宽限期：createdAt 距今不足该小时数的附件不参与
+ *                   （避免误杀"刚上传还没保存到 content"的窗口期附件）
+ */
+export function scanOrphanAttachments(graceHours = 24): OrphanScanResult {
+  ensureAttachmentsDir();
+  const db = getDb();
+
+  // 1) 物理目录全部文件
+  let diskFiles: string[] = [];
+  try {
+    diskFiles = fs.readdirSync(ATTACHMENTS_DIR).filter((f) => {
+      const abs = path.join(ATTACHMENTS_DIR, f);
+      try {
+        return fs.statSync(abs).isFile();
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    diskFiles = [];
+  }
+
+  let totalAttachmentBytes = 0;
+  const fileSizes = new Map<string, number>();
+  for (const f of diskFiles) {
+    try {
+      const sz = fs.statSync(path.join(ATTACHMENTS_DIR, f)).size;
+      fileSizes.set(f, sz);
+      totalAttachmentBytes += sz;
+    } catch {
+      /* 单个 stat 失败忽略 */
+    }
+  }
+
+  // 2) DB 中所有附件
+  const dbRows = db
+    .prepare("SELECT id, noteId, path, size, createdAt FROM attachments")
+    .all() as { id: string; noteId: string; path: string; size: number; createdAt: string }[];
+  const dbFilenames = new Set(dbRows.map((r) => r.path));
+
+  // 3) DB 孤儿：磁盘有 + DB 无
+  const dbOrphans: { filename: string; bytes: number }[] = [];
+  for (const f of diskFiles) {
+    if (!dbFilenames.has(f)) {
+      dbOrphans.push({ filename: f, bytes: fileSizes.get(f) ?? 0 });
+    }
+  }
+
+  // 4) 内容孤儿：DB 有行，但所属 note 的 content 不再含 `/api/attachments/<id>`
+  //   - 我们一次性把所有 notes 的 content 拼起来做 indexOf 检查（避免 N+1）。
+  //   - 内容字段可能很大，但只取 content（已知是 TEXT）。一次扫描 OK。
+  const allContents = db.prepare("SELECT id, content FROM notes").all() as { id: string; content: string | null }[];
+  // 也要把 task_attachments 等其他可能引用 attachment id 的源头一并考虑——
+  // 当前项目只看到 notes.content 引用，task-attachments 是独立目录与表，
+  // 所以这里只覆盖 notes。后续如新增引用源在 sources[] 加即可。
+  const sources: string[] = [];
+  for (const n of allContents) {
+    if (n.content) sources.push(n.content);
+  }
+  const haystack = sources.join("\n");
+
+  const cutoff = Date.now() - graceHours * 3600 * 1000;
+  const contentOrphans: OrphanScanResult["contentOrphans"] = [];
+  for (const r of dbRows) {
+    // 仅扫描宽限期之外的附件
+    const created = new Date(r.createdAt).getTime();
+    if (Number.isFinite(created) && created > cutoff) continue;
+    // 引用判定：搜 `/api/attachments/<id>`（uuid 不会与其他随机字符串混淆）
+    if (haystack.indexOf(`/api/attachments/${r.id}`) >= 0) continue;
+    contentOrphans.push({
+      id: r.id,
+      filename: r.path,
+      bytes: r.size ?? fileSizes.get(r.path) ?? 0,
+      noteId: r.noteId,
+      createdAt: r.createdAt,
+    });
+  }
+
+  const reclaimableBytes =
+    dbOrphans.reduce((s, x) => s + x.bytes, 0) + contentOrphans.reduce((s, x) => s + x.bytes, 0);
+
+  return {
+    dbOrphans,
+    contentOrphans,
+    reclaimableBytes,
+    totalAttachmentBytes,
+    graceHours,
+  };
+}
+
+/**
+ * 清理孤儿附件。
+ *
+ * @param opts.dryRun     仅返回将要清理的清单，不动磁盘和 DB（默认 true）
+ * @param opts.kinds      要清理的孤儿类型，默认 ["dbOrphans", "contentOrphans"]
+ * @param opts.graceHours 内容孤儿宽限期，与扫描一致
+ */
+export function cleanOrphanAttachments(opts: {
+  dryRun?: boolean;
+  kinds?: ("dbOrphans" | "contentOrphans")[];
+  graceHours?: number;
+}): {
+  dryRun: boolean;
+  removedFiles: number;
+  removedRows: number;
+  freedBytes: number;
+  scan: OrphanScanResult;
+} {
+  const dryRun = opts.dryRun !== false;
+  const kinds = opts.kinds ?? ["dbOrphans", "contentOrphans"];
+  const scan = scanOrphanAttachments(opts.graceHours ?? 24);
+
+  let removedFiles = 0;
+  let removedRows = 0;
+  let freedBytes = 0;
+
+  if (dryRun) {
+    return { dryRun, removedFiles: 0, removedRows: 0, freedBytes: 0, scan };
+  }
+
+  // 删 DB 孤儿（仅文件）
+  if (kinds.includes("dbOrphans")) {
+    for (const f of scan.dbOrphans) {
+      try {
+        fs.unlinkSync(path.join(ATTACHMENTS_DIR, f.filename));
+        removedFiles++;
+        freedBytes += f.bytes;
+      } catch {
+        /* 单个失败不阻塞批量 */
+      }
+    }
+  }
+
+  // 删内容孤儿（DB 行 + 文件，事务内完成）
+  if (kinds.includes("contentOrphans") && scan.contentOrphans.length > 0) {
+    const db = getDb();
+    const del = db.prepare("DELETE FROM attachments WHERE id = ?");
+    const tx = db.transaction(() => {
+      for (const o of scan.contentOrphans) {
+        try {
+          del.run(o.id);
+          removedRows++;
+        } catch {
+          /* DB 删失败：跳过文件删，保持一致 */
+          continue;
+        }
+        try {
+          fs.unlinkSync(path.join(ATTACHMENTS_DIR, o.filename));
+          removedFiles++;
+          freedBytes += o.bytes;
+        } catch {
+          /* 文件已不存在或权限问题，DB 行已删；下次扫描会变成"孤行"而消失 */
+        }
+      }
+    });
+    tx();
+  }
+
+  return { dryRun, removedFiles, removedRows, freedBytes, scan };
+}
+
+// ===== Admin 路由：扫描 / 清理 =====
+
+/** 仅管理员；与 data-file.ts 同款实现，避免相互依赖。 */
+function requireAdminOrDeny(c: Context): Response | null {
+  const userId = c.req.header("X-User-Id") || "";
+  if (!userId) return c.json({ error: "未授权" }, 401);
+  const db = getDb();
+  const me = db.prepare("SELECT role FROM users WHERE id = ?").get(userId) as { role: string } | undefined;
+  if (!me || me.role !== "admin") return c.json({ error: "仅管理员可操作" }, 403);
+  return null;
+}
+
+/** GET /api/attachments/_orphans/scan?graceHours=24 */
+app.get("/_orphans/scan", (c) => {
+  const denied = requireAdminOrDeny(c);
+  if (denied) return denied;
+  const grace = Number(c.req.query("graceHours") || 24);
+  return c.json(scanOrphanAttachments(Number.isFinite(grace) && grace >= 0 ? grace : 24));
+});
+
+/**
+ * POST /api/attachments/_orphans/clean
+ * body: { dryRun?: boolean, kinds?: ("dbOrphans"|"contentOrphans")[], graceHours?: number }
+ *
+ * 默认 dryRun=true，必须显式传 false 才会真正删除——避免管理员一次手抖清空所有附件。
+ */
+app.post("/_orphans/clean", async (c) => {
+  const denied = requireAdminOrDeny(c);
+  if (denied) return denied;
+  const body = (await c.req.json().catch(() => ({}))) as {
+    dryRun?: boolean;
+    kinds?: ("dbOrphans" | "contentOrphans")[];
+    graceHours?: number;
+  };
+  const result = cleanOrphanAttachments({
+    dryRun: body.dryRun !== false,
+    kinds: body.kinds,
+    graceHours: body.graceHours,
+  });
+  return c.json(result);
+});
+
 export default app;

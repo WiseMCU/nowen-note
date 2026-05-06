@@ -645,6 +645,57 @@ export const api = {
       request<{ success: boolean }>(`/attachments/${id}`, { method: "DELETE" }),
   },
 
+  // ========== Task Attachments（待办事项的图片附件）==========
+  //
+  // 与 attachments 区别：
+  //   - 不绑定 noteId，按 userId 做 ACL；
+  //   - taskId 可空：新建任务时图片先以"孤儿"形式上传拿到 url，后端 task 创建
+  //     成功后再 PATCH /:id/bind 把孤儿绑回 task。这样可以在用户点击"创建"
+  //     之前就把图片塞到输入框里预览。
+  //
+  // url 仍然返回相对路径 `/api/task-attachments/<id>`，<img> 直接消费。
+  taskAttachments: {
+    /**
+     * 上传一张任务图片附件。
+     * @param file   File 对象（input.files[0] / 粘贴拿到的 File / 拖拽文件）
+     * @param taskId 可选——新建任务流程通常先上传后建 task，此时不传，
+     *               拿到 id 后再调用 bind() 关联。
+     */
+    upload: async (
+      file: File,
+      taskId?: string,
+    ): Promise<{ id: string; url: string; mimeType: string; size: number; filename: string }> => {
+      const token = getToken();
+      const form = new FormData();
+      form.append("file", file);
+      if (taskId) form.append("taskId", taskId);
+      const res = await fetch(`${getBaseUrl()}/task-attachments`, {
+        method: "POST",
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `任务附件上传失败: ${res.status}`);
+      }
+      return res.json();
+    },
+
+    /** 把"孤儿附件"绑定到具体 task（创建 task 后调用）。 */
+    bind: (id: string, taskId: string) =>
+      request<{ success: boolean }>(`/task-attachments/${id}/bind`, {
+        method: "PATCH",
+        body: JSON.stringify({ taskId }),
+      }),
+
+    /** 删除任务附件。 */
+    remove: (id: string) =>
+      request<{ success: boolean }>(`/task-attachments/${id}`, { method: "DELETE" }),
+
+    /** 拼出完整 URL（与 attachments 同理）。 */
+    urlFor: (id: string): string => `${getBaseUrl()}/task-attachments/${id}`,
+  },
+
   // Mi Cloud
   miCloudVerify: (cookie: string) =>
     request<{ valid: boolean; error?: string }>("/micloud/verify", {
@@ -686,17 +737,58 @@ export const api = {
   deleteMindMap: (id: string) => request(`/mindmaps/${id}`, { method: "DELETE" }),
 
   // Diary (说说/动态)
-  postDiary: (data: { contentText: string; mood?: string }) =>
+  postDiary: (data: { contentText: string; mood?: string; images?: string[] }) =>
     request<Diary>("/diary", { method: "POST", body: JSON.stringify(data) }),
-  getDiaryTimeline: (cursor?: string, limit?: number) => {
+  getDiaryTimeline: (
+    cursor?: string,
+    limit?: number,
+    range?: { from?: string; to?: string },
+  ) => {
     const params = new URLSearchParams();
     if (cursor) params.set("cursor", cursor);
     if (limit) params.set("limit", String(limit));
+    // from/to 接收 "YYYY-MM-DD" 或完整 ISO 时间；后端会做 normalize
+    if (range?.from) params.set("from", range.from);
+    if (range?.to) params.set("to", range.to);
     const qs = params.toString();
     return request<DiaryTimeline>(`/diary/timeline${qs ? `?${qs}` : ""}`);
   },
   deleteDiary: (id: string) => request(`/diary/${id}`, { method: "DELETE" }),
-  getDiaryStats: () => request<DiaryStats>("/diary/stats"),
+  getDiaryStats: (range?: { from?: string; to?: string }) => {
+    const params = new URLSearchParams();
+    if (range?.from) params.set("from", range.from);
+    if (range?.to) params.set("to", range.to);
+    const qs = params.toString();
+    return request<DiaryStats>(`/diary/stats${qs ? `?${qs}` : ""}`);
+  },
+
+  // 说说图片：上传 / 删除悬空 / 拼 URL。
+  // 上传时机：用户选好图就立即上传（不是发布时再传），体验上能即时看到缩略图、
+  // 失败也能立即提示。返回的 id 在用户点"发布"时一并提交给 postDiary({ images })。
+  diaryImages: {
+    upload: async (
+      file: File,
+    ): Promise<{ id: string; url: string; mimeType: string; size: number }> => {
+      const token = getToken();
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`${getBaseUrl()}/diary/attachments`, {
+        method: "POST",
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `图片上传失败: ${res.status}`);
+      }
+      return res.json();
+    },
+    /** 删除一张悬空（未发布）的图片。已发布的图片只能通过删除整条说说级联清理。 */
+    remove: (id: string) =>
+      request<{ success: boolean }>(`/diary/attachments/${id}`, { method: "DELETE" }),
+    /** 拼出图片完整 URL，给 <img src> 用。 */
+    urlFor: (id: string): string => `${getBaseUrl()}/diary/attachments/${id}`,
+  },
 
   // Shares (分享管理)
   createShare: (data: { noteId: string; permission?: string; password?: string; expiresAt?: string; maxViews?: number }) =>
@@ -1230,7 +1322,163 @@ export const api = {
       }>("/data-file/vacuum", { method: "POST" }),
   },
 
+  // ============================================================
+  // 数据备份（B 系列）
+  // ------------------------------------------------------------
+  // 备份与 dataFile 区别：
+  //   - dataFile 直接吐 raw `.data` SQLite 文件，给"换机器迁库"用；
+  //   - backup   产生带 meta.json 的 zip（含附件 / 字体 / 插件 / 上传文件 / 加密 secret），
+  //     是\"灾备\"语义，由后端 BackupManager 周期性写到独立卷。
+  //
+  // 健康指标 (/status) 字段供前端渲染:
+  //   degraded                 → 需要红色横幅
+  //   consecutiveFailures      → 连续失败次数（≥3 触发 degraded）
+  //   hoursSinceLastSuccess    → 距上次成功小时数；超过 2x 间隔会触发 degraded
+  //   sameVolume               → 备份目录与数据目录同卷（黄色告警）
+  //   backupDirWritable=false  → 红色：根本写不进去
+  //   lastFailureReason        → 鼠标 hover 看具体错误
+  // ============================================================
+  backup: {
+    /** 健康指标（B4） */
+    status: () =>
+      request<{
+        lastSuccessAt: string | null;
+        lastFailureAt: string | null;
+        lastFailureReason: string | null;
+        consecutiveFailures: number;
+        degraded: boolean;
+        autoBackupRunning: boolean;
+        autoBackupIntervalHours: number;
+        hoursSinceLastSuccess: number | null;
+        backupDir: string;
+        dataDir: string;
+        sameVolume: boolean;
+        backupDirWritable: boolean;
+        backupDirFreeBytes: number | null;
+      }>("/backups/status"),
 
+    /** 列出所有备份 */
+    list: () =>
+      request<Array<{
+        id: string;
+        filename: string;
+        size: number;
+        type: "full" | "db-only";
+        createdAt: string;
+        noteCount: number;
+        notebookCount: number;
+        checksum: string;
+        formatVersion: number;
+        schemaVersion: number;
+        description?: string;
+      }>>("/backups"),
+
+    /** 创建一次备份（管理员 + sudo） */
+    create: (type: "full" | "db-only" = "db-only", sudoToken?: string, description?: string) =>
+      request<{
+        id: string;
+        filename: string;
+        size: number;
+      }>("/backups", { method: "POST", body: JSON.stringify({ type, description }), sudoToken }),
+
+    /**
+     * 启停自动备份（管理员 + sudo）
+     *
+     * 后端会把 {enabled, intervalHours} 持久化到 system_settings.backup:auto，
+     * 重启后由 BackupManager.readEffectiveAutoConfig 读取并按需启动。
+     */
+    setAuto: (enabled: boolean, intervalHours?: number, sudoToken?: string) =>
+      request<{ success: true; message: string; enabled: boolean; intervalHours: number }>(
+        "/backups/auto",
+        { method: "POST", body: JSON.stringify({ enabled, intervalHours }), sudoToken },
+      ),
+
+    /** 删除一份备份（管理员 + sudo） */
+    remove: (filename: string, sudoToken?: string) =>
+      request<{ success: boolean }>(`/backups/${encodeURIComponent(filename)}`, { method: "DELETE", sudoToken }),
+
+    /**
+     * 从备份恢复。
+     *
+     * **强烈推荐两步走**：
+     *   1. dryRun=true（无需 sudoToken）→ 拿到将清空 / 插入 多少行的预览，
+     *      在 UI 弹"确认"对话框；
+     *   2. dryRun=false（**必须** sudoToken）→ 真正执行；后端会先做安全备份再覆盖。
+     *
+     * 单步直接 dryRun=false 也能跑，只是 UX 极差（用户没机会看到影响范围）。
+     */
+    restore: (filename: string, dryRun: boolean, sudoToken?: string) =>
+      request<{
+        success: boolean;
+        error?: string;
+        stats?: Record<string, number>;
+        dryRun?: {
+          tables: { name: string; willClear: number; willInsert: number }[];
+          files: { attachments: number; fonts: number; plugins: number };
+          schemaVersion: number;
+        };
+      }>(`/backups/${encodeURIComponent(filename)}/restore?dryRun=${dryRun ? 1 : 0}`, {
+        method: "POST",
+        body: JSON.stringify({ dryRun }),
+        sudoToken: dryRun ? undefined : sudoToken,
+      }),
+
+    /**
+     * 当前生效的备份目录 + 数据目录。
+     * 用于在配置区显示 "现在备份写到哪 / dataDir 是哪"，让管理员判断是否需要切换。
+     */
+    getDir: () => request<{ backupDir: string; dataDir: string }>("/backups/dir"),
+
+    /**
+     * 切换备份目录。
+     *
+     * **强烈推荐两步走**：
+     *   1. dryRun=true（无需 sudoToken）→ 拿到 ok/reason/sameVolume/freeBytes，
+     *      在 UI 提前显示 "同卷警告 / 不可写报错 / 可用空间"；
+     *   2. dryRun=false（**必须** sudoToken）→ 真正切换并持久化到 system_settings；
+     *      切换后旧目录的备份文件不会被自动迁移（需要的话管理员手动 cp）。
+     *
+     * 后端约束（违反会返回 400 + reason）：
+     *   - 必须绝对路径（reason: "not_absolute"）
+     *   - 不能等于 dataDir（"equals_data_dir"）
+     *   - 不能位于 dataDir 内部（"inside_data_dir"）
+     *   - 必须可创建（"create_failed"）+ 可写（"not_writable"）
+     */
+    setDir: (dirPath: string, dryRun: boolean, sudoToken?: string) =>
+      request<{
+        ok: boolean;
+        dryRun?: boolean;
+        resolved: string;
+        sameVolume?: boolean;
+        freeBytes?: number | null;
+        // 失败时
+        reason?: "not_absolute" | "inside_data_dir" | "equals_data_dir" | "create_failed" | "not_writable";
+        message?: string;
+      }>(`/backups/dir?dryRun=${dryRun ? 1 : 0}`, {
+        method: "POST",
+        body: JSON.stringify({ path: dirPath, dryRun }),
+        sudoToken: dryRun ? undefined : sudoToken,
+      }),
+  },
+
+  // ============================================================
+  // 附件孤儿扫描（A2 配套）
+  // ------------------------------------------------------------
+  // 与 dataFile.cleanupOrphans 不同：
+  //   - cleanupOrphans 是\"扫 + 删\"一步走（普通用户也能调，作用域是自己）
+  //   - scanOrphans 是\"只扫不删\"的预览，仅管理员，可在删除前展示\"将释放 X MB\"
+  // ============================================================
+  attachmentsAdmin: {
+    /** GET /api/attachments/_orphans/scan — 仅扫描，不删除 */
+    scanOrphans: (graceHours = 24) =>
+      request<{
+        dbOrphans: Array<{ filename: string; bytes: number }>;
+        contentOrphans: Array<{ id: string; filename: string; bytes: number; noteId: string; createdAt: string }>;
+        reclaimableBytes: number;
+        totalAttachmentBytes: number;
+        graceHours: number;
+      }>(`/attachments/_orphans/scan?graceHours=${encodeURIComponent(graceHours)}`),
+  },
 };
 
 /**

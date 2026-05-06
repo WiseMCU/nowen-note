@@ -3,7 +3,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Download, Upload, CheckCircle, Loader2, FileText,
   AlertCircle, Trash2, FileUp, FolderDown, AlertTriangle,
-  Database, HardDrive, RefreshCw, Eraser, Minimize2
+  Database, HardDrive, RefreshCw, Eraser, Minimize2,
+  Save, ShieldAlert, Clock, Server,
+  Lock, Eye, EyeOff, X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { exportAllNotes, ExportProgress } from "@/lib/exportService";
@@ -517,6 +519,9 @@ export default function DataManager() {
       {/* ===== 数据库文件 (.data) 导出/导入/占用统计 ===== */}
       <DataFileSection />
 
+      {/* ===== 备份与灾备（B 系列） ===== */}
+      <BackupSection />
+
       {/* ===== 危险区域 (Danger Zone) ===== */}
       <section className="mt-8 pt-6 border-t-2 border-dashed border-red-300/50 dark:border-red-900/40">
         <div className="flex items-center gap-2 mb-2">
@@ -693,6 +698,11 @@ function DataFileSection() {
   const [isVacuuming, setIsVacuuming] = useState(false);
   const [maintenanceMsg, setMaintenanceMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
+  // 扫描孤儿（仅管理员，"只看不删"的预览版）
+  // —— 与 cleanupOrphans 不同：cleanupOrphans 是直接清理，scan 只返回数量+字节，
+  //    用来在删除前显示"将释放 X MB"，避免一冲动一键清空。
+  const [isScanningOrphans, setIsScanningOrphans] = useState(false);
+
   const reload = useCallback(async () => {
     setLoadingInfo(true);
     setInfoError("");
@@ -822,6 +832,42 @@ function DataFileSection() {
       });
     } finally {
       setIsCleaningOrphans(false);
+    }
+  };
+
+  /** 仅扫描孤儿附件（不删）—— 管理员预览"将释放多少空间" */
+  const handleScanOrphans = async () => {
+    setIsScanningOrphans(true);
+    setMaintenanceMsg(null);
+    try {
+      const res = await api.attachmentsAdmin.scanOrphans(24);
+      const dbCount = res.dbOrphans.length;
+      const contentCount = res.contentOrphans.length;
+      if (dbCount === 0 && contentCount === 0) {
+        setMaintenanceMsg({
+          type: "ok",
+          text: t("dataManager.dataFile.scanOrphansEmpty", {
+            total: fmtBytes(res.totalAttachmentBytes),
+          }),
+        });
+      } else {
+        setMaintenanceMsg({
+          type: "ok",
+          text: t("dataManager.dataFile.scanOrphansResult", {
+            reclaimable: fmtBytes(res.reclaimableBytes),
+            dbCount,
+            contentCount,
+            total: fmtBytes(res.totalAttachmentBytes),
+          }),
+        });
+      }
+    } catch (err: any) {
+      setMaintenanceMsg({
+        type: "err",
+        text: t("dataManager.dataFile.scanOrphansFailed", { error: err.message || "error" }),
+      });
+    } finally {
+      setIsScanningOrphans(false);
     }
   };
 
@@ -1099,11 +1145,35 @@ function DataFileSection() {
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {isAdmin && (
+              <button
+                onClick={handleScanOrphans}
+                disabled={isScanningOrphans || isCleaningOrphans || isVacuuming}
+                className={`flex items-center justify-center py-2 px-3 rounded-lg font-medium text-sm transition-all ${
+                  isScanningOrphans || isCleaningOrphans || isVacuuming
+                    ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
+                    : "bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700"
+                }`}
+              >
+                {isScanningOrphans ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    {t("dataManager.dataFile.scanningOrphans")}
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    {t("dataManager.dataFile.scanOrphansButton")}
+                  </>
+                )}
+              </button>
+            )}
+
             <button
               onClick={handleCleanupOrphans}
-              disabled={isCleaningOrphans || isVacuuming}
+              disabled={isCleaningOrphans || isVacuuming || isScanningOrphans}
               className={`flex items-center justify-center py-2 px-3 rounded-lg font-medium text-sm transition-all ${
-                isCleaningOrphans || isVacuuming
+                isCleaningOrphans || isVacuuming || isScanningOrphans
                   ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
                   : "bg-rose-600 hover:bg-rose-700 text-white shadow-sm"
               }`}
@@ -1124,9 +1194,9 @@ function DataFileSection() {
             {isAdmin && (
               <button
                 onClick={handleVacuum}
-                disabled={isVacuuming || isCleaningOrphans}
+                disabled={isVacuuming || isCleaningOrphans || isScanningOrphans}
                 className={`flex items-center justify-center py-2 px-3 rounded-lg font-medium text-sm transition-all ${
-                  isVacuuming || isCleaningOrphans
+                  isVacuuming || isCleaningOrphans || isScanningOrphans
                     ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
                     : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
                 }`}
@@ -1218,5 +1288,1200 @@ function DataFileSection() {
         )}
       </AnimatePresence>
     </section>
+  );
+}
+
+// ============================================================================
+// 备份 / 灾备 子组件 —— 消费 /api/backups + /api/backups/status
+// ----------------------------------------------------------------------------
+// 设计要点：
+//  1. 顶部健康徽章：根据 status 字段（degraded / sameVolume / backupDirWritable）
+//     渲染 0~N 条横幅，从严重到轻量排列，便于运维一眼定位问题；
+//  2. "上次成功 X 小时前" 由后端 hoursSinceLastSuccess 直接提供，避免前端时区差；
+//  3. **自动备份配置区**：开/关 + 间隔 滑杆，调用 setAuto 即时生效并持久化到
+//     system_settings；与 ENV 兜底配合（ENV 仅在 settings 还没值时生效）；
+//  4. **恢复 UI**：每条备份带恢复按钮，点开后走两步对话框：
+//        Step 1: 调 dryRun=true，把"将清空 N 行 / 插入 M 行 / K 个附件"
+//                和"格式版本"展示给管理员；
+//        Step 2: 输入当前密码 → withSudo → restore（dryRun=false）；
+//     成功后大概率需要重启进程（DB 文件已被替换），UI 提示并刷新页面。
+//  5. 所有破坏性操作（create/setAuto/remove/restore-real）都走 withSudo；
+//     sudoToken 在 BackupSection 内部缓存复用，5 分钟内的连续操作只需输一次密码。
+// ============================================================================
+type BackupStatus = Awaited<ReturnType<typeof api.backup.status>>;
+type BackupRow = Awaited<ReturnType<typeof api.backup.list>>[number];
+type RestoreDryRun = NonNullable<Awaited<ReturnType<typeof api.backup.restore>>["dryRun"]>;
+
+function BackupSection() {
+  const { t } = useTranslation();
+  const [status, setStatus] = useState<BackupStatus | null>(null);
+  const [backups, setBackups] = useState<BackupRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState<"db-only" | "full" | null>(null);
+  const [createMsg, setCreateMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // sudoToken 缓存：withSudo 在 SUDO_REQUIRED 时会重新询问密码，
+  // 缓存让"备份 → 删除 → 改间隔" 这串连续操作只需输一次密码。
+  const sudoTokenRef = useRef<string | null>(null);
+
+  // 自动备份配置区本地状态：避免每次拖滑杆都打 status；只在 status 重载时同步。
+  const [autoEnabled, setAutoEnabled] = useState(false);
+  const [autoIntervalHours, setAutoIntervalHours] = useState(24);
+  const [autoSaving, setAutoSaving] = useState(false);
+  const [autoMsg, setAutoMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // 恢复对话框：选中要恢复的备份 + dryRun 预览结果
+  const [restoreTarget, setRestoreTarget] = useState<BackupRow | null>(null);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // 并行拿状态 + 列表，减少首屏等待
+      const [s, list] = await Promise.all([api.backup.status(), api.backup.list()]);
+      setStatus(s);
+      setBackups(list);
+      // 同步自动备份本地编辑值
+      setAutoEnabled(s.autoBackupRunning);
+      setAutoIntervalHours(s.autoBackupIntervalHours);
+    } catch (err: any) {
+      setError(err.message || "load failed");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  /**
+   * 询问密码弹窗 —— 自定义 Modal（替代浏览器原生 prompt，统一深浅色与产品视觉）。
+   *
+   * 设计要点：
+   *  - askPassword() 返回 Promise<string | null>：
+   *      点确定 -> resolve(密码字符串)；点取消/关闭 -> resolve(null)。
+   *      withSudo 拿到 null 会直接返回 null，调用方根据 null 判定"用户取消"。
+   *  - 状态只放 setSudoAsk（包含 resolve 闭包），密码本身放 sudoPwd state。
+   *      关闭时立即清空密码，避免 React state 里残留明文。
+   *  - 不在这里调 requestSudoToken：BackupSection 走的是 withSudo(action, askPwd)，
+   *      withSudo 内部会自己用密码换 sudoToken；保持职责单一。
+   */
+  const [sudoAsk, setSudoAsk] = useState<{ resolve: (v: string | null) => void } | null>(null);
+  const [sudoPwd, setSudoPwd] = useState("");
+  const [sudoShowPwd, setSudoShowPwd] = useState(false);
+
+  const askPassword = useCallback(
+    () =>
+      new Promise<string | null>((resolve) => {
+        setSudoPwd("");
+        setSudoShowPwd(false);
+        setSudoAsk({ resolve });
+      }),
+    [],
+  );
+
+  const closeSudoAsk = useCallback(
+    (value: string | null) => {
+      sudoAsk?.resolve(value);
+      setSudoAsk(null);
+      setSudoPwd("");
+      setSudoShowPwd(false);
+    },
+    [sudoAsk],
+  );
+
+  const handleCreate = async (type: "db-only" | "full") => {
+    setCreating(type);
+    setCreateMsg(null);
+    try {
+      const out = await withSudo(
+        (tk) => api.backup.create(type, tk),
+        askPassword,
+        sudoTokenRef.current,
+      );
+      if (!out) {
+        // 用户取消密码框
+        setCreating(null);
+        return;
+      }
+      sudoTokenRef.current = out.sudoToken;
+      setCreateMsg({
+        type: "ok",
+        text: t("dataManager.backup.createSuccess", {
+          filename: out.result.filename,
+          size: fmtBytes(out.result.size),
+        }),
+      });
+      reload();
+    } catch (err: any) {
+      setCreateMsg({
+        type: "err",
+        text: t("dataManager.backup.createFailed", { error: err.message || "error" }),
+      });
+    } finally {
+      setCreating(null);
+    }
+  };
+
+  const handleDelete = async (filename: string) => {
+    // 删除虽然不影响业务运行，但同样要 sudo（后端强制）；UI 仍弹 confirm 防误点
+    if (!window.confirm(t("dataManager.backup.deleteConfirm"))) return;
+    try {
+      const out = await withSudo(
+        (tk) => api.backup.remove(filename, tk),
+        askPassword,
+        sudoTokenRef.current,
+      );
+      if (!out) return;
+      sudoTokenRef.current = out.sudoToken;
+      reload();
+    } catch (err: any) {
+      setError(err.message || "delete failed");
+    }
+  };
+
+  /** 保存自动备份配置 —— 走 sudo */
+  const handleSaveAuto = async () => {
+    setAutoSaving(true);
+    setAutoMsg(null);
+    try {
+      const out = await withSudo(
+        (tk) => api.backup.setAuto(autoEnabled, autoIntervalHours, tk),
+        askPassword,
+        sudoTokenRef.current,
+      );
+      if (!out) {
+        setAutoSaving(false);
+        return;
+      }
+      sudoTokenRef.current = out.sudoToken;
+      setAutoMsg({ type: "ok", text: out.result.message });
+      // 重新拉一次 status，确保 autoBackupRunning 等字段是后端最新值
+      reload();
+    } catch (err: any) {
+      setAutoMsg({
+        type: "err",
+        text: t("dataManager.backup.saveAutoFailed", { error: err.message || "error" }),
+      });
+    } finally {
+      setAutoSaving(false);
+    }
+  };
+
+  /** 把"距上次成功小时数"渲染成更友好的中文/英文相对时间 */
+  const formatSince = (hours: number | null): string => {
+    if (hours === null) return t("dataManager.backup.neverSuccess");
+    if (hours < 1) {
+      const m = Math.max(1, Math.round(hours * 60));
+      return t("dataManager.backup.minutesAgo", { minutes: m });
+    }
+    return t("dataManager.backup.hoursAgo", { hours: hours.toFixed(1) });
+  };
+
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-3">
+        <Save size={18} className="text-emerald-500" />
+        <h4 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          {t("dataManager.backup.title")}
+        </h4>
+      </div>
+
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30 p-4 space-y-4">
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          {t("dataManager.backup.description")}
+        </p>
+
+        {/* ===== 健康告警区（按严重度从高到低） ===== */}
+        {status && (
+          <div className="space-y-2">
+            {/* 红：备份目录不可写 —— 根本写不进去 */}
+            {!status.backupDirWritable && (
+              <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-700/40">
+                <ShieldAlert size={16} className="text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                <div className="text-xs">
+                  <div className="font-semibold text-red-700 dark:text-red-400">
+                    {t("dataManager.backup.notWritableTitle")}
+                  </div>
+                  <div className="text-red-600 dark:text-red-300 mt-0.5">
+                    {t("dataManager.backup.notWritableDesc", { dir: status.backupDir })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 红：链路降级（连续失败/长时间未成功） */}
+            {status.degraded && (
+              <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-700/40">
+                <AlertTriangle size={16} className="text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                <div className="text-xs flex-1 min-w-0">
+                  <div className="font-semibold text-red-700 dark:text-red-400">
+                    {t("dataManager.backup.degradedTitle")}
+                  </div>
+                  <div className="text-red-600 dark:text-red-300 mt-0.5">
+                    {t("dataManager.backup.degradedDesc")}
+                  </div>
+                  {status.consecutiveFailures > 0 && (
+                    <div className="text-red-600 dark:text-red-300 mt-1">
+                      {t("dataManager.backup.consecutiveFailures", { n: status.consecutiveFailures })}
+                      {status.lastFailureReason && (
+                        <span className="block font-mono text-[11px] mt-0.5 opacity-80 break-all">
+                          {status.lastFailureReason}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 黄：同物理卷 —— 不挡正常运行，只是容灾削弱 */}
+            {status.sameVolume && (
+              <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-700/40">
+                <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                <div className="text-xs">
+                  <div className="font-semibold text-amber-700 dark:text-amber-400">
+                    {t("dataManager.backup.sameVolumeTitle")}
+                  </div>
+                  <div className="text-amber-600 dark:text-amber-300 mt-0.5">
+                    {t("dataManager.backup.sameVolumeDesc")}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ===== 状态指标小卡 ===== */}
+        {status && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900/60 p-2">
+              <div className="text-zinc-500 mb-0.5 flex items-center gap-1">
+                <Clock size={11} /> {t("dataManager.backup.lastSuccess")}
+              </div>
+              <div
+                className={`font-semibold ${
+                  status.hoursSinceLastSuccess !== null && status.hoursSinceLastSuccess > status.autoBackupIntervalHours * 2
+                    ? "text-amber-600 dark:text-amber-400"
+                    : "text-zinc-800 dark:text-zinc-200"
+                }`}
+              >
+                {formatSince(status.hoursSinceLastSuccess)}
+              </div>
+            </div>
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900/60 p-2">
+              <div className="text-zinc-500 mb-0.5 flex items-center gap-1">
+                <RefreshCw size={11} />
+                {status.autoBackupRunning
+                  ? t("dataManager.backup.autoOn", { hours: status.autoBackupIntervalHours })
+                  : t("dataManager.backup.autoOff")}
+              </div>
+              <div className={`font-semibold ${status.autoBackupRunning ? "text-emerald-600" : "text-zinc-400"}`}>
+                {status.autoBackupRunning ? "●" : "○"}
+              </div>
+            </div>
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900/60 p-2">
+              <div className="text-zinc-500 mb-0.5 flex items-center gap-1">
+                <HardDrive size={11} /> {t("dataManager.backup.freeSpace")}
+              </div>
+              <div className="font-semibold text-zinc-800 dark:text-zinc-200">
+                {fmtBytes(status.backupDirFreeBytes ?? 0)}
+              </div>
+            </div>
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900/60 p-2">
+              <div className="text-zinc-500 mb-0.5 flex items-center gap-1">
+                <Server size={11} /> {t("dataManager.backup.backupDir")}
+              </div>
+              <div className="font-mono text-[11px] text-zinc-700 dark:text-zinc-300 truncate" title={status.backupDir}>
+                {status.backupDir}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="text-xs text-red-500 flex items-center gap-1">
+            <AlertCircle size={12} /> {error}
+          </div>
+        )}
+
+        {/* ===== 备份目录配置区 ===== */}
+        {/*
+          为什么单独抽：sameVolume 警告/不可写错误已经在顶部横幅出现，
+          管理员看完应该有一个 "立刻能动手切换" 的入口，而不是去改 docker-compose
+          重启容器（那对生产环境而言是几分钟的不可用窗口）。
+
+          流程：
+            1. 输入候选路径 → 点 "校验" → 调 setDir(dryRun=true) →
+               显示 ok/reason/sameVolume/freeBytes；
+            2. 校验通过且管理员确认 → 点 "切换" → withSudo + setDir(dryRun=false)；
+               切换成功后旧目录文件不会迁移，前端 i18n 文案明确告知。
+        */}
+        <BackupDirSection
+          currentBackupDir={status?.backupDir ?? ""}
+          currentDataDir={status?.dataDir ?? ""}
+          currentSameVolume={status?.sameVolume ?? false}
+          askPassword={askPassword}
+          sudoTokenRef={sudoTokenRef}
+          onSwitched={() => {
+            // 切换成功后重新拉 status —— sameVolume 横幅、可用空间、目录都会更新
+            reload();
+          }}
+        />
+
+        {/* ===== 自动备份配置区 ===== */}
+        {/*
+          字段持久化由后端 BackupManager 写到 system_settings.backup:auto；
+          重启后由 readEffectiveAutoConfig 读出。这里 UI 只负责暴露开关 + 间隔，
+          点 "保存" 才真正下发；改完不点保存离开页面则不生效（避免拖滑杆误触发）。
+        */}
+        <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900/60 p-3 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+              <RefreshCw size={14} className="text-emerald-500" />
+              {t("dataManager.backup.autoConfigTitle")}
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoEnabled}
+                onChange={(e) => setAutoEnabled(e.target.checked)}
+                className="w-4 h-4 accent-emerald-600"
+              />
+              <span className="text-xs text-zinc-600 dark:text-zinc-400">
+                {autoEnabled ? t("dataManager.backup.autoEnabledLabel") : t("dataManager.backup.autoDisabledLabel")}
+              </span>
+            </label>
+          </div>
+
+          <div className={autoEnabled ? "" : "opacity-50 pointer-events-none"}>
+            <div className="flex items-center gap-3">
+              <label className="text-xs text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
+                {t("dataManager.backup.intervalLabel")}
+              </label>
+              <input
+                type="range"
+                min={1}
+                max={168}
+                step={1}
+                value={Math.min(autoIntervalHours, 168)}
+                onChange={(e) => setAutoIntervalHours(Number(e.target.value))}
+                className="flex-1 accent-emerald-600"
+                disabled={!autoEnabled}
+              />
+              <input
+                type="number"
+                min={1}
+                max={720}
+                value={autoIntervalHours}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n)) setAutoIntervalHours(Math.max(1, Math.min(720, Math.round(n))));
+                }}
+                className="w-16 px-2 py-1 text-xs text-right rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
+                disabled={!autoEnabled}
+              />
+              <span className="text-xs text-zinc-500 whitespace-nowrap">
+                {t("dataManager.backup.intervalUnit")}
+              </span>
+            </div>
+            <div className="text-[11px] text-zinc-400 mt-1">
+              {t("dataManager.backup.intervalHint")}
+            </div>
+          </div>
+
+          {autoMsg && (
+            <div className={`text-xs flex items-start gap-1 ${autoMsg.type === "ok" ? "text-green-600" : "text-red-500"}`}>
+              {autoMsg.type === "ok" ? <CheckCircle size={12} className="mt-0.5" /> : <AlertCircle size={12} className="mt-0.5" />}
+              <span>{autoMsg.text}</span>
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              onClick={handleSaveAuto}
+              disabled={
+                autoSaving ||
+                // 没变化就禁用，避免无意义 sudo 弹框
+                (status !== null &&
+                  status.autoBackupRunning === autoEnabled &&
+                  status.autoBackupIntervalHours === autoIntervalHours)
+              }
+              className={`flex items-center justify-center py-1.5 px-3 rounded-lg text-xs font-medium transition-all ${
+                autoSaving
+                  ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
+                  : "bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+              }`}
+            >
+              {autoSaving ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  {t("dataManager.backup.savingAuto")}
+                </>
+              ) : (
+                t("dataManager.backup.saveAuto")
+              )}
+            </button>
+          </div>
+        </div>
+
+        {createMsg && (
+          <div className={`text-xs flex items-start gap-1 ${createMsg.type === "ok" ? "text-green-600" : "text-red-500"}`}>
+            {createMsg.type === "ok" ? <CheckCircle size={12} className="mt-0.5" /> : <AlertCircle size={12} className="mt-0.5" />}
+            <span>{createMsg.text}</span>
+          </div>
+        )}
+
+        {/* ===== 立即备份按钮 =====
+            布局取舍：
+              - 之前用 grid-cols-3 等宽，导致中文最长的"立即备份（仅数据库）"被强制换行，
+                整行按钮变成两倍高、视觉破败。
+              - 改成 flex-wrap：每个按钮按内容自适应宽度（min-w-0 + flex-1 让它们尽量分摊宽度），
+                文字加 whitespace-nowrap 严禁换行；窄屏（<sm）回退为竖排堆叠。
+              - 统一固定按钮高度 h-9，避免 loading/正常态切换时高度跳动。 */}
+        <div className="flex flex-col sm:flex-row flex-wrap gap-2">
+          <button
+            onClick={() => handleCreate("db-only")}
+            disabled={creating !== null}
+            className={`flex-1 min-w-0 sm:min-w-[10rem] h-9 flex items-center justify-center px-3 rounded-lg font-medium text-sm whitespace-nowrap transition-all ${
+              creating !== null
+                ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
+                : "bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+            }`}
+          >
+            {creating === "db-only" ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-1.5 animate-spin flex-shrink-0" />
+                <span className="truncate">{t("dataManager.backup.creating")}</span>
+              </>
+            ) : (
+              <>
+                <Save className="w-4 h-4 mr-1.5 flex-shrink-0" />
+                <span className="truncate">{t("dataManager.backup.createDb")}</span>
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => handleCreate("full")}
+            disabled={creating !== null}
+            className={`flex-1 min-w-0 sm:min-w-[8rem] h-9 flex items-center justify-center px-3 rounded-lg font-medium text-sm whitespace-nowrap transition-all ${
+              creating !== null
+                ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
+                : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
+            }`}
+          >
+            {creating === "full" ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-1.5 animate-spin flex-shrink-0" />
+                <span className="truncate">{t("dataManager.backup.creating")}</span>
+              </>
+            ) : (
+              <>
+                <FolderDown className="w-4 h-4 mr-1.5 flex-shrink-0" />
+                <span className="truncate">{t("dataManager.backup.createFull")}</span>
+              </>
+            )}
+          </button>
+          <button
+            onClick={reload}
+            disabled={loading}
+            className="sm:flex-none sm:w-auto h-9 flex items-center justify-center px-4 rounded-lg font-medium text-sm whitespace-nowrap border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={`mr-1.5 flex-shrink-0 ${loading ? "animate-spin" : ""}`} />
+            {t("dataManager.backup.refresh")}
+          </button>
+        </div>
+
+        {/* ===== 备份列表 ===== */}
+        <div>
+          {backups.length === 0 ? (
+            <div className="text-center text-xs text-zinc-400 py-6">
+              {t("dataManager.backup.noBackups")}
+            </div>
+          ) : (
+            <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden divide-y divide-zinc-200 dark:divide-zinc-700">
+              {backups.map((b) => (
+                <div key={b.filename} className="flex items-center gap-3 px-3 py-2 bg-white dark:bg-zinc-900/60 hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-mono text-zinc-800 dark:text-zinc-200 truncate" title={b.filename}>
+                      {b.filename}
+                    </div>
+                    <div className="text-[11px] text-zinc-500 mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                      <span>{b.type}</span>
+                      <span>{fmtBytes(b.size)}</span>
+                      <span>{new Date(b.createdAt).toLocaleString()}</span>
+                      <span>{b.noteCount} notes · {b.notebookCount} notebooks</span>
+                      <span className="opacity-70">schema v{b.schemaVersion}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setRestoreTarget(b)}
+                    className="p-1.5 rounded hover:bg-amber-50 dark:hover:bg-amber-500/10 text-zinc-400 hover:text-amber-600"
+                    title={t("dataManager.backup.restoreTooltip")}
+                  >
+                    <Upload size={14} />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(b.filename)}
+                    className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-500/10 text-zinc-400 hover:text-red-500"
+                    title={t("dataManager.backup.delete")}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ===== 恢复对话框（高危） ===== */}
+      {restoreTarget && (
+        <BackupRestoreDialog
+          target={restoreTarget}
+          onClose={() => setRestoreTarget(null)}
+          onSuccess={() => {
+            setRestoreTarget(null);
+            // 重启后刷新页面让用户登录新会话；先 reload 状态以便看到 lastSuccessAt 等
+            reload();
+          }}
+          askPassword={askPassword}
+          sudoTokenRef={sudoTokenRef}
+        />
+      )}
+
+      {/* ===== 自定义 sudo 密码确认 Modal =====
+          替代原生 window.prompt：
+            - 视觉与产品深浅色统一，移除浏览器顶部"localhost:5173 显示"的尴尬抬头；
+            - 密码框默认隐藏可一键切换显隐；
+            - 支持 Esc 关闭、回车提交，遮罩点击取消；
+            - 关闭时务必 resolve(null)，避免 withSudo 永远挂起。 */}
+      <AnimatePresence>
+        {sudoAsk && (
+          <motion.div
+            key="sudo-ask"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+          >
+            {/* 半透明遮罩 */}
+            <div
+              className="absolute inset-0 bg-zinc-900/40 dark:bg-black/60 backdrop-blur-sm"
+              onClick={() => closeSudoAsk(null)}
+            />
+            <motion.form
+              initial={{ scale: 0.95, y: 10, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.95, y: 10, opacity: 0 }}
+              transition={{ type: "spring", duration: 0.3, bounce: 0 }}
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!sudoPwd) return;
+                closeSudoAsk(sudoPwd);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  closeSudoAsk(null);
+                }
+              }}
+              className="relative w-full max-w-md bg-white dark:bg-zinc-950 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 overflow-hidden"
+            >
+              {/* 标题栏 */}
+              <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-100 dark:border-zinc-800">
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                  <Lock className="w-3.5 h-3.5 text-amber-500" />
+                  {t("dataManager.backup.sudoTitle") || "身份验证"}
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => closeSudoAsk(null)}
+                  className="p-1 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  aria-label="close"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* 内容 */}
+              <div className="p-5 space-y-3">
+                {/* 提示横幅：复用现有 sudoPrompt 文案，带 amber 警示色 */}
+                <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50/70 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-700/40 text-amber-700 dark:text-amber-300 text-xs leading-relaxed">
+                  <ShieldAlert className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    {t("dataManager.backup.sudoPrompt") ||
+                      "请输入当前密码以确认本次备份/恢复操作（5 分钟内连续操作只需输一次）"}
+                  </span>
+                </div>
+
+                {/* 密码输入：左侧 lock 图标 + 右侧显隐切换按钮 */}
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                  {t("dataManager.backup.sudoPasswordLabel") || "当前密码"}
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Lock className="w-3.5 h-3.5 text-zinc-400" />
+                  </div>
+                  <input
+                    type={sudoShowPwd ? "text" : "password"}
+                    value={sudoPwd}
+                    onChange={(e) => setSudoPwd(e.target.value)}
+                    placeholder={t("dataManager.backup.sudoPasswordPlaceholder") || "输入登录密码"}
+                    autoFocus
+                    autoComplete="current-password"
+                    className="block w-full pl-9 pr-10 py-2.5 text-sm rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-800/50 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 dark:focus:border-indigo-500 transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setSudoShowPwd((v) => !v)}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                    tabIndex={-1}
+                    aria-label={sudoShowPwd ? "hide password" : "show password"}
+                  >
+                    {sudoShowPwd ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+
+                {/* 操作按钮 */}
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => closeSudoAsk(null)}
+                    className="px-3.5 py-1.5 text-xs rounded-lg text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+                  >
+                    {t("common.cancel") || "取消"}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!sudoPwd}
+                    className="px-3.5 py-1.5 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-1.5"
+                  >
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    {t("common.confirm") || "确定"}
+                  </button>
+                </div>
+              </div>
+            </motion.form>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
+  );
+}
+
+// ============================================================================
+// 备份恢复对话框 —— 两步走：dryRun 预览 → sudo 验证 → 真正恢复
+// ----------------------------------------------------------------------------
+// 为什么单独抽组件：
+//  1. 状态机较复杂（dryRun loading / 已预览 / 正在恢复 / 已恢复），塞在
+//     BackupSection 里会让父组件 useState 数量翻倍；
+//  2. 弹窗内部的多步骤交互可以独立卸载，关掉对话框就丢光中间态，避免泄漏；
+//  3. 后续若要把恢复入口从备份页移到通知中心、或独立出"灾难恢复向导"，
+//     抽出来更易复用。
+//
+// **极强警告语**：恢复=覆盖整库，包括其他用户的数据；后端会在覆盖前先做安全
+// 备份（见 BackupManager.restoreFromDbOnly / restoreFromZip），即使误恢复也
+// 可以从 .pre-restore.bak 二次回滚，但 UI 仍要把这一行影响范围讲明白。
+// ============================================================================
+function BackupRestoreDialog(props: {
+  target: BackupRow;
+  onClose: () => void;
+  onSuccess: () => void;
+  askPassword: () => string | null | Promise<string | null>;
+  sudoTokenRef: React.MutableRefObject<string | null>;
+}) {
+  const { target, onClose, onSuccess, askPassword, sudoTokenRef } = props;
+  const { t } = useTranslation();
+  const [stage, setStage] = useState<"loading" | "preview" | "restoring" | "done" | "error">("loading");
+  const [dryRun, setDryRun] = useState<RestoreDryRun | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string>("");
+  // confirmText：必须输入备份文件名作为最终确认（与 factoryReset 相同的安全模式）
+  const [confirmText, setConfirmText] = useState("");
+
+  // 进入对话框立刻调 dryRun 拿预览
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.backup.restore(target.filename, true);
+        if (cancelled) return;
+        if (!res.success || !res.dryRun) {
+          setErrorMsg(res.error || "preview failed");
+          setStage("error");
+          return;
+        }
+        setDryRun(res.dryRun);
+        setStage("preview");
+      } catch (err: any) {
+        if (cancelled) return;
+        setErrorMsg(err.message || "preview failed");
+        setStage("error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [target.filename]);
+
+  const handleConfirm = async () => {
+    if (confirmText !== target.filename) return;
+    setStage("restoring");
+    setErrorMsg("");
+    try {
+      const out = await withSudo(
+        (tk) => api.backup.restore(target.filename, false, tk),
+        askPassword,
+        sudoTokenRef.current,
+      );
+      if (!out) {
+        // 用户在密码框点了取消
+        setStage("preview");
+        return;
+      }
+      sudoTokenRef.current = out.sudoToken;
+      if (!out.result.success) {
+        setErrorMsg(out.result.error || "restore failed");
+        setStage("error");
+        return;
+      }
+      setStage("done");
+      // 给用户 2.5 秒看到"恢复成功，请重启"提示后再回到列表
+      setTimeout(() => onSuccess(), 2500);
+    } catch (err: any) {
+      setErrorMsg(err.message || "restore failed");
+      setStage("error");
+    }
+  };
+
+  // 计算总影响行数（dryRun 时用）
+  const totalClear = dryRun?.tables.reduce((s, t2) => s + t2.willClear, 0) ?? 0;
+  const totalInsert = dryRun?.tables.reduce((s, t2) => s + t2.willInsert, 0) ?? 0;
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col"
+      >
+        {/* 标题区 */}
+        <div className="px-5 py-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2">
+          <ShieldAlert size={18} className="text-amber-500" />
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+            {t("dataManager.backup.restoreTitle")}
+          </h3>
+          <span className="ml-auto text-[11px] font-mono text-zinc-500 truncate max-w-[260px]" title={target.filename}>
+            {target.filename}
+          </span>
+        </div>
+
+        {/* 高危横幅 */}
+        <div className="px-5 py-3 bg-red-50 dark:bg-red-500/10 border-b border-red-200 dark:border-red-700/40 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+          <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">{t("dataManager.backup.restoreDangerTitle")}</div>
+            <div className="mt-0.5">{t("dataManager.backup.restoreDangerDesc")}</div>
+          </div>
+        </div>
+
+        {/* 主体 */}
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+          {stage === "loading" && (
+            <div className="flex items-center gap-2 text-sm text-zinc-500">
+              <Loader2 size={14} className="animate-spin" />
+              {t("dataManager.backup.restoreLoadingPreview")}
+            </div>
+          )}
+
+          {(stage === "preview" || stage === "restoring") && dryRun && (
+            <>
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="rounded border border-zinc-200 dark:border-zinc-700 p-2">
+                  <div className="text-zinc-500 mb-0.5">{t("dataManager.backup.willClear")}</div>
+                  <div className="font-semibold text-red-600 dark:text-red-400">{totalClear.toLocaleString()}</div>
+                </div>
+                <div className="rounded border border-zinc-200 dark:border-zinc-700 p-2">
+                  <div className="text-zinc-500 mb-0.5">{t("dataManager.backup.willInsert")}</div>
+                  <div className="font-semibold text-emerald-600 dark:text-emerald-400">{totalInsert.toLocaleString()}</div>
+                </div>
+                <div className="rounded border border-zinc-200 dark:border-zinc-700 p-2">
+                  <div className="text-zinc-500 mb-0.5">{t("dataManager.backup.schemaVersion")}</div>
+                  <div className="font-semibold text-zinc-700 dark:text-zinc-300">v{dryRun.schemaVersion}</div>
+                </div>
+              </div>
+
+              <div className="text-xs text-zinc-500 mt-1">
+                {t("dataManager.backup.fileBundle", {
+                  attachments: dryRun.files.attachments,
+                  fonts: dryRun.files.fonts,
+                  plugins: dryRun.files.plugins,
+                })}
+              </div>
+
+              {/* 表级明细：只显示净变化 != 0 的，避免一屏几十张表全 0 */}
+              <div className="border border-zinc-200 dark:border-zinc-700 rounded overflow-hidden">
+                <div className="text-[11px] font-semibold text-zinc-500 px-3 py-1.5 bg-zinc-50 dark:bg-zinc-800/50 grid grid-cols-[1fr_auto_auto] gap-3">
+                  <span>{t("dataManager.backup.tableName")}</span>
+                  <span className="text-right w-20">{t("dataManager.backup.colClear")}</span>
+                  <span className="text-right w-20">{t("dataManager.backup.colInsert")}</span>
+                </div>
+                <div className="max-h-48 overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800">
+                  {dryRun.tables
+                    .filter((tb) => tb.willClear || tb.willInsert)
+                    .map((tb) => (
+                      <div
+                        key={tb.name}
+                        className="text-[11px] px-3 py-1 grid grid-cols-[1fr_auto_auto] gap-3 font-mono text-zinc-700 dark:text-zinc-300"
+                      >
+                        <span className="truncate" title={tb.name}>{tb.name}</span>
+                        <span className="text-right w-20 text-red-500">{tb.willClear || ""}</span>
+                        <span className="text-right w-20 text-emerald-600">{tb.willInsert || ""}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              {/* 最终输入文件名确认 */}
+              <div className="pt-2">
+                <label className="text-xs text-zinc-600 dark:text-zinc-400 block mb-1">
+                  {t("dataManager.backup.confirmFilenamePrompt")}
+                </label>
+                <input
+                  type="text"
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  disabled={stage === "restoring"}
+                  placeholder={target.filename}
+                  className="w-full px-2.5 py-1.5 text-xs font-mono rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+            </>
+          )}
+
+          {stage === "done" && (
+            <div className="flex flex-col items-center justify-center py-6 gap-2 text-center">
+              <CheckCircle size={32} className="text-emerald-500" />
+              <div className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                {t("dataManager.backup.restoreDoneTitle")}
+              </div>
+              <div className="text-xs text-zinc-500">
+                {t("dataManager.backup.restoreDoneDesc")}
+              </div>
+            </div>
+          )}
+
+          {stage === "error" && (
+            <div className="flex items-start gap-2 text-sm text-red-600 dark:text-red-400">
+              <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="font-semibold">{t("dataManager.backup.restoreFailed")}</div>
+                <div className="text-xs mt-0.5 break-all">{errorMsg}</div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 底栏 */}
+        <div className="px-5 py-3 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-end gap-2">
+          {stage !== "done" && (
+            <button
+              onClick={onClose}
+              disabled={stage === "restoring"}
+              className="px-3 py-1.5 text-xs rounded border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {t("dataManager.backup.cancel")}
+            </button>
+          )}
+          {stage === "preview" && (
+            <button
+              onClick={handleConfirm}
+              disabled={confirmText !== target.filename}
+              className={`px-3 py-1.5 text-xs rounded font-semibold flex items-center gap-1.5 ${
+                confirmText === target.filename
+                  ? "bg-red-600 hover:bg-red-700 text-white"
+                  : "bg-zinc-200 dark:bg-zinc-700 text-zinc-400 cursor-not-allowed"
+              }`}
+            >
+              <ShieldAlert size={12} />
+              {t("dataManager.backup.confirmRestore")}
+            </button>
+          )}
+          {stage === "restoring" && (
+            <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+              <Loader2 size={12} className="animate-spin" />
+              {t("dataManager.backup.restoring")}
+            </div>
+          )}
+          {stage === "error" && (
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 text-xs rounded bg-zinc-600 hover:bg-zinc-700 text-white"
+            >
+              {t("dataManager.backup.close")}
+            </button>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ============================================================================
+// 备份目录配置区 —— 让管理员在 UI 直接切换 backupDir，不必改 docker-compose
+// ----------------------------------------------------------------------------
+// 设计要点：
+//  1. 双行布局：上面显示 "当前备份目录 / 数据目录"，下面是 "新路径输入 + 校验/切换"。
+//     不把切换塞进同一个目录展示卡里，是因为切换是低频高风险操作，需要明显视觉
+//     分割（折叠面板/独立卡片二选一，这里选了独立卡片避免多一次点击）。
+//  2. 校验是 dryRun 调用，无需 sudo —— 用户改路径时可能多次试探，反复弹密码框
+//     体验极差；真正切换才走 sudo。
+//  3. 切换不迁移历史备份文件：在按钮 hint 和成功提示里都讲清楚，让管理员知道
+//     需要时手动 docker exec cp（避免 GUI 触发几十 GB IO 风暴）。
+//  4. 同卷警告以橙色而非红色显示——后端不会因 sameVolume=true 拒绝切换
+//     （比如管理员就是要换到同卷的另一个目录），但要让用户清楚这一点没解决核心问题。
+// ============================================================================
+function BackupDirSection(props: {
+  currentBackupDir: string;
+  currentDataDir: string;
+  currentSameVolume: boolean;
+  askPassword: () => string | null | Promise<string | null>;
+  sudoTokenRef: React.MutableRefObject<string | null>;
+  onSwitched: () => void;
+}) {
+  const { currentBackupDir, currentDataDir, currentSameVolume, askPassword, sudoTokenRef, onSwitched } = props;
+  const { t } = useTranslation();
+  const [input, setInput] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  // checkResult：dryRun 校验的最近一次结果。null 表示用户还没校验过。
+  const [checkResult, setCheckResult] = useState<{
+    ok: boolean;
+    resolved: string;
+    sameVolume?: boolean;
+    freeBytes?: number | null;
+    reason?: string;
+    message?: string;
+  } | null>(null);
+  const [opMsg, setOpMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // 输入变化时把上次校验结果清空 —— 否则用户改了路径却看到旧的"通过"会误以为新路径也 OK
+  useEffect(() => {
+    setCheckResult(null);
+    setOpMsg(null);
+  }, [input]);
+
+  const handleCheck = async () => {
+    if (!input.trim()) return;
+    setChecking(true);
+    setCheckResult(null);
+    setOpMsg(null);
+    try {
+      const res = await api.backup.setDir(input.trim(), true);
+      setCheckResult(res);
+    } catch (err: any) {
+      // 后端 400 时也走 catch（request() 会把 4xx 抛错）。
+      // 把 message 透出给用户，便于看到 "目录不可写" 等具体原因。
+      setCheckResult({
+        ok: false,
+        resolved: input.trim(),
+        message: err?.message || "check failed",
+      });
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const handleSwitch = async () => {
+    if (!checkResult?.ok) return;
+    // 二次 confirm —— 这是会影响所有未来备份位置的全局操作
+    if (!window.confirm(t("dataManager.backup.dirSwitchConfirm", { path: checkResult.resolved }))) {
+      return;
+    }
+    setSwitching(true);
+    setOpMsg(null);
+    try {
+      const out = await withSudo(
+        (tk) => api.backup.setDir(input.trim(), false, tk),
+        askPassword,
+        sudoTokenRef.current,
+      );
+      if (!out) {
+        setSwitching(false);
+        return;
+      }
+      sudoTokenRef.current = out.sudoToken;
+      if (!out.result.ok) {
+        setOpMsg({ type: "err", text: out.result.message || "switch failed" });
+        setSwitching(false);
+        return;
+      }
+      setOpMsg({ type: "ok", text: t("dataManager.backup.dirSwitchSuccess", { path: out.result.resolved }) });
+      setInput("");
+      setCheckResult(null);
+      onSwitched();
+    } catch (err: any) {
+      setOpMsg({ type: "err", text: err?.message || "switch failed" });
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  // 是否处于"已校验通过、可以切换"的活跃状态——用于决定是否展开切换面板
+  const canSwitch = checkResult?.ok === true;
+
+  return (
+    <div className="rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900/60 p-4 space-y-4">
+      {/* —— 标题 —— */}
+      <div className="flex items-center gap-2 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+        <HardDrive size={14} className="text-emerald-500" />
+        {t("dataManager.backup.dirConfigTitle")}
+      </div>
+
+      {/* —— 当前生效值（双栏） —— */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
+        <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50/60 dark:bg-zinc-800/40 px-3 py-2">
+          <div className="text-[11px] text-zinc-500 mb-1">{t("dataManager.backup.currentBackupDir")}</div>
+          <div className="font-mono text-[11px] text-zinc-700 dark:text-zinc-300 truncate" title={currentBackupDir}>
+            {currentBackupDir || "—"}
+          </div>
+        </div>
+        <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50/60 dark:bg-zinc-800/40 px-3 py-2">
+          <div className="text-[11px] text-zinc-500 mb-1">{t("dataManager.backup.currentDataDir")}</div>
+          <div className="font-mono text-[11px] text-zinc-700 dark:text-zinc-300 truncate" title={currentDataDir}>
+            {currentDataDir || "—"}
+          </div>
+        </div>
+      </div>
+
+      {/* —— 同卷警告 —— */}
+      {currentSameVolume && (
+        <div className="flex items-start gap-1.5 rounded-md bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-700/40 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+          <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+          <span>{t("dataManager.backup.dirSameVolumeHint")}</span>
+        </div>
+      )}
+
+      {/* —— 输入 + 校验 —— */}
+      <div className="space-y-2 pt-1 border-t border-zinc-100 dark:border-zinc-800">
+        <label className="text-xs text-zinc-600 dark:text-zinc-400 block">
+          {t("dataManager.backup.dirInputLabel")}
+        </label>
+        {/* 用 group 让 input 与 校验按钮 视觉融合（同高、共享圆角、加 focus 整体高亮） */}
+        <div className="flex items-stretch h-9 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 focus-within:ring-2 focus-within:ring-emerald-500 focus-within:border-transparent overflow-hidden">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={t("dataManager.backup.dirInputPlaceholder") || "/mnt/backup-volume"}
+            disabled={checking || switching}
+            className="flex-1 min-w-0 px-3 text-xs font-mono bg-transparent text-zinc-800 dark:text-zinc-200 focus:outline-none disabled:opacity-50"
+          />
+          <button
+            onClick={handleCheck}
+            disabled={!input.trim() || checking || switching}
+            className="px-3.5 text-xs font-medium border-l border-zinc-300 dark:border-zinc-600 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap"
+          >
+            {checking ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+            {checking ? t("dataManager.backup.dirChecking") : t("dataManager.backup.dirCheck")}
+          </button>
+        </div>
+
+        {/* —— 校验结果 —— */}
+        {checkResult && (
+          checkResult.ok ? (
+            <div className="rounded-lg border border-emerald-200 dark:border-emerald-700/40 bg-emerald-50 dark:bg-emerald-500/10 px-3 py-2 text-xs space-y-1.5">
+              <div className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-semibold">
+                <CheckCircle size={12} />
+                {t("dataManager.backup.dirCheckOk")}
+              </div>
+              <div className="font-mono text-[11px] text-zinc-700 dark:text-zinc-300 break-all leading-snug">
+                → {checkResult.resolved}
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-600 dark:text-zinc-400">
+                <span>
+                  {t("dataManager.backup.freeSpace")}:{" "}
+                  <span className="font-semibold">{fmtBytes(checkResult.freeBytes ?? 0)}</span>
+                </span>
+                {checkResult.sameVolume && (
+                  <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                    <AlertTriangle size={11} />
+                    {t("dataManager.backup.dirCheckSameVolume")}
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-red-200 dark:border-red-700/40 bg-red-50 dark:bg-red-500/10 px-3 py-2 text-xs space-y-1">
+              <div className="flex items-center gap-1.5 text-red-700 dark:text-red-400 font-semibold">
+                <AlertCircle size={12} />
+                {t("dataManager.backup.dirCheckFailed")}
+              </div>
+              <div className="text-red-600 dark:text-red-300 break-all leading-snug">
+                {checkResult.message || checkResult.reason}
+              </div>
+            </div>
+          )
+        )}
+
+        {/* —— 操作结果 —— */}
+        {opMsg && (
+          <div
+            className={`flex items-start gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${
+              opMsg.type === "ok"
+                ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700/40"
+                : "bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-300 border border-red-200 dark:border-red-700/40"
+            }`}
+          >
+            {opMsg.type === "ok" ? (
+              <CheckCircle size={12} className="mt-0.5 flex-shrink-0" />
+            ) : (
+              <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
+            )}
+            <span className="break-all leading-snug">{opMsg.text}</span>
+          </div>
+        )}
+
+        {/* —— 切换面板：仅当校验通过时才显示，避免按钮"灰着挡视线"的问题 —— */}
+        {canSwitch && (
+          <div className="rounded-lg border border-amber-200 dark:border-amber-700/40 bg-amber-50/60 dark:bg-amber-500/5 p-3 space-y-2.5">
+            <div className="flex items-start gap-1.5 text-[11px] text-amber-800 dark:text-amber-300 leading-snug">
+              <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+              <span>{t("dataManager.backup.dirMigrateHint")}</span>
+            </div>
+            <button
+              onClick={handleSwitch}
+              disabled={switching}
+              className={`w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-medium transition-all ${
+                switching
+                  ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
+                  : "bg-amber-600 hover:bg-amber-700 text-white shadow-sm"
+              }`}
+            >
+              {switching ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  {t("dataManager.backup.dirSwitching")}
+                </>
+              ) : (
+                <>
+                  <ShieldAlert className="w-3.5 h-3.5 mr-1.5" />
+                  {t("dataManager.backup.dirSwitch")}
+                </>
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* 校验未通过时只露一行小提示，不占大块视觉 */}
+        {!canSwitch && !checkResult && (
+          <div className="text-[11px] text-zinc-500 leading-snug pt-0.5">
+            {t("dataManager.backup.dirMigrateHint")}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

@@ -214,6 +214,8 @@ export interface Diary {
   userId: string;
   contentText: string;
   mood: string;
+  /** 已绑定的说说图片 id 数组（顺序即展示顺序）。需要 URL 时拼 /api/diary/attachments/<id>。 */
+  images: string[];
   createdAt: string;
 }
 

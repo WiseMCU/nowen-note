@@ -19,6 +19,25 @@ services:
       - "3001:3001"
     volumes:
       - nowen-note-data:/app/data
+      # ===========================================================================
+      # 【强烈建议】把备份目录挂载到与数据卷**不同的物理介质**上！
+      #
+      # 默认情况下备份会写入 /app/data/backups（即 nowen-note-data 卷内部），
+      # 一旦该卷损坏 / 误删 / 被勒索，数据和备份会一起没。这违反 3-2-1 备份原则
+      # （3 份副本、2 种介质、1 份异地）。
+      #
+      # 推荐做法（任选其一）：
+      #   1) 绑定挂载到宿主机另一块磁盘：
+      #        - /mnt/backup-disk/nowen-note:/app/backups
+      #      然后在 environment 区块设置 BACKUP_DIR=/app/backups
+      #   2) 挂载到 NAS / 网络存储路径
+      #   3) 创建独立的 docker volume（虽然仍可能在同一物理盘，但至少防 down -v 误删）：
+      #        - nowen-note-backup:/app/backups
+      #
+      # /api/backups/status 会返回 sameVolume=true/false，前端备份页会显示警告横幅。
+      # ---------------------------------------------------------------------------
+      # 取消下一行注释启用独立备份卷（任选 1/2/3 之一即可）：
+      # - nowen-note-backup:/app/backups
     # JWT_SECRET 等敏感变量由容器内 docker-entrypoint.sh 在首启时自动生成并
     # 持久化到 data 卷；用户零配置即可启动。
     # 如需手动覆盖（多实例共享密钥、企业统一密钥管理等），可在同目录下创建
@@ -30,9 +49,14 @@ services:
       - NODE_ENV=production
       - DB_PATH=/app/data/nowen-note.db
       - PORT=3001
+      # 启用上面的独立备份卷后，**必须**同步设置以下变量，否则备份仍会写到 data 卷：
+      # - BACKUP_DIR=/app/backups
       # Ollama 地址，如需使用请自行部署 Ollama 并填写正确地址
       # - OLLAMA_URL=http://host.docker.internal:11434
 
 volumes:
   nowen-note-data:
     driver: local
+  # 启用独立备份卷时取消下方注释（与上面 volumes 段对应）：
+  # nowen-note-backup:
+  #   driver: local

@@ -28,6 +28,18 @@ docker run -d --name nowen-note --restart unless-stopped \
 
 **默认账号**：`admin` / `admin123`（登录后请立即修改）。
 
+**忘记密码？** 设置环境变量 `NOWEN_RESET_PASSWORD` 重启容器即可重置：
+
+```bash
+docker run -d --name nowen-note --restart unless-stopped \
+  -p 3001:3001 \
+  -v /opt/nowen-note/data:/app/data \
+  -e NOWEN_RESET_PASSWORD=你的新密码 \
+  wisemcu/nowen-note:latest
+```
+
+重置后记得去掉该环境变量，避免每次启动都重置密码。
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |

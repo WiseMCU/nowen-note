@@ -38,7 +38,7 @@ docker run -d --name nowen-note --restart unless-stopped \
   wisemcu/nowen-note:latest
 ```
 
-重置后记得去掉该环境变量，避免每次启动都重置密码。
+密码重置成功后会在数据卷生成 `.password_reset_done` 标记，后续重启即使环境变量还在也不会重复重置。如需再次重置，**先删除数据卷中的 `.password_reset_done` 文件**再重启。
 
 ## 环境变量
 

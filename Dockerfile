@@ -1,13 +1,14 @@
 # =============================================================================
-# nowen-note 多架构 Dockerfile（精简版）
+# nowen-note 多架构 Dockerfile（极致精简版）
 # -----------------------------------------------------------------------------
 # 支持 linux/amd64 与 linux/arm64
 #
-# 优化：
-#   - 后端运行时使用 node:20-alpine（~50MB vs ~200MB）
-#   - 后端构建阶段编译 TypeScript 后 npm prune --production，
-#     运行时直接复制 node_modules，不再重装依赖
-#   - 构建工具（python3/make/g++）仅在构建阶段安装
+# 优化点：
+#   - 运行时 node:20-alpine 基础镜像（~47MB 压缩后）
+#   - 构建阶段编译后 npm prune --production，运行时不再重装
+#   - 构建工具（python3/make/g++）仅构建阶段安装，不进运行时
+#   - 清理 node_modules 中的测试、文档、源码等无关文件
+#   - 合并 RUN 层减少镜像层数
 # =============================================================================
 
 ARG TARGETARCH=amd64
@@ -29,7 +30,6 @@ RUN ROLLUP_VER=$(node -e "try{const l=require('./package-lock.json');const v=(l.
       *)     ROLLUP_PKG="" ;; \
     esac; \
     if [ -n "$ROLLUP_PKG" ]; then \
-      echo "Installing $ROLLUP_PKG ..." && \
       npm install "$ROLLUP_PKG" --save-optional 2>/dev/null || true; \
     fi
 
@@ -43,16 +43,29 @@ WORKDIR /app/backend
 COPY backend/package.json backend/package-lock.json ./
 RUN npm ci
 COPY backend/ .
-RUN npx tsc && npm prune --production
+# 编译 TypeScript → 清理 dev 依赖 → 清理 node_modules 中的冗余文件
+RUN npx tsc && npm prune --production && \
+    find ./node_modules -type d \( -name test -o -name tests -o -name __tests__ \
+      -o -name doc -o -name docs -o -name example -o -name examples \
+      -o -name .github -o -name benchmark -o -name benchmarks \) \
+      -exec rm -rf {} + 2>/dev/null || true && \
+    find ./node_modules -type f \( -name "*.md" -o -name "*.ts" -o -name "*.map" \
+      -o -name "*.flow" -o -name ".eslintrc*" -o -name ".prettierrc*" \
+      -o -name "tsconfig*.json" -o -name "jest.config*" \) \
+      -delete 2>/dev/null || true && \
+    # 清理 better-sqlite3 的编译中间产物，只保留运行时必要的文件
+    for dir in ./node_modules/better-sqlite3/build; do \
+      [ -d "$dir" ] && find "$dir" -type f ! -name "*.node" -delete 2>/dev/null || true; \
+    done && \
+    rm -rf /root/.npm /tmp/*
 
-# ---------- Stage 3: 运行时镜像 ----------
+# ---------- Stage 3: 运行时 ----------
 FROM node:20-alpine
 WORKDIR /app
 
-# 只需复制编译产物和生产依赖（已 prune）
+# 仅复制运行时必要文件
 COPY --from=backend-build /app/backend/node_modules ./backend/node_modules
 COPY --from=backend-build /app/backend/dist ./backend/dist
-COPY --from=backend-build /app/backend/package.json ./backend/package.json
 COPY backend/templates ./backend/templates
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
@@ -69,6 +82,5 @@ ENV PORT=3001
 
 EXPOSE 3001
 
-WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "backend/dist/index.js"]

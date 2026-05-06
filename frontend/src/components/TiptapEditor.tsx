@@ -24,7 +24,7 @@ import {
   Quote, ImagePlus, CheckSquare, Highlighter, Minus, Undo, Redo,
   FileCode, Sparkles, X, ZoomIn, ZoomOut, RotateCcw,
   Table2, Indent, Outdent, AlignLeft, AlignCenter, AlignRight, Trash2,
-  FileType, Check, AlertCircle, Info
+  FileType, Check, AlertCircle, Info, Copy as CopyIcon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
@@ -1099,22 +1099,54 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
   }, []);
 
   // 图片点击预览事件监听
+  //
+  // 行为分流（解决"点图片立即放大、调不出 ResizableImageView 的尺寸手柄"问题）：
+  //   - 只读态（!editable）：保持原行为，单击图片即弹 Lightbox 预览，符合阅读期望。
+  //   - 编辑态：
+  //       * 单击  → 让 ProseMirror 选中图片节点，ResizableImageView 显示四角手柄。
+  //                 这里只需"不打开预览"即可（选中由 ProseMirror 默认行为完成）。
+  //       * 双击  → 打开 Lightbox 预览原图，相当于显式"我要看大图"的意图，
+  //                 不会和拖动手柄改尺寸的操作互相干扰。
+  //
+  // 注意：handle 元素位于图片右下角等四角处，使用 pointer-events:auto 但
+  //   onMouseDown 会 stopPropagation，所以拖手柄时不会冒泡到这里触发预览。
   useEffect(() => {
     if (!editor) return;
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === "IMG" && target.closest(".ProseMirror")) {
-        const src = (target as HTMLImageElement).src;
-        if (src) {
-          setPreviewImage(src);
-          setImageZoom(1);
-          setImageDrag({ x: 0, y: 0 });
-        }
-      }
+
+    const isEditorImage = (el: EventTarget | null): el is HTMLImageElement => {
+      const node = el as HTMLElement | null;
+      return !!node && node.tagName === "IMG" && !!node.closest(".ProseMirror");
     };
+
+    const openPreview = (img: HTMLImageElement) => {
+      const src = img.src;
+      if (!src) return;
+      setPreviewImage(src);
+      setImageZoom(1);
+      setImageDrag({ x: 0, y: 0 });
+    };
+
+    const handleClick = (e: MouseEvent) => {
+      if (!isEditorImage(e.target)) return;
+      if (editor.isEditable) return; // 编辑态：让出单击给"选中→出手柄"
+      openPreview(e.target as HTMLImageElement);
+    };
+
+    const handleDblClick = (e: MouseEvent) => {
+      if (!isEditorImage(e.target)) return;
+      if (!editor.isEditable) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openPreview(e.target as HTMLImageElement);
+    };
+
     const editorDom = editor.view.dom;
     editorDom.addEventListener("click", handleClick);
-    return () => editorDom.removeEventListener("click", handleClick);
+    editorDom.addEventListener("dblclick", handleDblClick);
+    return () => {
+      editorDom.removeEventListener("click", handleClick);
+      editorDom.removeEventListener("dblclick", handleDblClick);
+    };
   }, [editor]);
 
   // 图片预览滚轮缩放
@@ -1152,6 +1184,180 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       editor.setEditable(editable);
     }
   }, [editor, editable]);
+
+  // 锁定 / 解锁时强制编辑器重渲染
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const t = setTimeout(() => {
+      if (!editor.isDestroyed) editor.view.dispatch(editor.state.tr);
+    }, 30);
+    return () => clearTimeout(t);
+  }, [editor, editable]);
+
+  // 锁定笔记复制按钮：仅在 !editable 时通过 DOM splitText 精准定位
+  useEffect(() => {
+    if (!editor || editable || !editor.view?.dom) return;
+
+    const dom = editor.view.dom;
+    const COPY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>';
+    const CHECK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    const PATTERNS: RegExp[] = [
+      /https?:\/\/[^\s<>"'}\]?]+/g,
+      /sk-[A-Za-z0-9+/=_-]{10,}/g,
+      /tvly-[A-Za-z0-9+/=_-]{10,}/g,
+      /mpg-[A-Za-z0-9+/=_-]{10,}/g,
+      /ark-[A-Za-z0-9+/=_-]{10,}/g,
+      /export\s+\w+=\S+/g,
+      /[A-Z][A-Za-z0-9.-]{3,}\d[A-Za-z0-9.-]*/g,
+    ];
+
+    const copyToClipboard = (text: string): Promise<boolean> => {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).then(() => true);
+      }
+      return new Promise((resolve) => {
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.cssText = "position:fixed;left:-9999px;top:-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          resolve(document.execCommand("copy"));
+          document.body.removeChild(ta);
+        } catch { resolve(false); }
+      });
+    };
+
+    const makeBtn = (text: string): HTMLElement => {
+      const btn = document.createElement("span");
+      btn.className = "locked-copy-btn";
+      btn.contentEditable = "false";
+      btn.style.cssText =
+        "display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin:0 3px;vertical-align:middle;border-radius:6px;cursor:pointer;background:rgba(139,92,246,0.1);color:#7c3aed;flex-shrink:0;pointer-events:auto;";
+      btn.title = "点击复制";
+      btn.innerHTML = COPY_SVG;
+      btn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.dataset.copied === "1") return;
+        const ok = await copyToClipboard(text);
+        if (ok) {
+          btn.innerHTML = CHECK_SVG;
+          btn.style.background = "rgba(16,185,129,0.15)";
+          btn.style.color = "#10b981";
+          btn.dataset.copied = "1";
+          btn.title = "已复制";
+          toast.success("已复制", 1200);
+          setTimeout(() => {
+            btn.innerHTML = COPY_SVG;
+            btn.style.background = "rgba(139,92,246,0.1)";
+            btn.style.color = "#7c3aed";
+            delete btn.dataset.copied;
+            btn.title = "点击复制";
+          }, 1200);
+        }
+      };
+      return btn;
+    };
+
+    // 在 textNode 上按照 ranges 拆分并插入按钮
+    const patchTextNode = (node: Text) => {
+      const parent = node.parentNode;
+      if (!parent) return;
+
+      parent.normalize(); // 合并被前次 split 拆散的同级文本节点
+
+      const text = parent.textContent || "";
+      const allRanges: Array<{ start: number; end: number; text: string }> = [];
+      for (const pattern of PATTERNS) {
+        pattern.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = pattern.exec(text)) !== null) {
+          allRanges.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
+        }
+      }
+      if (!allRanges.length) return;
+
+      allRanges.sort((a, b) => a.start - b.start || b.end - a.end);
+      const merged: typeof allRanges = [];
+      for (const r of allRanges) {
+        const last = merged[merged.length - 1];
+        if (last && r.start < last.end) {
+          if (r.text.length > last.text.length) { last.text = r.text; last.end = r.end; }
+        } else { merged.push({ ...r }); }
+      }
+
+      // 找 normalize 后的第一个文本节点
+      let cursor: Text | null = null;
+      for (let c = parent.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType === 3 && (c.textContent?.length || 0) > 0) { cursor = c as Text; break; }
+      }
+      if (!cursor) return;
+
+      let consumed = 0;
+      for (const r of merged) {
+        const fullText = cursor.textContent || "";
+        // r 的相对偏移需要扣除已被 split 消耗掉的前缀长度
+        const localStart = r.start - consumed;
+        const localEnd = r.end - consumed;
+
+        if (localStart > fullText.length || localEnd > fullText.length) continue;
+
+        // 先拆 r.start：cursor 变成 match 起始位置
+        if (localStart > 0) {
+          cursor = cursor.splitText(localStart);
+        }
+        // 再拆 matchLen 把匹配独立出来
+        const matchLen = localEnd - localStart;
+        if (matchLen < (cursor.textContent?.length || 0)) {
+          cursor.splitText(matchLen);
+        }
+        // cursor 现在是匹配文本节点；按钮插在它之后
+        const btn = makeBtn(r.text);
+        parent.insertBefore(btn, cursor.nextSibling);
+        // 继续处理按钮之后的文本
+        const next = btn.nextSibling;
+        cursor = (next && next.nodeType === 3) ? next as Text : null;
+        consumed = r.end;
+        if (!cursor) break;
+      }
+    };
+
+    // 应用按钮：用 rAF 自循环避免 observer 递归，同时去重
+    let applyTimer = 0;
+    let applying = false;
+    const applyButtons = () => {
+      if (applying) return;
+      applying = true;
+      dom.querySelectorAll(".locked-copy-btn").forEach((b) => b.remove());
+
+      const walker = document.createTreeWalker(dom, NodeFilter.SHOW_TEXT);
+      const textNodes: Text[] = [];
+      let tn: Text | null;
+      while ((tn = walker.nextNode() as Text | null)) {
+        if ((tn.textContent?.length || 0) > 3 && !tn.parentElement?.closest(".locked-copy-btn")) {
+          textNodes.push(tn);
+        }
+      }
+
+      // 按父元素去重：同 parent 只处理一次
+      const seenParents = new Set<Element>();
+      for (const node of textNodes) {
+        const parent = node.parentElement;
+        if (!parent || seenParents.has(parent)) continue;
+        seenParents.add(parent);
+        patchTextNode(node);
+      }
+      applying = false;
+    };
+
+    // 初始应用一次即可（锁定模式下 PM 不再修改 DOM）
+    applyButtons();
+
+    return () => {
+      dom.querySelectorAll(".locked-copy-btn").forEach((b: Element) => b.remove());
+    };
+  }, [editor, editable, note.id]);
 
   // 跟踪编辑器聚焦状态（给移动端浮动工具栏用）
   useEffect(() => {

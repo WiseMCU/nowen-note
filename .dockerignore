@@ -1,0 +1,13 @@
+# Build context exclusions — reduce size sent to Docker daemon
+.git
+.github
+node_modules
+backend/node_modules
+frontend/node_modules
+build
+release
+data
+*.log
+.env
+.DS_Store
+Thumbs.db

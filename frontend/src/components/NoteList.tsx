@@ -1,6 +1,6 @@
 import React, { useEffect, useCallback, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Pin, PinOff, Star, StarOff, Clock, FileText, Trash2, ArchiveRestore, Menu, FolderInput, ChevronRight, ChevronDown, ChevronLeft, Folder, X, Check, Lock, Unlock, CalendarDays, RefreshCw, Share2, GripVertical, Download } from "lucide-react";
+import { Plus, Pin, PinOff, Star, StarOff, Clock, FileText, Trash2, ArchiveRestore, Menu, FolderInput, ChevronRight, ChevronDown, ChevronLeft, Folder, X, Check, Lock, Unlock, CalendarDays, RefreshCw, Share2, GripVertical, Download, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import ContextMenu, { ContextMenuItem } from "@/components/ContextMenu";
@@ -13,6 +13,7 @@ import { useTranslation } from "react-i18next";
 import { haptic } from "@/hooks/useCapacitor";
 import { toast } from "@/lib/toast";
 import { exportSingleNote } from "@/lib/exportService";
+import { readMarkdownFiles, readMarkdownFromZip, importNotes } from "@/lib/importService";
 import { realtime } from "@/lib/realtime";
 
 function formatTime(dateStr: string, t: (key: string, opts?: any) => string) {
@@ -760,7 +761,40 @@ export default function NoteList() {
     ghostEl: HTMLDivElement | null;
   } | null>(null);
   const noteCardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const importFileInputRef = useRef<HTMLInputElement>(null);
   const { t } = useTranslation();
+
+  const handleImportFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || !files.length) return;
+    const notebookId = state.selectedNotebookId;
+    if (!notebookId) return;
+    const notebook = state.notebooks.find(n => n.id === notebookId);
+    try {
+      const fileArray = Array.from(files);
+      const zipFile = fileArray.find(f => f.name.endsWith(".zip"));
+      const fileInfos = zipFile
+        ? await readMarkdownFromZip(zipFile)
+        : await readMarkdownFiles(files);
+      e.target.value = "";
+      const selected = fileInfos.filter(f => f.selected);
+      if (!selected.length) {
+        toast.error("未找到可导入的文件（支持 .md / .txt / .html / .zip）");
+        return;
+      }
+      const toastId = toast.info(`正在导入 ${selected.length} 个文件到"${notebook?.name || ""}"...`, 0);
+      const result = await importNotes(fileInfos, notebookId);
+      toast.dismiss(toastId);
+      toast.success(`成功导入 ${result.count} 篇笔记到"${notebook?.name || ""}"`);
+      actions.refreshNotebooks();
+      fetchNotesRef.current?.();
+    } catch (err: any) {
+      e.target.value = "";
+      toast.error(err?.message || "导入失败");
+    }
+  }, [state.notebooks, state.selectedNotebookId, actions]);
+
+  const fetchNotesRef = useRef<() => Promise<void>>(null as any);
 
   // Phase 2: 加载分享状态
   useEffect(() => {
@@ -834,6 +868,8 @@ export default function NoteList() {
     setSelectedIds(new Set());
     setLastClickedId(null);
   }, [state.viewMode, state.selectedNotebookId, state.searchQuery, state.selectedTagId, dateFilter]);
+
+  fetchNotesRef.current = fetchNotes;
 
   // 全局 ESC 清空多选（多选状态下）
   useEffect(() => {
@@ -1434,6 +1470,13 @@ export default function NoteList() {
               )}
             </button>
           )}
+          <button
+            onClick={() => importFileInputRef.current?.click()}
+            className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
+            title={t("dataManager.importNotes")}
+          >
+            <Upload size={15} />
+          </button>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleCreateNote}>
             <Plus size={15} />
           </Button>
@@ -1604,6 +1647,13 @@ export default function NoteList() {
                 <Plus size={14} />
                 {t('common.newNote')}
               </button>
+              <button
+                onClick={() => importFileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-app-border text-tx-secondary text-xs font-medium hover:bg-app-hover active:scale-95 transition-all mt-3"
+              >
+                <Upload size={14} />
+                {t('dataManager.importNotes')}
+              </button>
             </div>
           )}
           {/* 骨架屏 Loading */}
@@ -1669,6 +1719,14 @@ export default function NoteList() {
           await createNoteInNotebook(nbId);
         }}
         onClose={() => setPickerOpen(false)}
+      />
+      <input
+        ref={importFileInputRef}
+        type="file"
+        accept=".md,.txt,.markdown,.html,.htm,.zip"
+        multiple
+        className="hidden"
+        onChange={handleImportFiles}
       />
     </div>
   );

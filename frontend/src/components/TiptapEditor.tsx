@@ -1238,6 +1238,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       btn.style.cssText =
         "display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin:0 3px;vertical-align:middle;border-radius:6px;cursor:pointer;background:rgba(139,92,246,0.1);color:#7c3aed;flex-shrink:0;pointer-events:auto;";
       btn.title = "点击复制";
+      btn.dataset.copyText = text;
       btn.innerHTML = COPY_SVG;
       btn.onclick = async (e) => {
         e.preventDefault();
@@ -1298,6 +1299,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       }
       if (!allRanges.length) return;
 
+
       // 过滤"夹心" token：被中文前后包围的（如"查看 supernode 进程"中的 supernode）
       // 整段中文在前则排除（如 "root // ssh端口6022"），但中文打头时保留尾部 token
       const firstNonCjk = text.search(/[^\u4e00-\u9fff\s]/);
@@ -1332,26 +1334,48 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
 
       let consumed = 0;
       for (const r of merged) {
-        const fullText = cursor.textContent || "";
-        // r 的相对偏移需要扣除已被 split 消耗掉的前缀长度
-        const localStart = r.start - consumed;
-        const localEnd = r.end - consumed;
+        let curText = cursor.textContent || "";
+        let localStart = r.start - consumed;
+        let localEnd = r.end - consumed;
 
-        if (localStart > fullText.length || localEnd > fullText.length) continue;
+        if (localStart > curText.length) continue;
 
-        // 先拆 r.start：cursor 变成 match 起始位置
+        // 拆分起始位置
         if (localStart > 0) {
           cursor = cursor.splitText(localStart);
+          localEnd -= localStart;
+          curText = cursor.textContent || "";
         }
-        // 再拆 matchLen 把匹配独立出来
-        const matchLen = localEnd - localStart;
-        if (matchLen < (cursor.textContent?.length || 0)) {
+
+        // 范围跨出当前文本节点 → 找到 r.end 在父节点中的 DOM 位置
+        if (localEnd > (cursor.textContent?.length || 0)) {
+          let offset = 0;
+          let insertAfter: Node | null = null;
+          for (let c = parent.firstChild; c; c = c.nextSibling) {
+            offset += (c.textContent || "").length;
+            if (offset >= r.end) {
+              insertAfter = c;
+              break;
+            }
+          }
+          const btn = makeBtn(r.text);
+          if (insertAfter) {
+            parent.insertBefore(btn, insertAfter.nextSibling);
+          } else {
+            parent.appendChild(btn);
+          }
+          cursor = null;
+          consumed = r.end;
+          break;
+        }
+
+        // 正常路径：范围完全在当前文本节点内
+        const matchLen = localEnd;
+        if (matchLen > 0 && matchLen < (cursor.textContent?.length || 0)) {
           cursor.splitText(matchLen);
         }
-        // cursor 现在是匹配文本节点；按钮插在它之后
         const btn = makeBtn(r.text);
         parent.insertBefore(btn, cursor.nextSibling);
-        // 继续处理按钮之后的文本
         const next = btn.nextSibling;
         cursor = (next && next.nodeType === 3) ? next as Text : null;
         consumed = r.end;
@@ -1384,6 +1408,24 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
         seenParents.add(parent);
         patchTextNode(node);
       }
+      // 去重：若 <code> 内的按钮文本是外层按钮文本的子串，移除以避免重复
+      dom.querySelectorAll<HTMLElement>(".locked-copy-btn").forEach((btn) => {
+        const myText = btn.dataset.copyText || "";
+        if (!myText) return;
+        let ancestor = btn.parentElement;
+        while (ancestor) {
+          const outerBtns = ancestor.querySelectorAll<HTMLElement>(".locked-copy-btn");
+          for (const outerBtn of outerBtns) {
+            if (outerBtn === btn) continue;
+            const outerText = outerBtn.dataset.copyText || "";
+            if (outerText.length > myText.length && outerText.includes(myText)) {
+              btn.remove();
+              return;
+            }
+          }
+          ancestor = ancestor.parentElement;
+        }
+      });
       applying = false;
     };
 

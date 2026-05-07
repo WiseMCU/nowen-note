@@ -97,7 +97,7 @@ docker run -d --name nowen-note --restart unless-stopped \
 - AI 助手悬浮面板支持拖拽移动
 - 未选中内容时 AI 助手默认处理全文
 - 公开用户注册默认关闭
-- Docker 镜像进一步精简（清理 node_modules 测试/文档/构建残留），预计 ~60MB
+- Docker 镜像进一步精简（UPX 压缩 + 裸 Alpine 运行时，241MB → 123MB）
 - 融合上游仓库大量更新：RAG 语义搜索、向量存储、日记/任务增强、导出优化等
 
 ### v1.0.23

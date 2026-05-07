@@ -11,6 +11,8 @@ import AIChatPanel from "@/components/AIChatPanel";
 import DiaryCenter from "@/components/DiaryCenter";
 import SharedNoteView from "@/components/SharedNoteView";
 import LoginPage from "@/components/LoginPage";
+import QuickLoginGate from "@/components/QuickLoginGate";
+import QuickLoginEnrollDialog from "@/components/QuickLoginEnrollDialog";
 import { AppProvider, useApp, useAppActions, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, DEFAULT_SIDEBAR_WIDTH, MIN_NOTELIST_WIDTH, MAX_NOTELIST_WIDTH, DEFAULT_NOTELIST_WIDTH } from "@/store/AppContext";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { SiteSettingsProvider, useSiteSettings } from "@/hooks/useSiteSettings";
@@ -21,6 +23,7 @@ import { getServerUrl, clearServerUrl, broadcastLogout } from "@/lib/api";
 import { useBackButton, hideSplashScreen, useStatusBarSync, useKeyboardLayout, isNativePlatform } from "@/hooks/useCapacitor";
 import { useDesktopMenuBridge } from "@/hooks/useDesktopMenuBridge";
 import CommandPalette from "@/components/common/CommandPalette";
+import OfflineIndicator from "@/components/common/OfflineIndicator";
 
 function SidebarResizeHandle() {
   const { state } = useApp();
@@ -116,6 +119,21 @@ function NoteListResizeHandle() {
 /**
  * P3: 侧边栏边缘滑动手势 Hook
  * 从屏幕左侧 30px 区域右滑打开侧边栏，侧边栏打开时左滑关闭
+ *
+ * 重要：本 hook 在 document 上挂全局 touchstart/touchend，触发的是 setMobileSidebar(false)。
+ * 在移动端，用户从 Sidebar 进入 SettingsModal 时，Sidebar 仍处于 open 状态（关闭设置后
+ * 还要回到 Sidebar），mobileSidebarOpen 为 true。此时只要 touchend 的 deltaX 超过阈值
+ * 就会左滑关闭 Sidebar——而 SettingsModal 通过 createPortal 渲染到 body，但**生命周期
+ * 仍挂在 Sidebar 子树**：Sidebar 卸载 = SettingsModal 卸载 = 设置弹窗"莫名消失"。
+ *
+ * 实测表现：用户在 SettingsModal 里"长按 / 滚动 / 横向触摸"时，touch 起止位移就足够触发
+ * 该判定，弹窗瞬间被卸掉，看起来像"动一下就关"。React 合成事件的 stopPropagation
+ * 拦不住 document 原生监听，必须在监听内部主动跳过。
+ *
+ * 修复：在 touchstart 时，沿事件 target 向上查找是否处于带 `[data-swipe-blocker]` 的子树。
+ * 是则置 isSwiping=false，本次手势整段不参与 sidebar 开关判定。任何想屏蔽 sidebar 全局
+ * 滑动手势的浮层（设置弹窗、未来的对话框等）只需在自身根节点加上这个 data 属性即可，
+ * 不需要改 hook 也不需要污染全局 store。
  */
 function useSwipeGesture({
   onSwipeRight,
@@ -136,10 +154,22 @@ function useSwipeGesture({
     const SWIPE_MIN_DISTANCE = 60; // 最小滑动距离
     const SWIPE_MAX_Y_RATIO = 0.6; // y 偏移不超过 x 偏移的 60%
 
+    // 触摸起点是否落在"屏蔽该手势"的浮层内。
+    // 用 closest 走 DOM 树而非比较具体节点，能兼容 portal 渲染的浮层（document.body 直挂）。
+    const isInsideSwipeBlocker = (target: EventTarget | null): boolean => {
+      if (!(target instanceof Element)) return false;
+      return target.closest("[data-swipe-blocker]") !== null;
+    };
+
     const handleTouchStart = (e: TouchEvent) => {
       const touch = e.touches[0];
       touchStartX.current = touch.clientX;
       touchStartY.current = touch.clientY;
+      // 起点在屏蔽层内：本次手势全程禁用，避免误关 Sidebar 顺带卸掉浮层。
+      if (isInsideSwipeBlocker(e.target)) {
+        isSwiping.current = false;
+        return;
+      }
       // 仅在左边缘区域或侧边栏已打开时激活
       isSwiping.current = touch.clientX <= EDGE_THRESHOLD || mobileSidebarOpen;
     };
@@ -196,6 +226,15 @@ function AppLayout() {
     window.addEventListener("nowen:open-command-palette", onOpen);
     return () => window.removeEventListener("nowen:open-command-palette", onOpen);
   }, []);
+
+  // 离线队列入队事件 → 把 syncStatus 切到 "queued"（让 UI 展示"已暂存"而非"已同步"）
+  useEffect(() => {
+    const onQueued = () => {
+      actions.setSyncStatus("queued");
+    };
+    window.addEventListener("nowen:offline-queued", onQueued);
+    return () => window.removeEventListener("nowen:offline-queued", onQueued);
+  }, [actions]);
 
 
   // P0: Android 返回键处理
@@ -386,6 +425,9 @@ function AppLayout() {
         open={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
       />
+
+      {/* 离线状态 + 待同步指示器 */}
+      <OfflineIndicator />
     </div>
   );
 }
@@ -409,6 +451,12 @@ function MobileTopBar() {
 function AuthGate() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  // Phase 7: 快速登录（生物识别）网关 —— 在客户端模式下、isAuthenticated=false
+  // 时优先尝试用 Keystore 中的 token + 指纹/人脸完成无密码登录。
+  //   "pending"：刚确认未登录，正交给 QuickLoginGate 决定是否唤起
+  //   "skipped" / null：QuickLoginGate 决定不展示（不支持 / 未启用 / 已尝试过）
+  //                    或用户取消，UI 应渲染 LoginPage 让用户输密码
+  const [quickLoginState, setQuickLoginState] = useState<"pending" | "skipped">("pending");
   const { t } = useTranslation();
 
   // P1: Splash Screen — 应用就绪后隐藏启动屏（必须在条件返回之前调用）
@@ -532,17 +580,34 @@ function AuthGate() {
     return () => window.removeEventListener("storage", onStorage);
   }, [checkAuth, isAuthenticated]);
 
+  // Phase 7: 标记"本次登录是否刚通过密码完成"——
+  //   只有密码登录的用户才会被引导启用快速登录；
+  //   通过快速登录进来的用户已经启用过，不应再弹。
+  const [justPasswordLogin, setJustPasswordLogin] = useState(false);
+  /** 当前 token（用于引导对话框写入 secure storage） */
+  const [activeToken, setActiveToken] = useState<string>("");
+
   const handleDisconnect = () => {
     clearServerUrl();
     // L10: 断开服务器相当于登出 + 切换服务器，通知其他 tab
     broadcastLogout("disconnect_server");
+    // Phase 7: 切换服务器时 token 已经无意义，把 secure storage 镜像也清掉，
+    // 避免下次开 app 又用旧 token 自动登录（会落到 verify 失败再回退，但没必要走一遭）
+    void import("@/lib/quickLogin").then((m) => m.disableQuickLogin()).catch(() => {});
     setIsAuthenticated(false);
     setUser(null);
   };
 
   const handleLogin = (token: string, userData: User) => {
     setUser(userData);
+    setActiveToken(token);
     setIsAuthenticated(true);
+  };
+
+  /** 仅用于 LoginPage（密码登录路径），登录成功后下一帧弹引导对话框 */
+  const handlePasswordLogin = (token: string, userData: User) => {
+    setJustPasswordLogin(true);
+    handleLogin(token, userData);
   };
 
   // 加载中
@@ -559,9 +624,28 @@ function AuthGate() {
 
   // 未登录 → 一体化登录页
   if (!isAuthenticated) {
+    // Phase 7: 先让 QuickLoginGate 看看是否能用生物识别一键登录
+    //   - 不支持 / 未启用 / 用户取消：onSettled(false) 会把 quickLoginState
+    //     置为 "skipped"，下面继续渲染 LoginPage
+    //   - 成功：onSettled(true, payload) 直接走 handleLogin 进主界面
+    if (isClientMode && quickLoginState === "pending") {
+      return (
+        <QuickLoginGate
+          isClientMode={isClientMode}
+          onSettled={(used, payload) => {
+            if (used && payload) {
+              handleLogin(payload.token, payload.user);
+            } else {
+              setQuickLoginState("skipped");
+            }
+          }}
+        />
+      );
+    }
+
     return (
       <LoginPage
-        onLogin={handleLogin}
+        onLogin={handlePasswordLogin}
         isClientMode={isClientMode}
         onDisconnect={isClientMode ? handleDisconnect : undefined}
       />
@@ -573,6 +657,16 @@ function AuthGate() {
     <AppProvider>
       <TooltipProvider>
         <AppLayout />
+        {/* Phase 7: 客户端模式下，密码登录成功后引导启用快速登录。
+            QuickLoginEnrollDialog 内部会判断"是否已问过 / 设备是否支持"，
+            不需要展示时会立即调 onClose 自我隐身。 */}
+        {justPasswordLogin && isClientMode && user && activeToken && (
+          <QuickLoginEnrollDialog
+            username={user.username}
+            token={activeToken}
+            onClose={() => setJustPasswordLogin(false)}
+          />
+        )}
       </TooltipProvider>
     </AppProvider>
   );

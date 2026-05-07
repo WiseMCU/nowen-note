@@ -1,4 +1,11 @@
 import { Notebook, Note, NoteListItem, Tag, SearchResult, User, UserPublicInfo, Task, TaskStats, TaskFilter, CustomFont, MindMap, MindMapListItem, Diary, DiaryTimeline, DiaryStats, Share, ShareInfo, SharedNoteContent, NoteVersion, ShareComment, Workspace, WorkspaceMember, WorkspaceInvite, WorkspaceRole } from "@/types";
+import {
+  shouldEnqueue as _shouldEnqueue,
+  enqueue as _enqueue,
+  inferMutationType as _inferMutationType,
+  extractNoteId as _extractNoteId,
+  generateLocalNoteId,
+} from "@/lib/offlineQueue";
 
 // 服务器地址管理
 const SERVER_URL_KEY = "nowen-server-url";
@@ -62,10 +69,192 @@ export function clearServerUrl() {
   localStorage.removeItem(SERVER_URL_KEY);
 }
 
-function getBaseUrl(): string {
+export function getBaseUrl(): string {
   const server = getServerUrl();
   return server ? `${server}/api` : "/api";
 }
+
+// ============================================================================
+// SSE 流解析工具（专为 AI 流式接口设计）
+// ----------------------------------------------------------------------------
+// 为什么需要这个工具？
+//   桌面 Chrome 上 fetch().body.getReader() 是真正的"逐 chunk 流"，每次拿到的
+//   往往就是一行干净的 `data: {...}\n`，按 \n 拆行就够了。
+//   但 Android WebView（System WebView 多个版本 + Capacitor Bridge）行为差异极大：
+//     1) 可能直到响应整体结束才一次性把 body 喂回来
+//     2) 可能在中间把多帧合并成一坨——表现为 reader.read() 一次返回
+//        `data: {"t":"a"}\ndata: {"t":"b"}\n...` 但 \n 被剥成 \r\n / \r / 全没
+//     3) 极端情况下 `data:` 前缀也丢了，整段就是 `{"t":"a"}{"t":"b"}{"t":"c"}`
+//   截图里"AI 写作助手 · Markdown 格式化"出现的 `{"t":...}{"t":...}` 原样回显，
+//   就是症状 (3) 命中——按行拆 + JSON.parse 整块失败 → 落到 catch 把原文塞进 UI。
+//
+// 设计：
+//   1) parseSseChunks 接收一段累积的文本 buffer，返回（已抽出的 data 字符串数组，剩余 buffer）
+//      - 同时支持 \n\n、\r\n\r\n（标准）以及 \n / \r\n（部分 server / 代理实现）作为事件边界
+//   2) splitConcatenatedJson 把"多个 JSON 对象拼在一起"的字符串按对象拆开
+//      —— 用大括号配平 + 字符串感知，比正则可靠
+//   3) extractTextFromData 是"针对 AI chunk 的语义层"：
+//      接收一段 data 文本，按 {t:"..."} 抽出文本片段；如果整段就是若干 JSON 串接，
+//      也能正确逐个解析。无法解析为 JSON 时按"纯文本 chunk"（兼容老格式）处理。
+// ----------------------------------------------------------------------------
+
+/**
+ * 把 buffer 按 SSE 事件边界切，返回完整事件的 data 内容数组 + 未消费 buffer。
+ * 兼容多种行尾：\r\n\r\n（HTTP 标准）、\n\n（文本约定）、单 \n（WebView 合并）。
+ */
+function parseSseChunks(buffer: string): { events: string[]; rest: string } {
+  // 先用"双换行"切事件；切不开就退化为"单换行"按行切
+  // 这两条规则覆盖了绝大多数客户端实际收到的形式。
+  const events: string[] = [];
+
+  // 归一化 \r\n → \n，避免后面规则各写两份
+  const norm = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  // 优先按 \n\n 切（每个事件可能含多行 data）
+  const parts = norm.split("\n\n");
+  // 最后一段可能不完整（没遇到 \n\n），保留到 rest
+  const rest = parts.pop() ?? "";
+
+  for (const evt of parts) {
+    // 一个事件可能是多行：data:xxx\ndata:yyy → 拼接
+    const dataLines: string[] = [];
+    for (const line of evt.split("\n")) {
+      const ltrim = line.trimStart();
+      if (ltrim.startsWith("data:")) {
+        dataLines.push(ltrim.slice(5).trimStart());
+      }
+      // event: / id: / retry: / comment 行直接忽略
+    }
+    if (dataLines.length > 0) {
+      events.push(dataLines.join("\n"));
+    }
+  }
+
+  // 兜底：如果整段 buffer 一个 \n\n 都没出现（WebView 把分隔符吃光的最坏情况），
+  // 但里面已经有完整的 `data:` 行——按单 \n 拆，凡是已经成行（后面跟着另一条 data:
+  // 或 buffer 末尾出现完整 JSON）的都先吐出去；剩下不完整的留到 rest。
+  // 简化策略：只有当 events 为空、且 rest 中含多个 "data:" 时，才走这个分支，
+  // 把除最后一行之外的每条 data: 行都抽出来。
+  if (events.length === 0 && (rest.match(/data:/g)?.length ?? 0) >= 2) {
+    const lines = rest.split("\n");
+    const last = lines.pop() ?? "";
+    for (const line of lines) {
+      const ltrim = line.trimStart();
+      if (ltrim.startsWith("data:")) {
+        events.push(ltrim.slice(5).trimStart());
+      }
+    }
+    return { events, rest: last };
+  }
+
+  return { events, rest };
+}
+
+/**
+ * 把一段"可能是多个 JSON 对象拼接"的文本，按顶层对象拆成数组。
+ * 例：'{"t":"a"}{"t":"b"}{"t":"c"}' → ['{"t":"a"}','{"t":"b"}','{"t":"c"}']
+ *
+ * 用大括号深度计数；字符串内的 { } 不计入；处理转义。
+ * 拆不出多个对象时返回 [input]，调用方按原样走 fallback。
+ */
+function splitConcatenatedJson(input: string): string[] {
+  const s = input.trim();
+  if (!s.startsWith("{") && !s.startsWith("[")) return [s];
+
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let escape = false;
+
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inStr = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        out.push(s.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+
+  // 没成功拆出任何完整对象 / 多余尾巴：返回原串让上游用通用兜底
+  if (out.length === 0) return [s];
+  return out;
+}
+
+/**
+ * 把一段 SSE data 文本解析成 0..N 个"内容片段"。
+ *   - 标准帧：单个 {"t":"..."} → 返回 [t]
+ *   - WebView 合并帧：多个 {...}{...}{...} 拼接 → 拆开后每个抽 t
+ *   - 数组帧：[{id,title},...] → 通过 onArray 回调分发，不进文本流
+ *   - 老格式 / 非 JSON / [DONE] → 调用方处理
+ */
+function extractContentChunks(
+  data: string,
+  onArray?: (arr: any[]) => void,
+): string[] {
+  if (data === "[DONE]") return [];
+
+  // 直接试一次 JSON.parse；最常见的"一个 data: 一个对象"情况这里就直接搞定
+  try {
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) {
+      onArray?.(parsed);
+      return [];
+    }
+    if (parsed && typeof parsed === "object" && typeof parsed.t === "string") {
+      return [parsed.t];
+    }
+  } catch {
+    /* 落到下面继续尝试拆分 */
+  }
+
+  // 拼接的多对象 / 老格式纯文本
+  const parts = splitConcatenatedJson(data);
+  if (parts.length > 1) {
+    const out: string[] = [];
+    for (const p of parts) {
+      try {
+        const obj = JSON.parse(p);
+        if (Array.isArray(obj)) {
+          onArray?.(obj);
+          continue;
+        }
+        if (obj && typeof obj === "object" && typeof obj.t === "string") {
+          out.push(obj.t);
+          continue;
+        }
+        // 解析成功但不是预期结构，按文本兜底
+        out.push(p);
+      } catch {
+        out.push(p);
+      }
+    }
+    return out;
+  }
+
+  // 真正的纯文本老格式（无大括号 / 解析失败的单段）
+  return [data];
+}
+
 
 /**
  * 把一个附件 URL（可能是相对路径，也可能是旧数据里的 /api/attachments/xxx）
@@ -175,6 +364,14 @@ export function broadcastLogout(reason?: string) {
   } catch {
     /* 隐私模式下 localStorage 可能不可用，忽略 */
   }
+  // Phase 7: 同步清掉 Keystore 中的快速登录镜像。原因：
+  //   1) 用户主动登出 → 不希望"快速登录"再用旧 token 一键回到登录态；
+  //   2) verify 失败 / 被踢下线 → 旧 token 已无意义，留着只会让下次启动多走
+  //      一遭"生物识别 → verify 失败 → 回密码页"。
+  // 失败忽略：secure storage 不可用时本来就没东西要清。
+  void import("./quickLogin")
+    .then((m) => m.disableQuickLogin())
+    .catch(() => {});
 }
 
 /**
@@ -190,21 +387,44 @@ export function broadcastLogout(reason?: string) {
  */
 interface RequestOptions extends RequestInit {
   sudoToken?: string;
+  /** 标记此请求不走离线队列拦截（内部使用） */
+  _skipOfflineQueue?: boolean;
 }
 
 async function request<T>(url: string, options?: RequestOptions): Promise<T> {
   const token = getToken();
-  const { sudoToken, ...restOptions } = options || {};
+  const { sudoToken, _skipOfflineQueue, ...restOptions } = options || {};
   const fullUrl = `${getBaseUrl()}${url}`;
-  const res = await fetch(fullUrl, {
-    ...restOptions,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(sudoToken ? { "X-Sudo-Token": sudoToken } : {}),
-      ...restOptions?.headers,
-    },
-  });
+
+  // ─── 离线队列拦截：网络不可达时直接入队，不发请求 ──────────────
+  const method = (restOptions?.method || "GET").toUpperCase();
+  if (
+    !_skipOfflineQueue &&
+    !navigator.onLine &&
+    _shouldEnqueue(url, method, new TypeError("offline"))
+  ) {
+    return handleOfflineEnqueue<T>(url, method, restOptions?.body as string | undefined);
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(fullUrl, {
+      ...restOptions,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(sudoToken ? { "X-Sudo-Token": sudoToken } : {}),
+        ...restOptions?.headers,
+      },
+    });
+  } catch (fetchErr: any) {
+    // fetch 抛出 = 网络不可达（TypeError: Failed to fetch 等）
+    if (!_skipOfflineQueue && _shouldEnqueue(url, method, fetchErr)) {
+      return handleOfflineEnqueue<T>(url, method, restOptions?.body as string | undefined);
+    }
+    throw fetchErr;
+  }
+
   // 401 / 403 + ACCOUNT_DISABLED：会话已失效（token 无效、用户被禁用、tokenVersion 被吊销等），
   // 统一清 token 并刷新回登录页。
   // 分享页（/share/:token）是无登录场景，不应 reload —— 否则会把整个分享页刷回登录页。
@@ -233,11 +453,6 @@ async function request<T>(url: string, options?: RequestOptions): Promise<T> {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    // 把 HTTP status 和服务端返回的业务字段挂到 Error 上，调用方（如 EditorPane
-    // 的乐观锁 409 reconcile）可以直接用 err.status / err.currentVersion，
-    // 不必再靠字符串匹配 err.message。
-    // 之前只抛 new Error(msg) → status/currentVersion 全丢，使得 409 风暴里
-    // 的兜底路径被迫多发一次 GET /notes/:id，且在某些情况下无法识别 409。
     const error = new Error(err.error || `Request failed: ${res.status}`) as Error & {
       status?: number;
       code?: string;
@@ -248,9 +463,75 @@ async function request<T>(url: string, options?: RequestOptions): Promise<T> {
       if (typeof err.code === "string") error.code = err.code;
       if (typeof err.currentVersion === "number") error.currentVersion = err.currentVersion;
     }
+
+    // ─── 5xx 时入队离线重试 ──────────────
+    if (
+      !_skipOfflineQueue &&
+      res.status >= 500 &&
+      _shouldEnqueue(url, method, error)
+    ) {
+      return handleOfflineEnqueue<T>(url, method, restOptions?.body as string | undefined);
+    }
+
     throw error;
   }
   return safeJson<T>(res, fullUrl);
+}
+
+// ─── 离线入队辅助 ────────────────────────────────────────────────────────────────
+
+/**
+ * 把请求入队并返回"假数据"让上层不报错。
+ *
+ * 返回值策略：
+ *   - updateNote → 返回 body 本身（上层用 updated.version / updatedAt）
+ *   - createNote → 返回带临时 id 的假 Note
+ *   - deleteNote → 返回 {}
+ */
+function handleOfflineEnqueue<T>(url: string, method: string, bodyStr?: string): T {
+  const body = bodyStr ? JSON.parse(bodyStr) : null;
+  const mutationType = _inferMutationType(url, method);
+  const noteId = mutationType === "createNote"
+    ? (body?.id || generateLocalNoteId())
+    : _extractNoteId(url);
+
+  _enqueue({
+    type: mutationType || "updateNote",
+    noteId,
+    url,
+    method: method as "POST" | "PUT" | "DELETE",
+    body,
+  });
+
+  // 派发自定义事件通知 UI（syncStatus = offline）
+  window.dispatchEvent(new CustomEvent("nowen:offline-queued"));
+
+  // 构造乐观返回值
+  if (mutationType === "createNote") {
+    return {
+      id: noteId,
+      title: body?.title || "",
+      content: body?.content || "",
+      contentText: body?.contentText || "",
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...body,
+    } as unknown as T;
+  }
+  if (mutationType === "deleteNote") {
+    return {} as T;
+  }
+  // updateNote: 返回 body + noteId，让 EditorPane 的 reconcile 能拿到 version/updatedAt
+  return {
+    id: noteId,
+    version: body?.version || 1,
+    updatedAt: new Date().toISOString(),
+    title: body?.title || "",
+    content: body?.content,
+    contentText: body?.contentText,
+    ...body,
+  } as unknown as T;
 }
 
 export const api = {
@@ -410,7 +691,14 @@ export const api = {
   deleteTag: (id: string) => request(`/tags/${id}`, { method: "DELETE" }),
   addTagToNote: (noteId: string, tagId: string) => request(`/tags/note/${noteId}/tag/${tagId}`, { method: "POST" }),
   removeTagFromNote: (noteId: string, tagId: string) => request(`/tags/note/${noteId}/tag/${tagId}`, { method: "DELETE" }),
-  getNotesWithTag: (tagId: string) => request<NoteListItem[]>(`/notes?tagId=${encodeURIComponent(tagId)}`),
+  getNotesWithTag: (tagId: string, params?: Record<string, string>) => {
+    const finalParams: Record<string, string> = { tagId, ...(params || {}) };
+    if (!("workspaceId" in finalParams)) {
+      finalParams.workspaceId = getCurrentWorkspace();
+    }
+    const qs = "?" + new URLSearchParams(finalParams).toString();
+    return request<NoteListItem[]>(`/notes${qs}`);
+  },
 
   // Search
   search: (q: string) => request<SearchResult[]>(`/search?q=${encodeURIComponent(q)}`),
@@ -942,32 +1230,52 @@ export const api = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || `AI 请求失败: ${res.status}`);
     }
-    // SSE stream
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
+
     let result = "";
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const data = trimmed.slice(5).trim();
+    const emit = (chunks: string[]) => {
+      for (const c of chunks) {
+        if (!c) continue;
+        result += c;
+        onChunk?.(c);
+      }
+    };
+
+    // 部分 Android WebView 不支持 res.body 流（返回 null）。这种情况下退化为
+    // "等响应结束、整段拿到 text 再按 SSE 协议解析一次"——失去打字机效果，
+    // 但至少不会把 {"t":...}{"t":...} 原样喂给用户看。
+    if (!res.body || typeof res.body.getReader !== "function") {
+      const fullText = await res.text();
+      const { events } = parseSseChunks(fullText + "\n\n");
+      for (const data of events) {
         if (data === "[DONE]") break;
-        // 后端新格式用 JSON 包裹内容，避免 SSE 把 `\n` 当字段分隔符吃掉换行。
-        let chunk = data;
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed && typeof parsed === "object" && typeof parsed.t === "string") {
-            chunk = parsed.t;
-          }
-        } catch { /* 非 JSON，按原样使用（兼容老格式） */ }
-        result += chunk;
-        onChunk?.(chunk);
+        emit(extractContentChunks(data));
+      }
+      return result;
+    }
+
+    // 流式路径：用 parseSseChunks 切事件，再用 extractContentChunks 兜底解析
+    // "多对象合并到一个 data 行"的 Android WebView 退化情况（见 splitConcatenatedJson 注释）。
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let done = false;
+    while (!done) {
+      const r = await reader.read();
+      done = r.done;
+      if (r.value) buffer += decoder.decode(r.value, { stream: true });
+      const parsed = parseSseChunks(buffer);
+      buffer = parsed.rest;
+      for (const data of parsed.events) {
+        if (data === "[DONE]") { done = true; break; }
+        emit(extractContentChunks(data));
+      }
+    }
+    // 收尾：buffer 里可能残留一帧（流结束时未必有 \n\n），强制再走一遍解析
+    if (buffer.trim()) {
+      const tail = parseSseChunks(buffer + "\n\n");
+      for (const data of tail.events) {
+        if (data === "[DONE]") break;
+        emit(extractContentChunks(data));
       }
     }
     return result;
@@ -992,44 +1300,52 @@ export const api = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || `AI 请求失败: ${res.status}`);
     }
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
+
     let result = "";
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith("event:")) {
-          // event 行不携带数据，跳过即可（下一条 data: 行才是负载）
-          continue;
-        }
-        if (!trimmed.startsWith("data:")) continue;
-        const data = trimmed.slice(5).trim();
+    const handleArray = (arr: any[]) => {
+      // 后端在内容流里夹一条数组 = 参考笔记列表 [{id,title},...]
+      if (arr.length > 0 && arr[0]?.id && arr[0]?.title) {
+        onReferences?.(arr);
+      }
+    };
+    const emit = (chunks: string[]) => {
+      for (const c of chunks) {
+        if (!c) continue;
+        result += c;
+        onChunk?.(c);
+      }
+    };
+
+    if (!res.body || typeof res.body.getReader !== "function") {
+      const fullText = await res.text();
+      const { events } = parseSseChunks(fullText + "\n\n");
+      for (const data of events) {
         if (data === "[DONE]") break;
-        // 先尝试 JSON 解析：
-        //   - {t: "..."}  → 后端新格式的内容 chunk（包含转义后的 \n，
-        //                   要还原成真实换行再追加，否则 Markdown 不会分段）
-        //   - [{id,title}, ...] → 参考笔记数组
-        //   - 其它 JSON 或解析失败 → 视作纯文本 chunk（老格式兼容）
-        try {
-          const parsed = JSON.parse(data);
-          if (Array.isArray(parsed) && parsed[0]?.id && parsed[0]?.title) {
-            onReferences?.(parsed);
-            continue;
-          }
-          if (parsed && typeof parsed === "object" && typeof parsed.t === "string") {
-            result += parsed.t;
-            onChunk?.(parsed.t);
-            continue;
-          }
-        } catch { /* not JSON, treat as content chunk */ }
-        result += data;
-        onChunk?.(data);
+        emit(extractContentChunks(data, handleArray));
+      }
+      return result;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let done = false;
+    while (!done) {
+      const r = await reader.read();
+      done = r.done;
+      if (r.value) buffer += decoder.decode(r.value, { stream: true });
+      const parsed = parseSseChunks(buffer);
+      buffer = parsed.rest;
+      for (const data of parsed.events) {
+        if (data === "[DONE]") { done = true; break; }
+        emit(extractContentChunks(data, handleArray));
+      }
+    }
+    if (buffer.trim()) {
+      const tail = parseSseChunks(buffer + "\n\n");
+      for (const data of tail.events) {
+        if (data === "[DONE]") break;
+        emit(extractContentChunks(data, handleArray));
       }
     }
     return result;

@@ -24,7 +24,7 @@ import {
   Quote, ImagePlus, CheckSquare, Highlighter, Minus, Undo, Redo,
   FileCode, Sparkles, X, ZoomIn, ZoomOut, RotateCcw,
   Table2, Indent, Outdent, AlignLeft, AlignCenter, AlignRight, Trash2,
-  FileType, Check, AlertCircle, Info, Copy as CopyIcon
+  FileType, Check, AlertCircle, Info, Copy as CopyIcon, ArrowUp
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
@@ -84,72 +84,6 @@ if (!(ProseMirrorNode.prototype as any)[RESOLVE_PATCHED]) {
 }
 
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// rescuePastedImages：从论坛/懒加载页面复制 HTML 时，<img src> 经常是
-// 1x1 占位图（如 Discuz 的 static/image/common/none.gif），真正的图片地址
-// 藏在 file / zoomfile / data-src / data-original / data-lazy-src 等自定义
-// 属性里。这里把这些属性提升回 src，并尝试把相对路径补成绝对 URL，
-// 避免粘贴后图片完全消失或显示为 1x1 透明块。
-// ---------------------------------------------------------------------------
-function rescuePastedImages(root: Element): void {
-  let pasteBaseOrigin: string | null = null;
-  const pickOrigin = (raw: string | null) => {
-    if (pasteBaseOrigin || !raw) return;
-    if (!/^https?:\/\//i.test(raw)) return;
-    try { pasteBaseOrigin = new URL(raw).origin; } catch { /* ignore */ }
-  };
-  root.querySelectorAll("a[href]").forEach((a) => pickOrigin(a.getAttribute("href")));
-  root.querySelectorAll("img").forEach((img) => {
-    pickOrigin(img.getAttribute("src"));
-    pickOrigin(img.getAttribute("file"));
-    pickOrigin(img.getAttribute("zoomfile"));
-    pickOrigin(img.getAttribute("data-src"));
-    pickOrigin(img.getAttribute("data-original"));
-  });
-
-  const isPlaceholderSrc = (src: string | null): boolean => {
-    if (!src) return true;
-    const s = src.trim();
-    if (!s || s === "about:blank") return true;
-    if (/^data:image\/(gif|png);base64,/i.test(s) && s.length < 200) return true;
-    if (/\/none\.gif(\?|$)/i.test(s)) return true;
-    if (/\/(blank|placeholder|spacer|grey|loading)\.(gif|png|svg)(\?|$)/i.test(s)) return true;
-    return false;
-  };
-
-  const toAbsolute = (url: string): string => {
-    const u = url.trim();
-    if (!u) return u;
-    if (/^(https?:|data:|blob:)/i.test(u)) return u;
-    if (u.startsWith("//")) return `https:${u}`;
-    if (!pasteBaseOrigin) return u;
-    if (u.startsWith("/")) return `${pasteBaseOrigin}${u}`;
-    return `${pasteBaseOrigin}/${u.replace(/^\.?\//, "")}`;
-  };
-
-  root.querySelectorAll("img").forEach((img) => {
-    const currentSrc = img.getAttribute("src");
-    if (currentSrc && /^(https?:|data:|blob:)/i.test(currentSrc) && !isPlaceholderSrc(currentSrc)) return;
-    const candidates = ["zoomfile","file","data-src","data-original","data-lazy-src","data-actualsrc","data-echo"];
-    let picked: string | null = null;
-    for (const attr of candidates) {
-      const v = img.getAttribute(attr);
-      if (v && v.trim()) { picked = v.trim(); break; }
-    }
-    if (!picked && currentSrc && !isPlaceholderSrc(currentSrc)) picked = currentSrc;
-    if (!picked) return;
-    const abs = toAbsolute(picked);
-    if (abs && /^(https?:|data:|blob:)/i.test(abs)) img.setAttribute("src", abs);
-  });
-
-  root.querySelectorAll("ignore_js_op").forEach((el) => {
-    const span = el.ownerDocument.createElement("span");
-    while (el.firstChild) span.appendChild(el.firstChild);
-    el.replaceWith(span);
-  });
-}
-
 // 粘贴 HTML 归一化：把"伪多行段落"拆成真正的多个 <p>
 // ---------------------------------------------------------------------------
 // 很多来源（微信/QQ/钉钉/飞书网页复制、Word、部分浏览器富文本）在 clipboard
@@ -163,6 +97,110 @@ function rescuePastedImages(root: Element): void {
 // 这里在粘贴进入 PM DOMParser 之前，把顶层的 <br> 拆成段落边界、把 <div>
 // 统一升级为 <p>，让 PM 看到的是真正的多段落结构。
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// rescuePastedImages：从论坛 / 懒加载页面复制 HTML 时，<img src> 经常是
+// 1×1 占位图（如 Discuz 的 static/image/common/none.gif），真正的图片地址
+// 藏在 file / zoomfile / data-src / data-original / data-lazy-src 等自定义
+// 属性里。这里把这些属性值"救"回到 src，并尝试把相对路径补成绝对 URL，
+// 避免粘贴后图片完全消失或显示成 1×1 透明块。
+//
+// 选择第一个非空的"看起来像真正图片地址"的属性值；若 src 已经是绝对的
+// http(s)/data:/blob: URL 则保留不动（不覆盖用户原本就正常的图）。
+// ---------------------------------------------------------------------------
+function rescuePastedImages(root: Element): void {
+  // 1) 先扫一遍找出本片段内"任意一个绝对 URL 的 origin"，作为相对路径的 base。
+  //    优先用 <a href>/<link href>/已经是绝对地址的 <img src>，因为 Discuz
+  //    复制过来的 HTML 往往带有指向源站的链接（如附件下载链接）。
+  let pasteBaseOrigin: string | null = null;
+  const pickOrigin = (raw: string | null) => {
+    if (pasteBaseOrigin || !raw) return;
+    if (!/^https?:\/\//i.test(raw)) return;
+    try {
+      pasteBaseOrigin = new URL(raw).origin;
+    } catch {
+      /* ignore malformed */
+    }
+  };
+  root.querySelectorAll("a[href]").forEach((a) => pickOrigin(a.getAttribute("href")));
+  root.querySelectorAll("img").forEach((img) => {
+    pickOrigin(img.getAttribute("src"));
+    pickOrigin(img.getAttribute("file"));
+    pickOrigin(img.getAttribute("zoomfile"));
+    pickOrigin(img.getAttribute("data-src"));
+    pickOrigin(img.getAttribute("data-original"));
+  });
+
+  // 2) 占位图特征：Discuz/typecho/常见 lazyload 库都用极小的 gif/png 占位，
+  //    或干脆 src 为空、为 about:blank。命中即视为"需要救援"。
+  const isPlaceholderSrc = (src: string | null): boolean => {
+    if (!src) return true;
+    const s = src.trim();
+    if (!s || s === "about:blank") return true;
+    // data:image/gif;base64,R0lGODlh...（1×1 透明 gif/png 占位）
+    if (/^data:image\/(gif|png);base64,/i.test(s) && s.length < 200) return true;
+    // Discuz 标准占位
+    if (/\/none\.gif(\?|$)/i.test(s)) return true;
+    if (/\/(blank|placeholder|spacer|grey|loading)\.(gif|png|svg)(\?|$)/i.test(s)) return true;
+    return false;
+  };
+
+  // 3) 把相对/协议相对路径补成绝对 URL（找不到 base 则保持原样，让浏览器自行决定）
+  const toAbsolute = (url: string): string => {
+    const u = url.trim();
+    if (!u) return u;
+    if (/^(https?:|data:|blob:)/i.test(u)) return u;
+    if (u.startsWith("//")) return `https:${u}`;
+    if (!pasteBaseOrigin) return u;
+    if (u.startsWith("/")) return `${pasteBaseOrigin}${u}`;
+    return `${pasteBaseOrigin}/${u.replace(/^\.?\//, "")}`;
+  };
+
+  // 4) 救援每一个 <img>：按优先级挑一个有效的真实地址覆盖到 src
+  root.querySelectorAll("img").forEach((img) => {
+    const currentSrc = img.getAttribute("src");
+    // src 已经是合法且非占位的远端/data URL → 不动
+    if (currentSrc && /^(https?:|data:|blob:)/i.test(currentSrc) && !isPlaceholderSrc(currentSrc)) {
+      return;
+    }
+    // 候选属性顺序：Discuz 的 zoomfile（点击放大原图）> file > 通用 lazyload 属性
+    const candidates = [
+      "zoomfile",
+      "file",
+      "data-src",
+      "data-original",
+      "data-lazy-src",
+      "data-actualsrc",
+      "data-echo",
+    ];
+    let picked: string | null = null;
+    for (const attr of candidates) {
+      const v = img.getAttribute(attr);
+      if (v && v.trim()) {
+        picked = v.trim();
+        break;
+      }
+    }
+    // 候选都没有，但当前 src 是相对路径（非占位）→ 也尝试补全
+    if (!picked && currentSrc && !isPlaceholderSrc(currentSrc)) {
+      picked = currentSrc;
+    }
+    if (!picked) return; // 救不回来，留给 PM 决定（通常会被丢弃）
+    const abs = toAbsolute(picked);
+    if (abs && /^(https?:|data:|blob:)/i.test(abs)) {
+      img.setAttribute("src", abs);
+    }
+  });
+
+  // 5) Discuz 把 <img> 包在 <ignore_js_op> 里（一个 Discuz 自造标签，
+  //    PM schema 认不出会被丢，连带 <img> 一起丢）。这里把它替换为 <span>。
+  root.querySelectorAll("ignore_js_op").forEach((el) => {
+    const span = el.ownerDocument.createElement("span");
+    while (el.firstChild) span.appendChild(el.firstChild);
+    el.replaceWith(span);
+  });
+}
+
 function normalizePastedHtmlForBlocks(html: string): string {
   if (!html) return html;
   try {
@@ -170,7 +208,9 @@ function normalizePastedHtmlForBlocks(html: string): string {
     const root = doc.getElementById("__root");
     if (!root) return html;
 
-    // 0) 先抢救图片：把 Forum/Discuz 懒加载图片的占位 src 替换为真实地址
+    // 0) 先抢救图片：把 Discuz / 懒加载站点中藏在 file/zoomfile/data-src
+    //    等属性里的"真正图片地址"提升到 src，并补全相对路径，
+    //    避免后续 PM DOMParser 把"src 是占位 / 空 / 相对路径"的 <img> 节点丢掉。
     rescuePastedImages(root);
 
     // 1) 顶层 <div> 直接替换为 <p>（保留内部内联内容）
@@ -1126,12 +1166,15 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       setImageDrag({ x: 0, y: 0 });
     };
 
+    // 单击：仅在只读态下打开预览；编辑态保留给 ProseMirror 做节点选择。
     const handleClick = (e: MouseEvent) => {
       if (!isEditorImage(e.target)) return;
       if (editor.isEditable) return; // 编辑态：让出单击给"选中→出手柄"
       openPreview(e.target as HTMLImageElement);
     };
 
+    // 双击：编辑态下显式"打开大图预览"。只读态此时已经走 click 了，
+    // 不必重复处理（双击在只读态会被 click 先消费一次但行为一致）。
     const handleDblClick = (e: MouseEvent) => {
       if (!isEditorImage(e.target)) return;
       if (!editor.isEditable) return;
@@ -1893,12 +1936,29 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     }
   }, [editor, insertWithMarkdownDetect]);
 
+  // 回到顶部：监听滚动容器的 scrollTop，超过阈值后展示悬浮按钮
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => setShowBackToTop(el.scrollTop > 240);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [editor]);
+  const scrollToTop = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
   if (!editor) return null;
 
   const iconSize = 15;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
       {/* Toolbar
           键盘弹起时（仅原生）隐藏，改由底部 MobileFloatingToolbar 提供常用命令。
           CSS 变量 --keyboard-height 由 useKeyboardLayout 维护；此处通过 state 读取，
@@ -2281,11 +2341,32 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
           不被键盘或底部浮动工具栏遮挡（`--mobile-toolbar-h` 由 MobileFloatingToolbar
           按显示状态维护，未显示时为 0）。详见 useKeyboardLayout 注释。 */}
       <div
+        ref={scrollContainerRef}
         className="flex-1 overflow-auto px-4 md:px-8 pb-12"
         style={{ paddingBottom: "calc(3rem + var(--keyboard-height, 0px) + var(--mobile-toolbar-h, 0px))" }}
       >
         <EditorContent editor={editor} />
       </div>
+
+      {/* 回到顶部按钮：滚动超过阈值后显示在编辑区右下角 */}
+      <AnimatePresence>
+        {showBackToTop && (
+          <motion.button
+            type="button"
+            initial={{ opacity: 0, y: 8, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.9 }}
+            transition={{ duration: 0.15 }}
+            onClick={scrollToTop}
+            title={t("tiptap.backToTop", "回到顶部")}
+            aria-label={t("tiptap.backToTop", "回到顶部")}
+            className="absolute right-4 md:right-6 z-30 w-9 h-9 flex items-center justify-center rounded-full bg-app-elevated border border-app-border text-tx-secondary hover:text-accent-primary hover:border-accent-primary/50 shadow-lg backdrop-blur-sm transition-colors"
+            style={{ bottom: "calc(1rem + var(--keyboard-height, 0px) + var(--mobile-toolbar-h, 0px))" }}
+          >
+            <ArrowUp size={16} />
+          </motion.button>
+        )}
+      </AnimatePresence>
 
       {/* Markdown 粘贴转换提示 Toast */}
       <AnimatePresence>

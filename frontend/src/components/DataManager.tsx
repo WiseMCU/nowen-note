@@ -18,6 +18,7 @@ import { api, withSudo } from "@/lib/api";
 import MiCloudImport from "@/components/MiCloudImport";
 import OppoCloudImport from "@/components/OppoCloudImport";
 import ICloudImport from "@/components/iCloudImport";
+import YoudaoImport from "@/components/YoudaoImport";
 
 export default function DataManager() {
   const { t } = useTranslation();
@@ -515,6 +516,9 @@ export default function DataManager() {
 
       {/* ===== iPhone 备忘录导入 ===== */}
       <ICloudImport />
+
+      {/* ===== 有道云笔记导入 ===== */}
+      <YoudaoImport />
 
       {/* ===== 数据库文件 (.data) 导出/导入/占用统计 ===== */}
       <DataFileSection />

@@ -313,8 +313,15 @@ async function runScreenshotClip(req: ClipRequest): Promise<ClipResult> {
   // 全页截图：使用 chrome.debugger 一次性截取整个页面长图
   sendProgress({ type: "CLIP_PROGRESS", phase: "screenshot", message: "正在截取整个页面..." });
 
+  // Firefox 兼容：FF 没有 chrome.debugger API，CDP 路径完全不可用。
+  // 这里 feature-detect 一下，不可用时降级为"滚动 + 多次 captureVisibleTab + OffscreenCanvas 拼接"。
+  // 这样在 FF 上至少功能可用，只是质量比 Chrome 的 CDP 整图要差一点（无法消除 fixed 元素）。
+  const hasDebugger = typeof chrome.debugger?.attach === "function";
+
   try {
-    const fullPageDataUrl = await captureFullPageViaDebugger(req.tabId);
+    const fullPageDataUrl = hasDebugger
+      ? await captureFullPageViaDebugger(req.tabId)
+      : await captureFullPageByScrolling(req.tabId);
     return await uploadScreenshot(cfg, req, fullPageDataUrl, "整页截图");
   } catch (e: any) {
     const msg = `全页截图失败：${String(e?.message || e)}`;
@@ -455,6 +462,147 @@ async function captureFullPageViaDebugger(tabId: number): Promise<string> {
       // detach 失败不影响结果
     }
   }
+}
+
+/**
+ * Firefox 降级实现：滚动页面 + 多次 captureVisibleTab + OffscreenCanvas 拼接成长图。
+ *
+ * 为什么写这条降级路径：
+ *   FF 的 MV3 没有 chrome.debugger API（也没有等价的 CDP 接入），所以无法走
+ *   captureFullPageViaDebugger 那条"一次性整图"的高质量路径。
+ *
+ * 流程：
+ *   1) 在 tab 里执行脚本，关掉 fixed/sticky、读取 scrollHeight / innerHeight / dpr，
+ *      并把 scrollTop 归零；
+ *   2) 在 background 里循环：滚一屏 → captureVisibleTab → 累计 dataUrl，
+ *      最后一屏可能不足一屏高度，单独裁掉重叠部分；
+ *   3) 用 OffscreenCanvas 拼接（FF 105+ 的扩展后台支持 OffscreenCanvas + createImageBitmap）；
+ *   4) 还原页面：移除注入的样式 + 还原 scrollTop。
+ *
+ * 限制：
+ *   - 单次 captureVisibleTab 受 MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND 限速，
+ *     已通过 captureWithRetry + 帧间 sleep 缓解；
+ *   - 页面有滚动联动动画 / lazy-load 时，仍可能漏内容——这是滚动拼接固有的缺陷；
+ *   - 极长页面（> 16384px）会被截断，与 Chrome 路径行为一致。
+ */
+async function captureFullPageByScrolling(tabId: number): Promise<string> {
+  // 1. 在页面里准备：禁用 fixed/sticky、归零滚动、读尺寸
+  const [{ result: meta }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      // 注入禁用 fixed/sticky 的样式
+      const STYLE_ID = "__nowen_clipper_disable_fixed__";
+      let style = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
+      if (!style) {
+        style = document.createElement("style");
+        style.id = STYLE_ID;
+        style.textContent =
+          "*[data-nowen-was-fixed] { position: absolute !important; }";
+        document.head.appendChild(style);
+      }
+      const all = document.querySelectorAll<HTMLElement>("*");
+      let count = 0;
+      all.forEach((el) => {
+        const cs = window.getComputedStyle(el);
+        if (cs.position === "fixed" || cs.position === "sticky") {
+          el.setAttribute("data-nowen-was-fixed", el.style.position || "");
+          count++;
+        }
+      });
+      const prevScrollY = window.scrollY;
+      window.scrollTo({ top: 0, behavior: "auto" });
+      return {
+        prevScrollY,
+        fixedCount: count,
+        scrollHeight: Math.max(
+          document.documentElement.scrollHeight,
+          document.body.scrollHeight,
+        ),
+        innerHeight: window.innerHeight,
+        innerWidth: window.innerWidth,
+        dpr: window.devicePixelRatio || 1,
+      };
+    },
+  }) as unknown as Array<{ result: {
+    prevScrollY: number;
+    fixedCount: number;
+    scrollHeight: number;
+    innerHeight: number;
+    innerWidth: number;
+    dpr: number;
+  } }>;
+
+  const totalHeight = Math.min(meta.scrollHeight, 16384);
+  const viewportH = meta.innerHeight;
+  const viewportW = meta.innerWidth;
+  const dpr = meta.dpr;
+
+  // 2. 滚动 + 截图。每帧间留 350ms 给 lazy-load + 避免 quota。
+  const frames: { dataUrl: string; offsetY: number }[] = [];
+  let scrolled = 0;
+  while (scrolled < totalHeight) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (top: number) => window.scrollTo({ top, behavior: "auto" }),
+      args: [scrolled],
+    });
+    await sleep(350);
+    const dataUrl = await captureWithRetry();
+    if (!dataUrl) {
+      throw new Error("captureVisibleTab 返回空，可能受浏览器限速");
+    }
+    frames.push({ dataUrl, offsetY: scrolled });
+    scrolled += viewportH;
+  }
+
+  // 3. 还原页面
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (prev: number) => {
+      const style = document.getElementById("__nowen_clipper_disable_fixed__");
+      if (style) style.remove();
+      document
+        .querySelectorAll<HTMLElement>("[data-nowen-was-fixed]")
+        .forEach((el) => el.removeAttribute("data-nowen-was-fixed"));
+      window.scrollTo({ top: prev, behavior: "auto" });
+    },
+    args: [meta.prevScrollY],
+  });
+
+  // 4. OffscreenCanvas 拼接。各帧像素尺寸 = viewport * dpr。
+  const canvasW = Math.round(viewportW * dpr);
+  const canvasH = Math.round(totalHeight * dpr);
+  const canvas = new OffscreenCanvas(canvasW, canvasH);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("无法创建 OffscreenCanvas 2D 上下文");
+
+  for (const frame of frames) {
+    const blob = await (await fetch(frame.dataUrl)).blob();
+    const bitmap = await createImageBitmap(blob);
+    const dy = Math.round(frame.offsetY * dpr);
+    // 最后一帧可能超出 totalHeight：用 sourceRect 裁剪，避免拼出页脚后又"重复"
+    const remaining = canvasH - dy;
+    const drawH = Math.min(bitmap.height, remaining);
+    ctx.drawImage(bitmap, 0, 0, bitmap.width, drawH, 0, dy, bitmap.width, drawH);
+    bitmap.close();
+  }
+
+  const blob = await canvas.convertToBlob({ type: "image/png" });
+  // Blob → dataURL（在 module SW 里没有 FileReader 的话用 base64 通道）
+  const buf = await blob.arrayBuffer();
+  const base64 = arrayBufferToBase64(buf);
+  return `data:image/png;base64,${base64}`;
+}
+
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  // 分块拼接，避免一次性 String.fromCharCode 触发 stack overflow
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 
 /** 上传截图到后端 */

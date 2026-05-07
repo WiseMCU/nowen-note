@@ -39,4 +39,17 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 局域网服务发现（mDNS / NSD）相关：
+         - ACCESS_NETWORK_STATE：检测是否已联网，避免在无网时空跑发现
+         - ACCESS_WIFI_STATE：取 Wi-Fi 信息 / 申请 multicast lock 必备
+         - CHANGE_WIFI_MULTICAST_STATE：mDNS 强依赖；不申请 multicast lock，
+           NsdManager 表面在跑但**收不到任何**服务广播 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- 快速登录（生物识别）相关权限：
+         - USE_BIOMETRIC：Android 9+ 标准生物识别权限（指纹 / 人脸 / 虹膜统一入口）
+         - USE_FINGERPRINT：兼容 Android 8 及以下旧设备的指纹 API；新系统自动 noop -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 </manifest>

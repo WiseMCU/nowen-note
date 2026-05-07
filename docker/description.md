@@ -61,6 +61,13 @@ docker run -d --name nowen-note --restart unless-stopped \
 
 ## 更新日志
 
+### v1.0.27
+
+- Docker 镜像体积大幅优化：241MB → 123MB（UPX 压缩 + 裸 Alpine 运行时）
+- 修复"所有笔记"视图下导入笔记按钮无响应的问题（改为先选笔记本再选文件）
+- 同步上游文档：README 重构为极简版，新增英文版 README 和 10 种部署方式指南
+- 新增 .gitattributes 强制 Shell 脚本 LF 换行符
+
 ### v1.0.26
 
 - 新增文件管理模块：上传/下载/删除/分类/搜索/预览/反向引用跳转

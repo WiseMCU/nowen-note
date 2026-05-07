@@ -5,14 +5,14 @@ import {
   ChevronDown, PanelLeftClose, PanelLeft, ListTodo,
   Settings, LogOut, FilePlus, FolderPlus, Edit2, X, BrainCircuit,
   Bot, CalendarDays, Smile, GripVertical,
-  FolderInput, Check, Home, Download, Sun, Moon, Upload
+  FolderInput, Check, Home, Download, Sun, Moon, Upload, Inbox
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import SettingsModal from "@/components/SettingsModal";
 import ContextMenu, { ContextMenuItem } from "@/components/ContextMenu";
-import TagColorPicker from "@/components/TagColorPicker";
+import TagColorPopover from "@/components/TagColorPopover";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 import { useContextMenu } from "@/hooks/useContextMenu";
 import { useApp, useAppActions } from "@/store/AppContext";
@@ -693,6 +693,8 @@ export default function Sidebar() {
 
   // 删除确认
   const [deleteTarget, setDeleteTarget] = useState<Notebook | null>(null);
+  // 标签删除确认（自定义弹窗，替代 window.confirm）
+  const [deleteTagTarget, setDeleteTagTarget] = useState<{ id: string; name: string; color: string } | null>(null);
 
   // 清空回收站确认
   const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
@@ -706,6 +708,18 @@ export default function Sidebar() {
   const [dragNbId, setDragNbId] = useState<string | null>(null);
   const [dragOverNbId, setDragOverNbId] = useState<string | null>(null);
   const [dragOverNbZone, setDragOverNbZone] = useState<"before" | "inside" | null>(null);
+
+  // 标签颜色选择浮层状态（通过右键 / 长按触发）
+  const [tagColorPopover, setTagColorPopover] = useState<{
+    tagId: string;
+    tagName: string;
+    color: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  // 长按计时器
+  const tagLongPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tagLongPressFired = useRef(false);
 
   const tree = useMemo(() => buildTree(state.notebooks), [state.notebooks]);
 
@@ -1181,6 +1195,7 @@ export default function Sidebar() {
   const quickItems = [
     { icon: <BookOpen size={16} />, label: t('sidebar.allNotes'), mode: "all" as ViewMode, active: state.viewMode === "all" },
     { icon: <Star size={16} />, label: t('sidebar.favorites'), mode: "favorites" as ViewMode, active: state.viewMode === "favorites" },
+    { icon: <Inbox size={16} />, label: t('sidebar.fileManager'), mode: "files" as ViewMode, active: state.viewMode === "files" },
     { icon: <Trash2 size={16} />, label: t('sidebar.trash'), mode: "trash" as ViewMode, active: state.viewMode === "trash" },
   ];
 
@@ -1445,53 +1460,102 @@ export default function Sidebar() {
                       <div
                         key={tag.id}
                         className={cn(
-                          "flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs transition-colors group/tag cursor-pointer",
+                          "flex items-center gap-1.5 sm:gap-2 w-full px-1.5 sm:px-2 py-1 sm:py-1.5 rounded sm:rounded-md text-[11px] sm:text-xs transition-colors group/tag cursor-pointer",
                           isActive
                             ? "bg-app-active text-tx-primary"
                             : "text-tx-secondary hover:bg-app-hover hover:text-tx-primary"
                         )}
                         onClick={() => {
+                          // 长按已触发颜色选择时，跳过本次点击导航
+                          if (tagLongPressFired.current) {
+                            tagLongPressFired.current = false;
+                            return;
+                          }
                           actions.setSelectedTag(tag.id);
                           actions.setSelectedNotebook(null);
                           actions.setViewMode("tag");
                           actions.setMobileSidebar(false);
                         }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setTagColorPopover({
+                            tagId: tag.id,
+                            tagName: tag.name,
+                            color: tag.color,
+                            x: e.clientX,
+                            y: e.clientY,
+                          });
+                        }}
+                        onTouchStart={(e) => {
+                          const touch = e.touches[0];
+                          if (!touch) return;
+                          const startX = touch.clientX;
+                          const startY = touch.clientY;
+                          tagLongPressFired.current = false;
+                          if (tagLongPressTimer.current) clearTimeout(tagLongPressTimer.current);
+                          tagLongPressTimer.current = setTimeout(() => {
+                            tagLongPressFired.current = true;
+                            setTagColorPopover({
+                              tagId: tag.id,
+                              tagName: tag.name,
+                              color: tag.color,
+                              x: startX,
+                              y: startY,
+                            });
+                          }, 500);
+                        }}
+                        onTouchMove={(e) => {
+                          // 移动超过阈值则取消长按
+                          if (tagLongPressTimer.current) {
+                            const touch = e.touches[0];
+                            if (!touch) return;
+                            // 简单判断：直接清除（用户已开始滚动）
+                            clearTimeout(tagLongPressTimer.current);
+                            tagLongPressTimer.current = null;
+                          }
+                        }}
+                        onTouchEnd={() => {
+                          if (tagLongPressTimer.current) {
+                            clearTimeout(tagLongPressTimer.current);
+                            tagLongPressTimer.current = null;
+                          }
+                        }}
+                        onTouchCancel={() => {
+                          if (tagLongPressTimer.current) {
+                            clearTimeout(tagLongPressTimer.current);
+                            tagLongPressTimer.current = null;
+                          }
+                        }}
                       >
-                        <TagColorPicker
-                          currentColor={tag.color}
-                          size="sm"
-                          onColorChange={async (color) => {
-                            try {
-                              await api.updateTag(tag.id, { color });
-                              const allTags = await api.getTags();
-                              actions.setTags(allTags);
-                            } catch (err) {
-                              console.error("Failed to update tag color:", err);
-                            }
+                        <span
+                          className="shrink-0 inline-block rounded-full"
+                          style={{
+                            width: 6,
+                            height: 6,
+                            backgroundColor: tag.color,
                           }}
                         />
                         <span className="flex-1 truncate text-left">{tag.name}</span>
-                        {tag.noteCount !== undefined && tag.noteCount > 0 && (
-                          <span className="text-[10px] text-tx-tertiary tabular-nums group-hover/tag:hidden">{tag.noteCount}</span>
-                        )}
-                        <button
-                          className="hidden group-hover/tag:flex items-center justify-center w-4 h-4 rounded hover:bg-red-500/20 hover:text-red-500 text-tx-tertiary shrink-0"
-                          title={t('common.delete')}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (window.confirm(t('sidebar.confirmDeleteTag', { name: tag.name }) || `确定删除标签「${tag.name}」吗？删除后将从所有笔记中移除该标签。`)) {
-                              api.deleteTag(tag.id).then(() => {
-                                api.getTags().then(actions.setTags).catch(console.error);
-                                if (state.selectedTagId === tag.id) {
-                                  actions.setSelectedTag(null);
-                                  actions.setViewMode("all");
-                                }
-                              }).catch(console.error);
-                            }
-                          }}
-                        >
-                          <X size={12} />
-                        </button>
+                        {/* 右侧尾部：固定宽度容器，内部用绝对定位叠放数字与删除按钮，避免 hover 时宽度变化引发抖动 */}
+                        <span className="relative shrink-0 w-4 h-4 flex items-center justify-center">
+                          {tag.noteCount !== undefined && tag.noteCount > 0 && (
+                            <span className="absolute inset-0 flex items-center justify-center text-[10px] text-tx-tertiary tabular-nums [@media(hover:hover)]:group-hover/tag:opacity-0 transition-opacity">
+                              {tag.noteCount}
+                            </span>
+                          )}
+                          {/* 仅支持真 hover 的设备（鼠标）显示删除按钮，避免触屏 sticky hover */}
+                          <button
+                            className="absolute inset-0 hidden [@media(hover:hover)]:group-hover/tag:flex items-center justify-center text-tx-tertiary hover:text-red-500 transition-colors"
+                            title={t('common.delete')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteTagTarget({ id: tag.id, name: tag.name, color: tag.color });
+                            }}
+                          >
+                            <X size={12} strokeWidth={2.5} />
+                          </button>
+                        </span>
                       </div>
                     );
                   })
@@ -1620,6 +1684,73 @@ export default function Sidebar() {
         )}
       </AnimatePresence>
 
+      {/* Delete Tag Confirmation */}
+      <AnimatePresence>
+        {deleteTagTarget && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              onClick={() => setDeleteTagTarget(null)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ type: "spring", duration: 0.4, bounce: 0 }}
+              className="relative bg-app-elevated w-full max-w-sm p-5 rounded-xl shadow-2xl border border-app-border"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-xl bg-accent-danger/10 flex items-center justify-center shrink-0">
+                  <Trash2 size={18} className="text-accent-danger" />
+                </div>
+                <h4 className="text-base font-bold text-tx-primary">
+                  {t('sidebar.deleteTagTitle')}
+                </h4>
+              </div>
+              <p className="text-sm text-tx-secondary mb-5 pl-[52px] flex items-center gap-1.5 flex-wrap">
+                <span
+                  className="inline-block w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: deleteTagTarget.color }}
+                />
+                <span>{t('sidebar.confirmDeleteTag', { name: deleteTagTarget.name })}</span>
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setDeleteTagTarget(null)}
+                  className="px-4 py-2 text-sm text-tx-secondary hover:bg-app-hover rounded-lg transition-colors"
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  onClick={async () => {
+                    const target = deleteTagTarget;
+                    setDeleteTagTarget(null);
+                    try {
+                      await api.deleteTag(target.id);
+                      const allTags = await api.getTags();
+                      actions.setTags(allTags);
+                      if (state.selectedTagId === target.id) {
+                        actions.setSelectedTag(null);
+                        actions.setViewMode("all");
+                      }
+                    } catch (err) {
+                      console.error("Failed to delete tag:", err);
+                    }
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-white bg-accent-danger hover:bg-accent-danger/90 rounded-lg transition-colors"
+                >
+                  {t('sidebar.confirmDelete')}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* 清空回收站确认 */}
       <AnimatePresence>
         {emptyTrashOpen && (
@@ -1679,6 +1810,26 @@ export default function Sidebar() {
         className="hidden"
         onChange={handleImportFiles}
       />
+
+      {/* 标签颜色选择浮层：右键 / 长按触发 */}
+      {tagColorPopover && (
+        <TagColorPopover
+          x={tagColorPopover.x}
+          y={tagColorPopover.y}
+          currentColor={tagColorPopover.color}
+          title={tagColorPopover.tagName}
+          onPick={async (color) => {
+            try {
+              await api.updateTag(tagColorPopover.tagId, { color });
+              const allTags = await api.getTags();
+              actions.setTags(allTags);
+            } catch (err) {
+              console.error("Failed to update tag color:", err);
+            }
+          }}
+          onClose={() => setTagColorPopover(null)}
+        />
+      )}
     </div>
   );
 }

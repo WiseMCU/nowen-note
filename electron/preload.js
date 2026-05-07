@@ -137,4 +137,15 @@ contextBridge.exposeInMainWorld("nowenDesktop", {
       return ipcRenderer.invoke("mode:change-server");
     },
   },
+
+  /**
+   * 单笔记导出为 PDF：renderer 构造好完整 HTML（含内联样式与图片），主进程
+   * 用离屏 BrowserWindow 渲染后 printToPDF，弹保存对话框写盘。
+   *
+   * @param {{ html: string, suggestedName?: string }} payload
+   * @returns {Promise<{ ok: boolean, path?: string, canceled?: boolean, error?: string }>}
+   */
+  exportNoteToPDF(payload) {
+    return ipcRenderer.invoke("export:note-to-pdf", payload);
+  },
 });

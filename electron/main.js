@@ -748,6 +748,96 @@ function registerAppIpc() {
     await changeRemoteServer();
     return { ok: true };
   });
+
+  // ---------- 导出 PDF（renderer 传入完整 HTML，主进程静默生成 PDF 并弹保存对话框） ----------
+  //
+  // 设计要点：
+  //   1. 用一个**离屏 BrowserWindow**（show:false）加载 data: URL 来承载 HTML，
+  //      这样能拿到完整 DOM + 完整样式渲染 → webContents.printToPDF 出矢量 PDF，
+  //      文字可选、中文不失真，零额外依赖。
+  //   2. 等 did-finish-load + 图片全部 decode 后再 printToPDF，避免缺图。
+  //   3. 保存路径通过 dialog.showSaveDialog 让用户确认文件名/位置，默认在"文档"目录。
+  //   4. 函数签名与 renderer 约定：
+  //        invoke("export:note-to-pdf", { html, suggestedName })
+  //          → { ok, path?, canceled?, error? }
+  ipcMain.removeHandler("export:note-to-pdf");
+  ipcMain.handle("export:note-to-pdf", async (_event, payload) => {
+    const { html, suggestedName } = payload || {};
+    if (typeof html !== "string" || !html) {
+      return { ok: false, error: "EMPTY_HTML" };
+    }
+
+    // 先弹保存对话框（在正式渲染之前，用户取消就不用浪费渲染资源）
+    const safeName = String(suggestedName || "note").replace(/[\\/:*?"<>|]/g, "_");
+    const defaultPath = path.join(app.getPath("documents"), `${safeName}.pdf`);
+    const parentWin = BrowserWindow.getFocusedWindow() || mainWindow;
+    const saveRes = await dialog.showSaveDialog(parentWin || null, {
+      title: "保存 PDF",
+      defaultPath,
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (saveRes.canceled || !saveRes.filePath) {
+      return { ok: false, canceled: true };
+    }
+    const outPath = saveRes.filePath;
+
+    // 离屏窗口承载 HTML
+    const offscreen = new BrowserWindow({
+      show: false,
+      width: 900,
+      height: 1100,
+      webPreferences: {
+        offscreen: false,
+        sandbox: true,
+        contextIsolation: true,
+        // 不需要 node 集成，纯展示
+        nodeIntegration: false,
+        // 禁用外部导航，安全兜底
+        webSecurity: true,
+      },
+    });
+
+    try {
+      // 用 data: URL 加载 HTML；base64 编码避免 URL 中特殊字符截断
+      const dataUrl =
+        "data:text/html;charset=utf-8;base64," +
+        Buffer.from(html, "utf-8").toString("base64");
+
+      await offscreen.loadURL(dataUrl);
+
+      // 等图片全部解码完成（HTML 里可能有 data: 图或 localhost 后端图）
+      await offscreen.webContents.executeJavaScript(`
+        (async () => {
+          const imgs = Array.from(document.images || []);
+          await Promise.all(imgs.map(img => {
+            if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+            return new Promise(res => {
+              img.addEventListener('load', res, { once: true });
+              img.addEventListener('error', res, { once: true });
+              setTimeout(res, 3000); // 兜底 3s
+            });
+          }));
+          // 再给布局一点时间
+          await new Promise(r => setTimeout(r, 100));
+          return true;
+        })()
+      `, true);
+
+      const pdfBuffer = await offscreen.webContents.printToPDF({
+        printBackground: true,
+        pageSize: "A4",
+        margins: { marginType: "default" },
+        preferCSSPageSize: true,
+      });
+      fs.writeFileSync(outPath, pdfBuffer);
+      return { ok: true, path: outPath };
+    } catch (err) {
+      console.error("[export:note-to-pdf] failed:", err);
+      return { ok: false, error: String(err && err.message || err) };
+    } finally {
+      try { offscreen.destroy(); } catch { /* noop */ }
+    }
+  });
 }
 
 // ---------- 生命周期 ----------

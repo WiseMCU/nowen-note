@@ -772,6 +772,181 @@ export class BackupManager {
   }
 
   /**
+   * 导入一份外部备份文件（管理员从邮件附件 / U盘 / 异机拷贝拿到的 .bak 或 .zip）
+   * 到 backupDir，补齐 .meta.json，让它与"就地创建的备份"完全同构——之后既能走
+   * listBackups() 列出，也能走 restoreFromBackup() 恢复，不需要任何二次处理。
+   *
+   * 与 /api/data-file/import（直接覆盖 DB 文件）的本质区别：
+   *   - 这里只是"把备份文件放进备份仓库"，**不触及现网数据**；是否覆盖 DB 由后续
+   *     用户点击"恢复"来决定，走 dryRun 预览 + sudo 再确认的老路径。这样"导入"
+   *     本身是安全的 —— 即便文件内容有问题，也只是多一份坏备份躺在那。
+   *   - 避免把"投递 + 覆盖"耦合成一步：邮件里拿到的 .bak 管理员往往想先接上看
+   *     预览（"将清空 N 行 / 插入 M 行"）再下决定，而不是一键灌库。
+   *
+   * 安全校验：
+   *   1. 扩展名必须是 .bak（SQLite 快照）或 .zip（full 全量包），其他一律拒收，
+   *      防止管理员顺手上传 pdf/docx 污染备份目录；
+   *   2. 文件大小不为 0（早筛空上传）；
+   *   3. 按扩展名做魔数校验：
+   *      - .bak → 前 16 字节必须是 "SQLite format 3\0"；
+   *      - .zip → 前 2 字节必须是 "PK"；
+   *      杜绝改扩展名绕过；
+   *   4. .zip 还会进一步解析 meta.json、比对 formatVersion / schemaVersion，
+   *      形式非法直接拒绝（与 restoreFromZip 的前置检查语义一致，避免无法恢复
+   *      的坏包进库）；
+   *   5. 生成的文件名固定为 `nowen-backup-<type>-imported-<ts>.<ext>`，
+   *      强制前缀"imported"让管理员在列表里一眼区分"这份是外部导入的"。
+   *
+   * 元信息：
+   *   - .bak：formatVersion=1（与 db-only 等同）；noteCount/notebookCount 会用
+   *     只读连接打开快照数一次，让列表 UI 的"N 条笔记"也能正常显示；
+   *   - .zip：meta.json 里的 schemaVersion / formatVersion 直接继承；noteCount
+   *     / notebookCount 取自 meta.tables.notes / meta.tables.notebooks（旧包没
+   *     这字段的用 0 占位）；
+   *   - checksum 重新计算 sha256（不信任外部来源）；
+   *   - description 默认带上"[imported] 原始文件名 xxx"，让管理员知道它是哪来的。
+   */
+  async ingestUploadedBackup(
+    originalFilename: string,
+    bytes: Buffer,
+    opts: { description?: string } = {},
+  ): Promise<BackupInfo> {
+    if (!bytes || bytes.length === 0) {
+      throw new Error("上传文件为空");
+    }
+
+    // —— 1. 扩展名校验
+    const safeName = path.basename(originalFilename || "").trim();
+    const extLower = path.extname(safeName).toLowerCase();
+    if (extLower !== ".bak" && extLower !== ".zip") {
+      throw new Error(`仅支持 .bak / .zip 格式的备份文件，收到：${extLower || "无扩展名"}`);
+    }
+
+    // —— 2. 魔数校验（杜绝改扩展名）
+    let type: "full" | "db-only";
+    let schemaVersion = getDbSchemaVersion();
+    let formatVersion = 1;
+    let noteCount = 0;
+    let notebookCount = 0;
+
+    if (extLower === ".bak") {
+      // SQLite 文件头固定前 16 字节 = "SQLite format 3\0"
+      const sqliteMagic = Buffer.from("SQLite format 3\u0000", "utf-8");
+      if (bytes.length < 16 || !bytes.slice(0, 16).equals(sqliteMagic)) {
+        throw new Error(".bak 文件不是合法的 SQLite 数据库（文件头校验失败）");
+      }
+      type = "db-only";
+      formatVersion = 1;
+
+      // 只读打开临时文件，数一下行数，让列表 UI 正常展示。
+      // 临时文件放 backupDir 而非 os.tmpdir()：Windows 下后者含中文用户名 /
+      // 被 AV 实时扫描时 better-sqlite3 readonly 打开会偶发 SQLITE_CANTOPEN，
+      // 而 backupDir 是管理员已确认可写、路径稳定的目录。
+      this.ensureDir();
+      const tmp = path.join(
+        this.backupDir,
+        `.nowen-ingest-probe-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.db`,
+      );
+      fs.writeFileSync(tmp, bytes);
+      try {
+        const Database = (await import("better-sqlite3")).default;
+        let probe: InstanceType<typeof Database> | null = null;
+        try {
+          probe = new Database(tmp, { readonly: true });
+        } catch (e) {
+          // 打不开也不要硬失败——导入阶段不需要行数统计。透传警告、静默用 0。
+          // 主路径（落盘 + 生成 meta）仍会继续，避免"导入一份合法 .bak 却因
+          // 探测失败而报错"这种反直觉行为。
+          console.warn(
+            `[Backup] ingest probe open failed (tmp=${tmp}): ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+        }
+        if (probe) {
+          try {
+            // 有些 .bak 可能不是本项目 schema，表不存在时静默为 0，不阻塞导入
+            try {
+              noteCount = (probe.prepare("SELECT COUNT(*) as c FROM notes").get() as { c: number }).c;
+            } catch { noteCount = 0; }
+            try {
+              notebookCount = (probe.prepare("SELECT COUNT(*) as c FROM notebooks").get() as { c: number }).c;
+            } catch { notebookCount = 0; }
+          } finally {
+            probe.close();
+          }
+        }
+      } finally {
+        try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+      }
+    } else {
+      // .zip：PK\x03\x04 前两字节必是 "PK"
+      if (bytes.length < 2 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+        throw new Error(".zip 文件头非法（不是合法的 ZIP 容器）");
+      }
+      type = "full";
+      // 解析 meta.json，拒绝无法恢复的坏包
+      const zip = await JSZip.loadAsync(bytes);
+      const metaFile = zip.file("meta.json");
+      if (!metaFile) {
+        throw new Error(".zip 内缺少 meta.json，非 nowen-note 全量备份格式");
+      }
+      const dbFile = zip.file("db.sqlite");
+      if (!dbFile) {
+        throw new Error(".zip 内缺少 db.sqlite，非 nowen-note 全量备份格式");
+      }
+      let meta: {
+        formatVersion?: number;
+        schemaVersion?: number;
+        tables?: Record<string, number>;
+      };
+      try {
+        meta = JSON.parse(await metaFile.async("string"));
+      } catch (e) {
+        throw new Error(`meta.json 解析失败：${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (meta.formatVersion && meta.formatVersion > BACKUP_FORMAT_VERSION) {
+        throw new Error(
+          `备份格式版本 ${meta.formatVersion} 高于当前程序支持的 ${BACKUP_FORMAT_VERSION}，请升级到更新版本的 nowen-note 后再导入`,
+        );
+      }
+      formatVersion = meta.formatVersion ?? BACKUP_FORMAT_VERSION;
+      schemaVersion = meta.schemaVersion ?? schemaVersion;
+      noteCount = Number(meta.tables?.notes ?? 0) || 0;
+      notebookCount = Number(meta.tables?.notebooks ?? 0) || 0;
+    }
+
+    // —— 3. 落盘 + 生成 meta.json
+    this.ensureDir();
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const destFilename = `nowen-backup-${type}-imported-${ts}${extLower}`;
+    const destPath = path.join(this.backupDir, destFilename);
+
+    fs.writeFileSync(destPath, bytes);
+
+    const checksum = crypto.createHash("sha256").update(bytes).digest("hex");
+    const info: BackupInfo = {
+      id: crypto.randomUUID(),
+      filename: destFilename,
+      size: bytes.length,
+      type,
+      createdAt: new Date().toISOString(),
+      noteCount,
+      notebookCount,
+      checksum,
+      formatVersion,
+      schemaVersion,
+      description:
+        opts.description?.toString().slice(0, 500) ||
+        `[imported] 原始文件：${safeName}`,
+    };
+    fs.writeFileSync(path.join(this.backupDir, `${destFilename}.meta.json`), JSON.stringify(info, null, 2), "utf-8");
+
+    console.log(`[Backup] 外部备份已导入：${destFilename}（size=${bytes.length}, type=${type}）`);
+    return info;
+  }
+
+  /**
    * 从备份恢复。
    *
    * - 兼容三种文件：
@@ -838,12 +1013,35 @@ export class BackupManager {
 
     if (dryRun) {
       // 干跑：从 zip 内 .db 临时打开，统计每张表 N 行
-      const tmpDb = path.join(os.tmpdir(), `nowen-dryrun-${Date.now()}.db`);
+      //
+      // 这里刻意不用 os.tmpdir()：
+      //   - Windows 下 `os.tmpdir()` 解析为 `C:\Users\<用户名>\AppData\Local\Temp`，
+      //     中文用户名 / 含空格的路径在 better-sqlite3 原生层偶发打不开，
+      //     症状为 `SQLITE_CANTOPEN: unable to open database file`；
+      //   - 且 Windows Defender 会对 Temp 目录实时扫描，刚 writeFileSync 的文件
+      //     可能短暂被 AV 进程独占，readonly 打开时抢不到 share-read；
+      //   - 相比之下 backupDir 是管理员显式确认可写、路径稳定（ENV/DB 持久化值）
+      //     的目录，副作用小、不会被不相关工具扫描。
+      // 文件名加 crypto 随机串避免两次并发 dryRun 撞名。
+      const tmpDb = path.join(
+        this.backupDir,
+        `.nowen-dryrun-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.db`,
+      );
       fs.writeFileSync(tmpDb, await dbFile.async("nodebuffer"));
       try {
         // 用 better-sqlite3 直接打开（独立连接）
         const Database = (await import("better-sqlite3")).default;
-        const tmp = new Database(tmpDb, { readonly: true });
+        let tmp: InstanceType<typeof Database>;
+        try {
+          tmp = new Database(tmpDb, { readonly: true });
+        } catch (e) {
+          // 透传 SQLite 错误 + 临时路径，管理员可凭此定位 AV / 权限 / 路径问题
+          throw new Error(
+            `预览恢复失败：无法打开 zip 内的数据库快照（tmp=${tmpDb}）：${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+        }
         const tables = listAllTables(tmp as unknown as ReturnType<typeof getDb>);
         const cur = getDb();
         const list = tables.map((name) => {
@@ -880,8 +1078,19 @@ export class BackupManager {
 
     // ===== 实际恢复 =====
     // 1) DB：解 zip 内 db.sqlite 到临时文件 → 走 data-file 替换流程
+    //
+    // 也放在 backupDir 而非 os.tmpdir()：
+    //   - 与 dryRun 同理避免 Windows 下路径 / AV 造成的 CANTOPEN；
+    //   - 下一步 `fs.renameSync(tmpDb, curDbPath)` 要求源和目标 **同卷**，否则
+    //     Windows 会报 EXDEV（跨卷 rename 不可原子）。把 tmp 放 backupDir 时，
+    //     若 backupDir 与 dataDir 同卷则走 rename；不同卷（常见于用户把备份
+    //     挂到独立卷的最佳实践）则 rename 会失败——因此下面的替换逻辑也改成
+    //     rename 失败时自动降级 copy+unlink，保持跨卷也能工作。
     const { getDbPath, closeDb } = await import("../db/schema.js");
-    const tmpDb = path.join(os.tmpdir(), `nowen-restore-${Date.now()}.db`);
+    const tmpDb = path.join(
+      this.backupDir,
+      `.nowen-restore-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.db`,
+    );
     fs.writeFileSync(tmpDb, await dbFile.async("nodebuffer"));
 
     const curDbPath = getDbPath();
@@ -896,7 +1105,20 @@ export class BackupManager {
     // 等几十 ms 让 OS 释放 .db 句柄（Windows 上必要）
     await new Promise((r) => setTimeout(r, 100));
     try {
-      fs.renameSync(tmpDb, curDbPath);
+      // rename 是原子的，但要求同卷。跨卷（backupDir 挂在独立卷是推荐做法）
+      // 会抛 EXDEV，此时降级为 copy + unlink；copy 失败才 throw。
+      try {
+        fs.renameSync(tmpDb, curDbPath);
+      } catch (renameErr) {
+        const code = (renameErr as NodeJS.ErrnoException)?.code;
+        if (code === "EXDEV" || code === "EPERM") {
+          // EXDEV：跨卷；EPERM：Windows 下目标被占用时偶发（closeDb 后罕见，兜底一下）
+          fs.copyFileSync(tmpDb, curDbPath);
+          try { fs.unlinkSync(tmpDb); } catch { /* ignore tmp 清理失败 */ }
+        } else {
+          throw renameErr;
+        }
+      }
       // 清理 wal/shm，否则替换后 SQLite 会拿旧 wal 拼新 db 导致坏页
       for (const sfx of ["-wal", "-shm"]) {
         const p = curDbPath + sfx;
@@ -917,6 +1139,8 @@ export class BackupManager {
           /* ignore */
         }
       }
+      // tmpDb 可能还在 backupDir 里，顺手清理避免残留
+      try { if (fs.existsSync(tmpDb)) fs.unlinkSync(tmpDb); } catch { /* ignore */ }
       throw new Error(`数据库文件替换失败: ${e instanceof Error ? e.message : String(e)}`);
     }
 

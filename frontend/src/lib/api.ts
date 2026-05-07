@@ -1,4 +1,4 @@
-import { Notebook, Note, NoteListItem, Tag, SearchResult, User, UserPublicInfo, Task, TaskStats, TaskFilter, CustomFont, MindMap, MindMapListItem, Diary, DiaryTimeline, DiaryStats, Share, ShareInfo, SharedNoteContent, NoteVersion, ShareComment, Workspace, WorkspaceMember, WorkspaceInvite, WorkspaceRole } from "@/types";
+import { Notebook, Note, NoteListItem, Tag, SearchResult, User, UserPublicInfo, Task, TaskStats, TaskFilter, CustomFont, MindMap, MindMapListItem, Diary, DiaryTimeline, DiaryStats, Share, ShareInfo, SharedNoteContent, NoteVersion, ShareComment, Workspace, WorkspaceMember, WorkspaceInvite, WorkspaceRole, FileItem, FileDetail, FileListResponse, FileStats, FileSortKey, FileCategory } from "@/types";
 import {
   shouldEnqueue as _shouldEnqueue,
   enqueue as _enqueue,
@@ -877,11 +877,16 @@ export const api = {
   deleteFont: (id: string) => request(`/fonts/${id}`, { method: "DELETE" }),
   getFontFileUrl: (id: string) => `${getBaseUrl()}/fonts/file/${id}`,
 
-  // ========== Attachments（图片/附件走文件，不再内联 base64）==========
+  // ========== Attachments（图片/任意格式附件走文件，不再内联 base64）==========
   //
-  // 统一把编辑器里的图片从 data:image;base64,... 迁到 /api/attachments/<id>。
-  // 粘贴、拖拽、点"插入图片"按钮都应走 uploadAttachment；导入（importService）
-  // 在解析到本地图片时也走这里把字节落盘。
+  // 统一把编辑器里的二进制内容从 data:image;base64,... 迁到 /api/attachments/<id>。
+  // 粘贴、拖拽、点"插入图片/插入附件"按钮都应走 uploadAttachment；导入
+  // （importService）在解析到本地图片时也走这里把字节落盘。
+  //
+  // 后端不再限制 MIME（只黑掉极少数高危可执行类型），任何文件都能上传。
+  // 响应里多带一个 category: "image" | "file"，前端据此决定编辑器里：
+  //   - "image" → 插 <img>
+  //   - "file"  → 插「附件链接」（<a download="原文件名">📎 文件名 (大小)</a>）
   //
   // 返回的 url 是**相对 URL**（/api/attachments/<id>），浏览器直接用作 img.src
   // 能正确带上 Authorization（fetch）……不过 <img> 标签的 HTTP 请求不会带
@@ -890,11 +895,11 @@ export const api = {
   // 若以后部署到不同域 + cookie 鉴权不可用，需改造为签名 URL。
   attachments: {
     /**
-     * 上传一张图片附件。
+     * 上传一份附件（任意格式）。
      *
      * @param noteId 必须：绑定的笔记 ID，后端用它做 ACL 校验
      * @param file   File 对象（粘贴得到的 File、拖拽文件、或 input.files[0]）
-     * @returns      { id, url, mimeType, size, filename }
+     * @returns      { id, url, mimeType, size, filename, category }
      *
      * 注意：
      *   - 本调用绕过 request() 通用封装，因为 Content-Type 需要让浏览器自动
@@ -904,7 +909,14 @@ export const api = {
     upload: async (
       noteId: string,
       file: File,
-    ): Promise<{ id: string; url: string; mimeType: string; size: number; filename: string }> => {
+    ): Promise<{
+      id: string;
+      url: string;
+      mimeType: string;
+      size: number;
+      filename: string;
+      category: "image" | "file";
+    }> => {
       const token = getToken();
       const form = new FormData();
       form.append("file", file);
@@ -928,7 +940,7 @@ export const api = {
      */
     urlFor: (id: string): string => `${getBaseUrl()}/attachments/${id}`,
 
-    /** 删除一张附件。一般用于编辑器内显式删图 + 管理页。 */
+    /** 删除一份附件。一般用于编辑器内显式删除 + 管理页。 */
     remove: (id: string) =>
       request<{ success: boolean }>(`/attachments/${id}`, { method: "DELETE" }),
   },
@@ -1076,6 +1088,77 @@ export const api = {
       request<{ success: boolean }>(`/diary/attachments/${id}`, { method: "DELETE" }),
     /** 拼出图片完整 URL，给 <img src> 用。 */
     urlFor: (id: string): string => `${getBaseUrl()}/diary/attachments/${id}`,
+  },
+
+  // ========== Files（文件管理模块：统一查看/上传/删除附件资源）==========
+  //
+  // attachments 表承载编辑器里每一份二进制字节。文件管理模块是它的
+  // "聚合视图"——给用户一个图片/文件混排的浏览入口，并支持反向引用跳回
+  // 对应的笔记。为避免新增表/新增文件夹，后端直接从 attachments 聚合 +
+  // 扫描 notes.content 做反查；前端只要走下面这几个接口即可。
+  //
+  // 上传支持"无笔记归属"：后端会自动创建/复用一个 isArchived=1 的 holder
+  // note 兜底外键约束，用户看到的只是"未归档文件"。
+  //
+  files: {
+    /** 分类聚合统计。侧栏/顶栏展示"X 张图片 / Y 个文件"用。 */
+    stats: () => request<FileStats>("/files/stats"),
+
+    /** 分页列出文件。所有筛选字段可选；默认按 createdAt desc。 */
+    list: (params: {
+      category?: FileCategory;
+      mime?: string;
+      notebookId?: string;
+      q?: string;
+      sort?: FileSortKey;
+      order?: "asc" | "desc";
+      page?: number;
+      pageSize?: number;
+    } = {}): Promise<FileListResponse> => {
+      const qs = new URLSearchParams();
+      // 注意：FileCategory 已收窄为 "image" | "file"，不再含 "all"。
+      // 调用方（FileManager）自己维护 "all" | FileCategory 的 UI 过滤，
+      // 在传进来之前就会把 "all" 映射成 undefined，这里只需非空判断。
+      if (params.category) qs.set("category", params.category);
+      if (params.mime) qs.set("mime", params.mime);
+      if (params.notebookId) qs.set("notebookId", params.notebookId);
+      if (params.q) qs.set("q", params.q);
+      if (params.sort) qs.set("sort", params.sort);
+      if (params.order) qs.set("order", params.order);
+      if (typeof params.page === "number") qs.set("page", String(params.page));
+      if (typeof params.pageSize === "number") qs.set("pageSize", String(params.pageSize));
+      const s = qs.toString();
+      return request<FileListResponse>(`/files${s ? `?${s}` : ""}`);
+    },
+
+    /** 取单个文件详情，含反向引用的笔记列表。 */
+    get: (id: string) => request<FileDetail>(`/files/${id}`),
+
+    /** 删除单个附件（含磁盘文件）。会做 ACL 校验，被别的笔记引用也一并断链。 */
+    remove: (id: string) =>
+      request<{ success: boolean }>(`/files/${id}`, { method: "DELETE" }),
+
+    /**
+     * 上传一份文件到文件管理（无笔记归属时后端落到 holder note）。
+     * 用 FormData；不要手动设 Content-Type，交给浏览器注入 multipart boundary。
+     */
+    upload: async (file: File, opts: { noteId?: string; notebookId?: string } = {}): Promise<FileItem> => {
+      const token = getToken();
+      const form = new FormData();
+      form.append("file", file);
+      if (opts.noteId) form.append("noteId", opts.noteId);
+      if (opts.notebookId) form.append("notebookId", opts.notebookId);
+      const res = await fetch(`${getBaseUrl()}/files/upload`, {
+        method: "POST",
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `文件上传失败: ${res.status}`);
+      }
+      return res.json();
+    },
   },
 
   // Shares (分享管理)
@@ -1698,6 +1781,67 @@ export const api = {
       }>("/backups", { method: "POST", body: JSON.stringify({ type, description }), sudoToken }),
 
     /**
+     * 导入外部备份文件（.bak / .zip）到当前实例的备份仓库（管理员 + sudo）。
+     *
+     * 典型场景：
+     *   - 管理员收到「发送到邮箱」的 .bak 附件，想在别的实例接上；
+     *   - 从 U盘 / 异机拷贝 nowen-backup-*.zip 过来。
+     *
+     * 导入本身不触及现网数据——文件只是被放进 backupDir 并补齐 meta.json。要真
+     * 正应用它，管理员还需要在列表里点「恢复」，走 dryRun 预览 + sudo 二次确认
+     * 的完整流程，与就地创建的备份完全同构。
+     *
+     * 约束（违反会返回 400）：
+     *   - 扩展名必须是 .bak / .zip；
+     *   - .bak 文件头必须是 SQLite；.zip 必须含 meta.json + db.sqlite；
+     *   - 单文件 ≤ 500MB（超限请用服务器文件系统拷贝到 backupDir）。
+     *
+     * 注意：本调用绕过 request() 通用封装，因为 Content-Type 需要让浏览器
+     * 自动带上 multipart boundary；错误同样以 Error 抛出（带 code / status）。
+     */
+    upload: async (
+      file: File,
+      sudoToken: string,
+      description?: string,
+    ): Promise<{
+      id: string;
+      filename: string;
+      size: number;
+      type: "full" | "db-only";
+      createdAt: string;
+      noteCount: number;
+      notebookCount: number;
+      checksum: string;
+      formatVersion: number;
+      schemaVersion: number;
+      description?: string;
+    }> => {
+      const token = getToken();
+      const form = new FormData();
+      form.append("file", file);
+      if (description) form.append("description", description);
+      const res = await fetch(`${getBaseUrl()}/backups/upload`, {
+        method: "POST",
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          "X-Sudo-Token": sudoToken,
+          // 注意：不要手动设 Content-Type，浏览器会自动加 boundary
+        },
+        body: form,
+      });
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        const err = new Error(
+          (body?.error as string) || `导入失败: ${res.status}`,
+        ) as Error & { code?: string; status?: number };
+        err.code = body?.code as string | undefined;
+        err.status = res.status;
+        throw err;
+      }
+      return body as Awaited<ReturnType<typeof api.backup.upload>>;
+    },
+
+    /**
      * 启停自动备份（管理员 + sudo）
      *
      * 后端会把 {enabled, intervalHours} 持久化到 system_settings.backup:auto，
@@ -1775,6 +1919,110 @@ export const api = {
         body: JSON.stringify({ path: dirPath, dryRun }),
         sudoToken: dryRun ? undefined : sudoToken,
       }),
+
+    /**
+     * 将一份备份作为附件发送到指定邮箱（管理员 + sudo）。
+     *
+     * 前置条件：
+     *   - 必须先在 /api/email/smtp 配好 SMTP 并 enabled=true；
+     *   - 附件上限 25 MB，超限后端返回 413 + ATTACHMENT_TOO_LARGE。
+     *
+     * 附件格式选择（createNew）：
+     *   - 不传 / "current"：直接发送 URL 里指定的 filename 备份；
+     *   - "full"   ：后端现场生成一份新的 .zip 全量备份再发送（会留在备份列表中）；
+     *   - "db-only"：后端现场生成一份新的 .bak 数据库快照再发送（会留在备份列表中）。
+     *
+     * 这样用户不用手动先"创建 → 再发送"，在一步操作内就能完成
+     * "归档 + 投递邮箱"，同时保留可追溯的本地副本。
+     *
+     * 设计注记：
+     *   - note 只是一行可选备注，附加在邮件正文固定模板之后，
+     *     不允许前端自定义 subject/html —— 避免把本站当钓鱼跳板；
+     *   - 后端会返回 SMTP 末次响应文本（lastResponse），前端可直接 toast 展示，
+     *     定位"被服务商拒收"这类问题特别高效；
+     *   - 成功响应额外带 filename/generatedNew，让前端知道真正发出去的是哪份备份。
+     */
+    sendEmail: (
+      filename: string,
+      to: string,
+      sudoToken?: string,
+      note?: string,
+      createNew?: "current" | "full" | "db-only",
+    ) =>
+      request<{
+        success: boolean;
+        lastResponse?: string;
+        size?: number;
+        filename?: string;
+        generatedNew?: boolean;
+      }>(`/backups/${encodeURIComponent(filename)}/send-email`, {
+        method: "POST",
+        body: JSON.stringify({ to, note, createNew }),
+        sudoToken,
+      }),
+  },
+
+  // ============================================================
+  // 邮件服务（SMTP）配置 —— 管理员专属
+  // ------------------------------------------------------------
+  // 配套 backup.sendEmail 使用：先 GET 拉现状、PUT 写入、POST /test 验证。
+  // 所有接口都走 requireAdmin，非管理员会直接收到 403，前端应根据 /api/me
+  // 的 role 字段提前隐藏入口以避免无意义的 403。
+  // ============================================================
+  email: {
+    /** 读取当前 SMTP 配置（密码永远不返回明文，只给 hasPassword 标记） */
+    getSmtp: () =>
+      request<{
+        enabled: boolean;
+        host: string;
+        port: number;
+        secure: boolean;
+        username: string;
+        fromName: string;
+        fromEmail: string;
+        hasPassword: boolean;
+        updatedAt: string | null;
+      }>("/email/smtp"),
+
+    /**
+     * 写入 SMTP 配置（管理员 + sudo）。
+     *
+     * password 字段：
+     *   - undefined：保持旧密码不变（用于"只改 host/port" 场景）
+     *   - ""       ：显式清空旧密码
+     *   - 非空串    ：覆盖为新密码（后端 AES-GCM 加密后落库）
+     */
+    putSmtp: (
+      input: {
+        enabled: boolean;
+        host: string;
+        port: number;
+        secure: boolean;
+        username: string;
+        password?: string;
+        fromName: string;
+        fromEmail: string;
+      },
+      sudoToken?: string,
+    ) =>
+      request<{
+        enabled: boolean;
+        host: string;
+        port: number;
+        secure: boolean;
+        username: string;
+        fromName: string;
+        fromEmail: string;
+        hasPassword: boolean;
+        updatedAt: string | null;
+      }>("/email/smtp", { method: "PUT", body: JSON.stringify(input), sudoToken }),
+
+    /** 发送测试邮件，返回 success + SMTP 末次响应 */
+    testSmtp: (to: string, sudoToken?: string) =>
+      request<{ success: boolean; lastResponse?: string; error?: string }>(
+        "/email/smtp/test",
+        { method: "POST", body: JSON.stringify({ to }), sudoToken },
+      ),
   },
 
   // ============================================================

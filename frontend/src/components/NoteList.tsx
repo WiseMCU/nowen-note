@@ -1,7 +1,7 @@
 import React, { useEffect, useCallback, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Pin, PinOff, Star, StarOff, Clock, FileText, Trash2, ArchiveRestore, Menu, FolderInput, ChevronRight, ChevronDown, ChevronLeft, Folder, X, Check, Lock, Unlock, CalendarDays, RefreshCw, Share2, GripVertical, Download, Upload, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { Plus, Pin, PinOff, Star, StarOff, Clock, FileText, Trash2, ArchiveRestore, Menu, FolderInput, ChevronRight, ChevronDown, ChevronLeft, Folder, X, Check, Lock, Unlock, CalendarDays, RefreshCw, Share2, GripVertical, Download, Upload, ArrowUpDown, ArrowUp, ArrowDown, Image as ImageIcon, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import ContextMenu, { ContextMenuItem } from "@/components/ContextMenu";
@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { useTranslation } from "react-i18next";
 import { haptic } from "@/hooks/useCapacitor";
 import { toast } from "@/lib/toast";
-import { exportSingleNote } from "@/lib/exportService";
+import { exportSingleNote, exportSingleNoteAsPDF, exportSingleNoteAsImage } from "@/lib/exportService";
 import { readMarkdownFiles, readMarkdownFromZip, importNotes } from "@/lib/importService";
 import { realtime } from "@/lib/realtime";
 
@@ -1293,14 +1293,26 @@ export default function NoteList() {
         icon: <FolderInput size={14} />,
         disabled: !bulkMode && !!targetNote.isLocked,
       },
-      // 单笔记导出为 Markdown（批量模式暂不提供，避免一次触发 N 个下载弹窗）
+      // 单笔记导出为 Markdown / PDF / 图片（批量模式暂不提供，避免一次触发 N 个下载弹窗）
       ...(bulkMode
         ? []
-        : [{
-            id: "export_md",
-            label: t('noteList.exportAsMarkdown'),
-            icon: <Download size={14} />,
-          } as ContextMenuItem]),
+        : [
+            {
+              id: "export_md",
+              label: t('noteList.exportAsMarkdown'),
+              icon: <Download size={14} />,
+            } as ContextMenuItem,
+            {
+              id: "export_pdf",
+              label: t('noteList.exportAsPDF'),
+              icon: <Printer size={14} />,
+            } as ContextMenuItem,
+            {
+              id: "export_image",
+              label: t('noteList.exportAsImage'),
+              icon: <ImageIcon size={14} />,
+            } as ContextMenuItem,
+          ]),
       { id: "sep2", label: "", separator: true },
       {
         id: "trash",
@@ -1354,6 +1366,46 @@ export default function NoteList() {
         const toastId = toast.info(t('export.exportingNote', { name: targetNote.title }), 0);
         try {
           const ok = await exportSingleNote(targetId);
+          toast.dismiss(toastId);
+          if (ok) {
+            toast.success(t('export.exportComplete'));
+          } else {
+            toast.error(t('export.exportFailed', { error: '' }));
+          }
+        } catch (err: any) {
+          toast.dismiss(toastId);
+          toast.error(err?.message || t('export.exportFailed', { error: String(err) }));
+        }
+        break;
+      }
+      case "export_pdf": {
+        // 单笔记导出 PDF：
+        //   - Electron 桌面端：直接保存矢量 PDF（走主进程 printToPDF）；
+        //   - 浏览器：html2canvas + jsPDF 直接生成并下载 PDF（光栅，中文正常）。
+        haptic.light();
+        const toastId = toast.info(t('export.exportingNote', { name: targetNote.title }), 0);
+        try {
+          const res = await exportSingleNoteAsPDF(targetId);
+          toast.dismiss(toastId);
+          if (res.ok && (res.mode === "desktop" || res.mode === "web")) {
+            toast.success(t('export.exportComplete'));
+          } else if (!res.ok && res.mode === "canceled") {
+            // 用户主动取消保存对话框，不提示错误
+          } else {
+            toast.error(t('export.exportFailed', { error: (res as { error?: string }).error || '' }));
+          }
+        } catch (err: any) {
+          toast.dismiss(toastId);
+          toast.error(err?.message || t('export.exportFailed', { error: String(err) }));
+        }
+        break;
+      }
+      case "export_image": {
+        // 单笔记导出 PNG：SVG foreignObject → canvas。
+        haptic.light();
+        const toastId = toast.info(t('export.exportingNote', { name: targetNote.title }), 0);
+        try {
+          const ok = await exportSingleNoteAsImage(targetId);
           toast.dismiss(toastId);
           if (ok) {
             toast.success(t('export.exportComplete'));

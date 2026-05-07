@@ -120,6 +120,17 @@ ANDROID_DOCKER_SYNC=0                                    # --android-docker-sync
 # 加这个开关后：PC 打包完自动 `cd backend && npm rebuild better-sqlite3`，恢复 Node ABI。
 RESTORE_BACKEND_ABI=0                                    # --restore-backend-abi
 
+# ===== 原子发布（all-or-nothing） =====
+# 当设为 1 时：先把三端（Docker / PC / Android）全部构建成功，最后统一执行所有
+#   "对外可见的推送动作"：docker push / git tag push / gh release。
+# 任何一端构建失败，则 Docker Hub / GitHub 都不会留下任何此次版本的痕迹（本地会保留产物用于排查）。
+# 场景：
+#   - 多端组合（docker+pc / docker+android / 三端）或"一键全量发布"时默认自动开启
+#   - 单目标（只 docker 或只 pc 或只 android）时默认关闭（没有意义，也不需要额外 buildx 验证）
+#   - --atomic / --no-atomic 可显式覆盖
+ATOMIC_RELEASE=-1              # -1=未指定（由目标组合自动推断）；0=关；1=开
+ATOMIC_RELEASE_EXPLICIT=0      # 用户通过 --atomic/--no-atomic 显式设置
+
 usage() {
     cat <<EOF
 用法: $0 [选项]
@@ -159,6 +170,9 @@ usage() {
       --notes-file PATH    Release 发布说明（从文件读，优先级高于 --notes）
       --draft              Release 作为草稿（可在网页上再发布）
       --prerelease         标记为 Pre-release（版本号带 -rc / -alpha 等后缀会自动置位）
+      --atomic             原子发布：三端全部构建成功后，再统一执行 docker push / git tag / GitHub Release
+                           （多端组合或"一键全量发布"时默认开启）
+      --no-atomic          关闭原子发布：保持旧行为（边构建边推送）
 
 构建模式（--build-only，取代 build-arm64.sh）:
       --build-only         仅构建 docker 镜像，不 git pull / 不版本号 / 不 git tag / 不 Docker Hub 推送
@@ -238,6 +252,8 @@ while [ $# -gt 0 ]; do
         --notes-file)   RELEASE_NOTES_FILE="${2:-}"; shift 2 ;;
         --draft)        RELEASE_DRAFT=1; shift ;;
         --prerelease)   RELEASE_PRERELEASE=1; shift ;;
+        --atomic)       ATOMIC_RELEASE=1; ATOMIC_RELEASE_EXPLICIT=1; shift ;;
+        --no-atomic)    ATOMIC_RELEASE=0; ATOMIC_RELEASE_EXPLICIT=1; shift ;;
         -h|--help)      usage ;;
         *)              die "未知参数: $1（使用 -h 查看帮助）" ;;
     esac
@@ -260,17 +276,70 @@ if [ "$TARGETS_EXPLICIT" = "0" ] && [ "$BUILD_ONLY" = "0" ] && [ "$ASSUME_YES" =
     echo "  ${C_CYAN}2${C_RESET})  PC 客户端                 打包 exe / AppImage / deb / dmg"
     echo "  ${C_CYAN}3${C_RESET})  Android APK               打包 Android 安装包"
     echo "  ${C_CYAN}4${C_RESET})  PC + Android              同时打 PC 和 Android"
-    echo "  ${C_CYAN}5${C_RESET})  Docker + PC + Android     全部发布"
+    echo "  ${C_BOLD}${C_GREEN}5${C_RESET})  ${C_BOLD}🚀 一键全量发布${C_RESET}          git tag + Docker(amd64+arm64) + exe + APK + GitHub Releases"
     echo "  ${C_CYAN}6${C_RESET})  自定义组合                手动输入 docker,pc,android 组合"
     echo
     read -r -p "请输入序号 [1-6]（默认 1）: " _mode_choice
     _mode_choice="${_mode_choice:-1}"
+
+    # _ONE_SHOT=1 表示"一键全量发布"模式：后续 Docker 架构 / PC 平台 / Android 方式 /
+    # GitHub Release / 其他选项 全部跳过交互，采用最合理的默认值，实现真正"一次性全发"。
+    _ONE_SHOT=0
+
     case "$_mode_choice" in
         1) TARGETS="docker" ;;
         2) TARGETS="pc" ;;
         3) TARGETS="android" ;;
         4) TARGETS="pc,android" ;;
-        5) TARGETS="docker,pc,android" ;;
+        5)
+            TARGETS="docker,pc,android"
+            _ONE_SHOT=1
+            # ---- 一键全量：Docker 多架构 ----
+            ARCH="multi"
+            # ---- 一键全量：PC 平台按宿主自动推断 ----
+            if [ -z "$PC_PLATFORMS" ]; then
+                _UNAME_ONESHOT="$(uname -s 2>/dev/null || echo unknown)"
+                case "$_UNAME_ONESHOT" in
+                    Linux)  PC_PLATFORMS="win,linux" ;;
+                    Darwin) PC_PLATFORMS="mac,linux" ;;
+                    *)      PC_PLATFORMS="win" ;;
+                esac
+            fi
+            # ---- 一键全量：Android 按本机 SDK 是否可用自动选 ----
+            if { [ -n "${JAVA_HOME:-}" ] || command -v javac >/dev/null 2>&1; } \
+               && { [ -n "${ANDROID_HOME:-}" ] || [ -n "${ANDROID_SDK_ROOT:-}" ]; }; then
+                ANDROID_USE_DOCKER=0
+            elif command -v docker >/dev/null 2>&1; then
+                ANDROID_USE_DOCKER=1
+                ANDROID_DOCKER_SYNC=0
+            else
+                ANDROID_USE_DOCKER=0
+                warn "一键模式：未检测到 JDK/Android SDK 也未检测到 Docker，Android 构建很可能失败"
+            fi
+            # ---- 一键全量：必然打 git tag + 推 GitHub Release + git pull ----
+            DO_GIT_TAG=1
+            DO_GITHUB_RELEASE=1
+            NO_GITHUB_RELEASE_EXPLICIT=0
+            DO_PULL=1
+            DO_LATEST=1
+            # ---- 一键全量：必然启用原子发布（构建全部成功才推送）----
+            ATOMIC_RELEASE=1
+            ATOMIC_RELEASE_EXPLICIT=1
+            # ABI 恢复保持默认（0），一键模式不做（打包完一般也不需要立刻 dev:backend）
+            echo
+            info "🚀 已进入 ${C_BOLD}${C_GREEN}一键全量发布${C_RESET} 模式："
+            info "   - Docker 架构: ${C_GREEN}multi (amd64+arm64)${C_RESET}"
+            info "   - PC 平台:     ${C_GREEN}${PC_PLATFORMS}${C_RESET}"
+            if [ "$ANDROID_USE_DOCKER" = "1" ]; then
+                info "   - Android:     ${C_GREEN}Docker 构建${C_RESET}"
+            else
+                info "   - Android:     ${C_GREEN}本机 gradlew${C_RESET}"
+            fi
+            info "   - git tag:     ${C_GREEN}是${C_RESET}"
+            info "   - GitHub 发布: ${C_GREEN}是${C_RESET}"
+            info "   - git pull:    ${C_GREEN}是${C_RESET}"
+            info "   - 原子发布:    ${C_GREEN}是${C_RESET}（三端全部构建成功才推送）"
+            ;;
         6)
             echo
             echo "  可选值：${C_GREEN}docker${C_RESET}, ${C_GREEN}pc${C_RESET}, ${C_GREEN}android${C_RESET}（逗号分隔）"
@@ -280,7 +349,7 @@ if [ "$TARGETS_EXPLICIT" = "0" ] && [ "$BUILD_ONLY" = "0" ] && [ "$ASSUME_YES" =
             ;;
         *) die "无效选择: $_mode_choice" ;;
     esac
-    info "已选择发布目标: ${C_GREEN}${TARGETS}${C_RESET}"
+    [ "$_ONE_SHOT" = "0" ] && info "已选择发布目标: ${C_GREEN}${TARGETS}${C_RESET}"
 
     # 提前解析一下 TARGETS，以便后续步骤做条件判断
     _W_HAS_DOCKER=0; _W_HAS_PC=0; _W_HAS_ANDROID=0
@@ -289,7 +358,7 @@ if [ "$TARGETS_EXPLICIT" = "0" ] && [ "$BUILD_ONLY" = "0" ] && [ "$ASSUME_YES" =
     done
 
     # ======== 第 2 步：Docker 架构（仅当目标包含 docker 时） ========
-    if [ "$_W_HAS_DOCKER" = "1" ]; then
+    if [ "$_ONE_SHOT" = "0" ] && [ "$_W_HAS_DOCKER" = "1" ]; then
         echo
         echo "${C_BOLD}🏗️  第 2 步：Docker 构建架构${C_RESET}"
         echo
@@ -309,7 +378,7 @@ if [ "$TARGETS_EXPLICIT" = "0" ] && [ "$BUILD_ONLY" = "0" ] && [ "$ASSUME_YES" =
     fi
 
     # ======== 第 3 步：PC 平台选择（仅当目标包含 pc 时） ========
-    if [ "$_W_HAS_PC" = "1" ] && [ -z "$PC_PLATFORMS" ]; then
+    if [ "$_ONE_SHOT" = "0" ] && [ "$_W_HAS_PC" = "1" ] && [ -z "$PC_PLATFORMS" ]; then
         echo
         echo "${C_BOLD}💻 第 3 步：PC 端要打的平台${C_RESET}"
         echo
@@ -345,7 +414,7 @@ if [ "$TARGETS_EXPLICIT" = "0" ] && [ "$BUILD_ONLY" = "0" ] && [ "$ASSUME_YES" =
     fi
 
     # ======== 第 4 步：Android 构建方式（仅当目标包含 android 时） ========
-    if [ "$_W_HAS_ANDROID" = "1" ]; then
+    if [ "$_ONE_SHOT" = "0" ] && [ "$_W_HAS_ANDROID" = "1" ]; then
         echo
         echo "${C_BOLD}📱 第 4 步：Android 构建方式${C_RESET}"
         echo
@@ -399,7 +468,7 @@ if [ "$TARGETS_EXPLICIT" = "0" ] && [ "$BUILD_ONLY" = "0" ] && [ "$ASSUME_YES" =
     fi
 
     # ======== 第 5 步：GitHub Release ========
-    if [ "$_W_HAS_PC" = "1" ] || [ "$_W_HAS_ANDROID" = "1" ]; then
+    if [ "$_ONE_SHOT" = "0" ] && { [ "$_W_HAS_PC" = "1" ] || [ "$_W_HAS_ANDROID" = "1" ]; }; then
         echo
         echo "${C_BOLD}🚀 第 5 步：是否上传产物到 GitHub Releases？${C_RESET}"
         echo
@@ -423,28 +492,38 @@ if [ "$TARGETS_EXPLICIT" = "0" ] && [ "$BUILD_ONLY" = "0" ] && [ "$ASSUME_YES" =
     fi
 
     # ======== 第 6 步：其他选项 ========
-    echo
-    echo "${C_BOLD}⚙️  第 6 步：其他选项${C_RESET}"
-    echo
-
-    # 是否 git pull
-    echo "  是否先 git pull 拉取最新代码？"
-    read -r -p "  [Y/n]（默认 Y）: " _pull_choice
-    case "$_pull_choice" in
-        [nN]|[nN][oO]) DO_PULL=0; info "Git pull: ${C_GREEN}跳过${C_RESET}" ;;
-        *) DO_PULL=1; info "Git pull: ${C_GREEN}是${C_RESET}" ;;
-    esac
-
-    # PC 端打完后是否恢复 backend ABI
-    if [ "$_W_HAS_PC" = "1" ]; then
+    if [ "$_ONE_SHOT" = "0" ]; then
         echo
-        echo "  PC 打包后是否自动恢复 backend better-sqlite3 到 Node ABI？"
-        echo "  （方便打包后继续 npm run dev:backend）"
-        read -r -p "  [y/N]（默认 N）: " _abi_choice
-        case "$_abi_choice" in
-            [yY]|[yY][eE][sS]) RESTORE_BACKEND_ABI=1; info "恢复 ABI: ${C_GREEN}是${C_RESET}" ;;
-            *) RESTORE_BACKEND_ABI=0 ;;
+        echo "${C_BOLD}⚙️  第 6 步：其他选项${C_RESET}"
+        echo
+
+        # 是否 git pull
+        echo "  是否先 git pull 拉取最新代码？"
+        read -r -p "  [Y/n]（默认 Y）: " _pull_choice
+        case "$_pull_choice" in
+            [nN]|[nN][oO]) DO_PULL=0; info "Git pull: ${C_GREEN}跳过${C_RESET}" ;;
+            *) DO_PULL=1; info "Git pull: ${C_GREEN}是${C_RESET}" ;;
         esac
+
+        # PC 端打完后是否恢复 backend ABI
+        if [ "$_W_HAS_PC" = "1" ]; then
+            echo
+            echo "  PC 打包后是否自动恢复 backend better-sqlite3 到 Node ABI？"
+            echo "  （方便打包后继续 npm run dev:backend）"
+            read -r -p "  [y/N]（默认 N）: " _abi_choice
+            case "$_abi_choice" in
+                [yY]|[yY][eE][sS]) RESTORE_BACKEND_ABI=1; info "恢复 ABI: ${C_GREEN}是${C_RESET}" ;;
+                *) RESTORE_BACKEND_ABI=0 ;;
+            esac
+        fi
+    else
+        # 一键全量发布：仍给一次输 release notes 的机会（可选，回车跳过自动生成）
+        if [ -z "$RELEASE_NOTES" ] && [ -z "$RELEASE_NOTES_FILE" ]; then
+            echo
+            echo "${C_BOLD}📝 Release 说明${C_RESET}（可选，直接回车则自动生成）"
+            read -r -p "  请输入: " _notes_input
+            [ -n "$_notes_input" ] && RELEASE_NOTES="$_notes_input"
+        fi
     fi
 
     echo
@@ -480,6 +559,22 @@ if [ "$DO_GITHUB_RELEASE" = "0" ] && [ "$NO_GITHUB_RELEASE_EXPLICIT" = "0" ] \
    && { [ "$HAS_PC" = "1" ] || [ "$HAS_ANDROID" = "1" ]; }; then
     info "检测到 target 包含 pc/android，自动启用 --github-release（可用 --no-github-release 关闭）"
     DO_GITHUB_RELEASE=1
+fi
+
+# ===== 自动推断 --atomic（原子发布） =====
+# 多端组合（Docker+PC / Docker+Android / Docker+PC+Android）时自动开启：
+# 先把所有构建完成，最后统一执行 docker push / git tag / GitHub Release，
+# 避免"Docker 镜像已推送，但 PC/Android 构建失败"的半成品状态。
+# 单目标时没有跨端一致性需求，保持关闭以免 multi 模式需要额外构建开销。
+# 用户显式传了 --atomic / --no-atomic 时不再自动推断。
+if [ "$ATOMIC_RELEASE" = "-1" ]; then
+    _TARGET_COUNT=$((HAS_DOCKER + HAS_PC + HAS_ANDROID))
+    if [ "$_TARGET_COUNT" -ge 2 ]; then
+        ATOMIC_RELEASE=1
+        info "检测到多端组合（${TARGETS}），自动启用 ${C_GREEN}原子发布${C_RESET}（可用 --no-atomic 关闭）"
+    else
+        ATOMIC_RELEASE=0
+    fi
 fi
 
 case "$ARCH" in
@@ -982,6 +1077,7 @@ else
     fi
     echo "  同步 git tag  : $([ "$DO_GIT_TAG" = "1" ] && echo yes || echo no)"
     echo "  GitHub Release: $([ "$DO_GITHUB_RELEASE" = "1" ] && echo yes || echo no)"
+    echo "  原子发布      : $([ "$ATOMIC_RELEASE" = "1" ] && echo "yes（三端全部构建成功才推送）" || echo no)"
     echo "  git commit    : ${GIT_COMMIT}"
     echo "  构建时间      : ${BUILD_DATE}"
     if [ "$HAS_DOCKER" = "1" ] && [ "$ARCH" = "multi" ]; then
@@ -1050,9 +1146,18 @@ if [ "$SHOULD_BUILD_DOCKER" = "1" ]; then
             BUILDX_OUTPUT=( --load )
         fi
     else
-        # 发布模式：arm64 用 --load（稍后 docker push），multi 用 --push（直接多架构推送）
+        # 发布模式：
+        #   - 非原子发布：沿用旧行为，arm64 --load（稍后 docker push），multi --push（边建边推）
+        #   - 原子发布：multi 先不 push（只验证构建并把层写入 buildx 缓存），待 PC/Android 全部
+        #     成功后再跑第二次 buildx --push（有完整缓存，基本秒推）；arm64 仍 --load
         if [ "$ARCH" = "multi" ]; then
-            BUILDX_OUTPUT=( --push )
+            if [ "$ATOMIC_RELEASE" = "1" ]; then
+                # 不 --push 也不 --load（多架构无法 load），只验证构建；产物留在 buildx 缓存里
+                BUILDX_OUTPUT=()
+                info "原子发布：multi 先构建验证，待 PC/Android 成功后再统一推送"
+            else
+                BUILDX_OUTPUT=( --push )
+            fi
         else
             BUILDX_OUTPUT=( --load )
         fi
@@ -1082,14 +1187,17 @@ if [ "$SHOULD_BUILD_DOCKER" = "1" ]; then
             ;;
         multi)
             ensure_buildx_builder
-            # 多架构 manifest 不能 --load 也不能导成单 tar，只能 --push
+            # 多架构 manifest 不能 --load 也不能导成单 tar：
+            #   - 旧行为 / 非原子发布：BUILDX_OUTPUT=( --push )，边建边推
+            #   - 原子发布：BUILDX_OUTPUT=()，先只构建验证（层写入 buildx 缓存），
+            #     待 PC/Android 全部成功后，末尾统一再跑一次 buildx --push 推送
             BUILD_CMD=(
                 docker buildx build
                 --platform linux/amd64,linux/arm64
                 -f "$REPO_ROOT/Dockerfile"
                 "${BUILD_TAGS[@]}"
                 "${OCI_LABELS[@]}"
-                --push
+                "${BUILDX_OUTPUT[@]}"
                 "$REPO_ROOT"
             )
             echo "  ${BUILD_CMD[*]}"
@@ -1133,8 +1241,10 @@ if [ "$BUILD_ONLY" = "1" ]; then
 fi
 
 # -------------------- 发布模式：docker push（arm64 / amd64） --------------------
+# 原子发布模式下，这一步整体延迟到"统一推送阶段"，等 PC/Android 全部成功后再做。
+# 非原子发布模式保持原行为：Docker 构建后立即 push（旧版用户习惯）。
 PUSH_DURATION=0
-if [ "$SHOULD_BUILD_DOCKER" = "1" ]; then
+if [ "$SHOULD_BUILD_DOCKER" = "1" ] && [ "$ATOMIC_RELEASE" != "1" ]; then
     if [ "$ARCH" = "multi" ]; then
         info "multi 模式 buildx 已经把镜像直接推送到 Docker Hub，跳过单独 push 步骤"
     else
@@ -1150,11 +1260,15 @@ if [ "$SHOULD_BUILD_DOCKER" = "1" ]; then
         PUSH_END=$(date +%s)
         PUSH_DURATION=$((PUSH_END - PUSH_START))
     fi
+elif [ "$SHOULD_BUILD_DOCKER" = "1" ] && [ "$ATOMIC_RELEASE" = "1" ]; then
+    info "原子发布：Docker 镜像已构建完成，推送将延迟到所有目标构建成功之后"
 fi
 
-# 尝试获取 digest（multi 模式本地没镜像，拿不到，留空）
+# 尝试获取 digest（multi 模式本地没镜像，拿不到，留空；原子模式下 amd64/arm64 的 digest
+# 要等到末尾 docker push 完成后再取，这里先不算）
 DIGEST=""
-if [ "$SHOULD_BUILD_DOCKER" = "1" ] && [ "$DRY_RUN" != "1" ] && [ "$ARCH" != "multi" ]; then
+if [ "$SHOULD_BUILD_DOCKER" = "1" ] && [ "$DRY_RUN" != "1" ] \
+   && [ "$ARCH" != "multi" ] && [ "$ATOMIC_RELEASE" != "1" ]; then
     DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_NAME}:${VERSION_TAG}" 2>/dev/null || echo "")"
 fi
 
@@ -1174,6 +1288,76 @@ if [ "$HAS_PC" = "1" ]; then
     PC_START=$(date +%s)
 
     UNAME_S_PC="$(uname -s 2>/dev/null || echo unknown)"
+
+    # ---- 前置：确保 backend 依赖齐全 ----
+    # 背景：rebuild:native 只负责把原生模块从 Node ABI 切到 Electron ABI，
+    #   不会补装缺失的 npm 包；一旦 backend/node_modules 不完整（新机器 / 切过分支 /
+    #   手动删过 node_modules / lockfile 漂移），接下来 `npm run build:backend`
+    #   的 tsc 会直接 TS2307 "Cannot find module 'xxx'" 报错。
+    # 策略：检查几个关键依赖是否都存在；缺任何一个就在 backend/ 下跑一次 npm install。
+    # 覆盖：sqlite-vec（曾经因此失败过）、better-sqlite3、hono、jsonwebtoken。
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "  (dry-run) 检查 backend/node_modules 关键依赖"
+    else
+        _BACKEND_DEPS_OK=1
+        if [ ! -d "${REPO_ROOT}/backend/node_modules" ]; then
+            _BACKEND_DEPS_OK=0
+        else
+            for _dep in sqlite-vec better-sqlite3 hono jsonwebtoken; do
+                if [ ! -d "${REPO_ROOT}/backend/node_modules/${_dep}" ]; then
+                    warn "backend 依赖缺失: ${_dep}"
+                    _BACKEND_DEPS_OK=0
+                fi
+            done
+        fi
+        if [ "$_BACKEND_DEPS_OK" = "0" ]; then
+            info "backend 依赖不完整，自动执行 ${C_GREEN}npm install${C_RESET}（避免 tsc TS2307 报错）"
+            ( cd "${REPO_ROOT}/backend" && run_argv npm install )
+        else
+            info "backend 依赖检查通过"
+        fi
+    fi
+
+    # ---- 前置：确保 frontend 依赖齐全 ----
+    # 背景：同 backend，frontend/node_modules 缺包时 `npm run build:frontend`
+    #   里的 `tsc -b` 会在各种 import 上直接 TS2307；之前在 Linux 上就被
+    #   html2canvas / jspdf / marked / @mhaberler/capacitor-zeroconf-nsd /
+    #   @aparajita/capacitor-secure-storage / @aparajita/capacitor-biometric-auth
+    #   这一串依赖绊住过。
+    # 策略：与 backend 同款——挑几个代表性依赖做白名单体检，缺任一个就
+    #   在 frontend/ 跑一次 npm install；齐全则放行不拖慢正常环境。
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "  (dry-run) 检查 frontend/node_modules 关键依赖"
+    else
+        _FRONTEND_DEPS_OK=1
+        if [ ! -d "${REPO_ROOT}/frontend/node_modules" ]; then
+            _FRONTEND_DEPS_OK=0
+        else
+            # 选型说明：
+            #   - react / vite / typescript：基石，缺任一个都是环境未初始化
+            #   - marked / html2canvas / jspdf：历史上掉过坑的导出/导入依赖
+            #   - @aparajita/capacitor-secure-storage / @aparajita/capacitor-biometric-auth
+            #     / @mhaberler/capacitor-zeroconf-nsd：带 scope 的 Capacitor 插件，
+            #     新机器 / 切分支时常缺
+            for _dep in \
+                react vite typescript \
+                marked html2canvas jspdf \
+                "@aparajita/capacitor-secure-storage" \
+                "@aparajita/capacitor-biometric-auth" \
+                "@mhaberler/capacitor-zeroconf-nsd"; do
+                if [ ! -d "${REPO_ROOT}/frontend/node_modules/${_dep}" ]; then
+                    warn "frontend 依赖缺失: ${_dep}"
+                    _FRONTEND_DEPS_OK=0
+                fi
+            done
+        fi
+        if [ "$_FRONTEND_DEPS_OK" = "0" ]; then
+            info "frontend 依赖不完整，自动执行 ${C_GREEN}npm install${C_RESET}（避免 tsc TS2307 报错）"
+            ( cd "${REPO_ROOT}/frontend" && run_argv npm install )
+        else
+            info "frontend 依赖检查通过"
+        fi
+    fi
 
     # 统一先跑 rebuild:native + build:all（safe-build.mjs 内部也是这三步，这里拆开以便非 Windows 分支复用）
     if [ "$UNAME_S_PC" = "Linux" ] || [ "$UNAME_S_PC" = "Darwin" ]; then
@@ -1475,6 +1659,51 @@ if [ "$HAS_ANDROID" = "1" ]; then
     ANDROID_END=$(date +%s)
     ANDROID_BUILD_DURATION=$((ANDROID_END - ANDROID_START))
     ok "Android 打包完成，用时 ${ANDROID_BUILD_DURATION}s"
+fi
+
+# -------------------- 原子发布：统一推送 Docker 镜像 --------------------
+# 走到这里意味着所选目标（docker/pc/android）全部构建成功。
+# 现在才是真正"把东西发出去"的时候：先 docker push，再 git tag push，再 gh release。
+# 任何一步失败 set -e 会立即 die，后续不再继续。
+if [ "$SHOULD_BUILD_DOCKER" = "1" ] && [ "$ATOMIC_RELEASE" = "1" ]; then
+    step "统一推送 Docker 镜像（原子发布：所有构建已完成）"
+    PUSH_START=$(date +%s)
+
+    case "$ARCH" in
+        multi)
+            # 第二次跑 buildx --push：第一次的层已经在 buildx 缓存里，绝大部分是秒过
+            info "buildx 重新执行 --push（利用第一次构建的缓存）"
+            ensure_buildx_builder
+            PUSH_CMD=(
+                docker buildx build
+                --platform linux/amd64,linux/arm64
+                -f "$REPO_ROOT/Dockerfile"
+                "${BUILD_TAGS[@]}"
+                "${OCI_LABELS[@]}"
+                --push
+                "$REPO_ROOT"
+            )
+            echo "  ${PUSH_CMD[*]}"
+            run_argv "${PUSH_CMD[@]}"
+            ;;
+        amd64|arm64)
+            info "推送：${IMAGE_NAME}:${VERSION_TAG}"
+            run "docker push \"${IMAGE_NAME}:${VERSION_TAG}\""
+            if [ "$DO_LATEST" = "1" ]; then
+                info "推送：${IMAGE_NAME}:latest"
+                run "docker push \"${IMAGE_NAME}:latest\""
+            fi
+            ;;
+    esac
+
+    PUSH_END=$(date +%s)
+    PUSH_DURATION=$((PUSH_END - PUSH_START))
+
+    # 现在本地已有镜像（或 multi push 成功），可以取 digest 了
+    if [ "$DRY_RUN" != "1" ] && [ "$ARCH" != "multi" ]; then
+        DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_NAME}:${VERSION_TAG}" 2>/dev/null || echo "")"
+    fi
+    ok "Docker 镜像推送完成，用时 ${PUSH_DURATION}s"
 fi
 
 # -------------------- git tag --------------------

@@ -19,15 +19,43 @@ import { api } from "@/lib/api";
 
 const SELF_USERID_CACHE_KEY = "nowen-self-userid";
 
-/** 取当前登录用户 id（带缓存），用于从 presence 中过滤自己 */
+/**
+ * 取当前登录用户 id（带缓存），用于从 presence 中过滤自己。
+ *
+ * 三级兜底（从快到慢）：
+ *   1. realtime.getSelfUserId()：WS "connected" 帧携带的 userId，连上即知，零延迟
+ *   2. localStorage[SELF_USERID_CACHE_KEY]：上一次登录缓存
+ *   3. /api/me：纯 HTTP 兜底（通常不会走到，因为 1 / 2 已经覆盖）
+ *
+ * 为什么不直接 /api/me：
+ *   早期只走 /api/me，首次登录或清缓存后会有"selfUserId=null"的窗口期；
+ *   这段窗口内收到自己触发的 presence / note:updated 会被当成别人处理，
+ *   误弹 "XX 正在编辑 / XX 更新了笔记"横幅。
+ */
 function useSelfUserId(): string | null {
   const [userId, setUserId] = useState<string | null>(() => {
+    const fromWs = realtime.getSelfUserId();
+    if (fromWs) return fromWs;
     try {
       return localStorage.getItem(SELF_USERID_CACHE_KEY);
     } catch {
       return null;
     }
   });
+
+  // 订阅 realtime 的 "open"：WS 刚连上就会收到 connected 帧把 selfUserId 填好，
+  // 这里 open 事件触发时去同步一次，免得用户提前渲染、后才连上 WS 拿到 userId。
+  useEffect(() => {
+    const sync = () => {
+      const id = realtime.getSelfUserId();
+      if (id) setUserId((prev) => prev ?? id);
+    };
+    sync();
+    const off = realtime.on("open", sync);
+    return () => {
+      off();
+    };
+  }, []);
 
   useEffect(() => {
     if (userId) return;
@@ -132,8 +160,16 @@ export function useRealtimeNote({
       // cursorUpdate 是轻量事件，不重写 users 列表（Phase 2 先忽略 cursor UI）
       if (msg.cursorUpdate) return;
       const users: PresenceUser[] = Array.isArray(msg.users) ? msg.users : [];
-      // 过滤掉自己（按 userId；若同一用户多标签页都算作"自己"，避免 UI 里出现"你自己"）
-      const filtered = selfUserId ? users.filter((u) => u.userId !== selfUserId) : users;
+      // 过滤掉自己：
+      //   1) userId 匹配（同一用户所有标签页都算自己，UI 里不出现"你自己"）
+      //   2) connectionId 匹配（selfUserId 还未就绪时兜底，至少排除本连接）
+      // 两路并集，确保不会漏。
+      const myConnectionId = realtime.getConnectionId();
+      const filtered = users.filter((u) => {
+        if (selfUserId && u.userId === selfUserId) return false;
+        if (myConnectionId && u.connectionId === myConnectionId) return false;
+        return true;
+      });
       // 排序：editing 优先
       filtered.sort((a, b) => {
         if (a.editing !== b.editing) return a.editing ? -1 : 1;
@@ -144,14 +180,21 @@ export function useRealtimeNote({
 
     const offUpdate = realtime.on("note:updated", (msg: any) => {
       if (msg.noteId !== noteId) return;
-      // 排除自己触发的回声：actorUserId 与 selfUserId 相同时跳过
-      if (selfUserId && msg.actorUserId === selfUserId) return;
+      // 排除自己触发的回声。优先 selfUserId 匹配；若尚未就绪但 WS 已连上，
+      // 从 realtime 实时查一次（避免闭包里拿到过期的 null）。
+      const effectiveSelf = selfUserId ?? realtime.getSelfUserId();
+      if (effectiveSelf && msg.actorUserId === effectiveSelf) return;
+      // 若仍无法判断自己是谁（未登录 / 鉴权异常），保守起见不弹横幅，
+      // 免得自己触发的保存也被当作"别人更新"打断。
+      if (!effectiveSelf) return;
       onRemoteUpdateRef.current?.(msg);
     });
 
     const offDelete = realtime.on("note:deleted", (msg: any) => {
       if (msg.noteId !== noteId) return;
-      if (selfUserId && msg.actorUserId === selfUserId) return;
+      const effectiveSelf = selfUserId ?? realtime.getSelfUserId();
+      if (effectiveSelf && msg.actorUserId === effectiveSelf) return;
+      if (!effectiveSelf) return;
       onRemoteDeleteRef.current?.(msg);
     });
 

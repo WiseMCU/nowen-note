@@ -85,6 +85,7 @@ import {
   Strikethrough,
   Table2,
   Image as ImagePlus,
+  Paperclip,
   Undo,
   Code as CodeIcon,
 } from "lucide-react";
@@ -520,6 +521,65 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
     input.click();
   }, [editable, insertImageFromFile]);
 
+  /**
+   * 任意格式附件上传 → 在 Markdown 当前光标处插入：
+   *   - 图片：与 insertImageFromFile 一样，插入 `![alt](url)`
+   *   - 非图片：插入 `[📎 文件名 (大小)](url)` —— 纯 markdown 链接，语法兼容所有
+   *     渲染器；点击后浏览器按后端 Content-Disposition 触发下载。
+   *
+   * 上传链路和 TiptapEditor 完全一致（api.attachments.upload），服务端同一个表。
+   */
+  const insertAttachmentFromFile = useCallback((file: File) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const currentNote = noteRef.current;
+    if (!currentNote?.id) {
+      toast.error(tr("tiptap.attachmentUploadFailed") || "Attachment upload failed");
+      return;
+    }
+    toast.info(tr("tiptap.attachmentUploading") || "Uploading attachment...");
+    api.attachments
+      .upload(currentNote.id, file)
+      .then((res) => {
+        const v = viewRef.current;
+        if (!v) return;
+        if (res.category === "image") {
+          insertImage(v, res.url, file.name.replace(/\.[^.]+$/, ""));
+        } else {
+          // 避免文件名里的 ] 破坏 markdown 链接：做最小转义
+          const label = (res.filename || "attachment")
+            .replace(/\]/g, "\\]")
+            .replace(/\|/g, "\\|");
+          const sizeLabel = formatBytesMd(res.size);
+          replaceSelection(v, `[📎 ${label}${sizeLabel ? ` (${sizeLabel})` : ""}](${res.url})`);
+        }
+        toast.success(tr("tiptap.attachmentUploaded") || "Attachment uploaded");
+      })
+      .catch((err: any) => {
+        console.error("Attachment upload failed:", err);
+        const msg = String(err?.message || "");
+        if (/最大|max\s+\d+\s*MB/i.test(msg)) {
+          toast.error(tr("tiptap.attachmentTooLarge") || "File too large");
+        } else {
+          toast.error(tr("tiptap.attachmentUploadFailed") || "Attachment upload failed");
+        }
+      });
+  }, [tr]);
+
+  const triggerAttachmentPicker = useCallback(() => {
+    const view = viewRef.current;
+    if (!view || !editable) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    // 不设 accept：任意格式
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file) insertAttachmentFromFile(file);
+    };
+    input.click();
+  }, [editable, insertAttachmentFromFile]);
+
+
   // ---------- 保存逻辑 ----------
 
   const emitSave = useCallback(() => {
@@ -755,21 +815,30 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
         // 斜杠菜单 plugin
         createSlashPlugin((s) => setSlashState(s)),
 
-        // 图片粘贴 / 拖拽
+        // 图片 / 附件 粘贴 & 拖拽：与 TiptapEditor 行为对齐
         EditorView.domEventHandlers({
           paste(event) {
             if (!editable) return false;
+            // 1) 先找图片（截图粘贴）
             const items = event.clipboardData?.items;
-            if (!items) return false;
-            for (const item of items) {
-              if (item.type.startsWith("image/")) {
-                const file = item.getAsFile();
-                if (file) {
-                  event.preventDefault();
-                  insertImageFromFile(file);
-                  return true;
+            if (items) {
+              for (const item of items) {
+                if (item.type.startsWith("image/")) {
+                  const file = item.getAsFile();
+                  if (file) {
+                    event.preventDefault();
+                    insertImageFromFile(file);
+                    return true;
+                  }
                 }
               }
+            }
+            // 2) 非图片文件（资源管理器复制的文件）→ 附件
+            const files = Array.from(event.clipboardData?.files || []);
+            if (files.length > 0) {
+              event.preventDefault();
+              for (const f of files) insertAttachmentFromFile(f);
+              return true;
             }
             return false;
           },
@@ -777,11 +846,13 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
             if (!editable) return false;
             const files = event.dataTransfer?.files;
             if (!files || files.length === 0) return false;
-            const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
-            if (imageFiles.length === 0) return false;
             event.preventDefault();
-            for (const f of imageFiles) {
-              insertImageFromFile(f);
+            for (const f of Array.from(files)) {
+              if (f.type.startsWith("image/")) {
+                insertImageFromFile(f);
+              } else {
+                insertAttachmentFromFile(f);
+              }
             }
             return true;
           },
@@ -1184,6 +1255,9 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
           <ToolbarButton onClick={triggerImagePicker} title={tr("tiptap.insertImage") || "插入图片"}>
             <ImagePlus size={iconSize} />
           </ToolbarButton>
+          <ToolbarButton onClick={triggerAttachmentPicker} title={tr("tiptap.insertAttachment") || "插入附件"}>
+            <Paperclip size={iconSize} />
+          </ToolbarButton>
           <ToolbarButton
             onClick={() => withView((v) => insertTable(v))}
             title={tr("tiptap.insertTable") || "插入表格"}
@@ -1401,4 +1475,18 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
 // 开发辅助：防止 Vite HMR 时残留 view
 // ---------------------------------------------------------------------------
 // （占位，未来若需要可在 import.meta.hot 回调里清理 viewRef）
+
+// ---------------------------------------------------------------------------
+// 工具：人类可读的字节大小（与 TiptapEditor 一致；这里独立一份避免跨组件 import）
+// ---------------------------------------------------------------------------
+function formatBytesMd(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+  const gb = mb / 1024;
+  return `${gb.toFixed(gb < 10 ? 2 : 1)} GB`;
+}
 void StateEffect;

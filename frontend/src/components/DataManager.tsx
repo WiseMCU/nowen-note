@@ -6,6 +6,8 @@ import {
   Database, HardDrive, RefreshCw, Eraser, Minimize2,
   Save, ShieldAlert, Clock, Server,
   Lock, Eye, EyeOff, X,
+  Mail, Send, Settings as SettingsIcon, ChevronDown, ChevronRight,
+  BookOpen, ExternalLink,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { exportAllNotes, ExportProgress } from "@/lib/exportService";
@@ -24,6 +26,10 @@ export default function DataManager() {
   const { t } = useTranslation();
   const { state } = useApp();
   const actions = useAppActions();
+
+  // 二级 Tab：把原本「一条长长的滚动页」拆成若干功能域，降低认知负担
+  type SubTab = "export" | "import" | "database" | "backup" | "danger";
+  const [activeSubTab, setActiveSubTab] = useState<SubTab>("export");
 
   // Export state
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
@@ -194,12 +200,54 @@ export default function DataManager() {
     <div className="space-y-6">
       <div>
         <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-1">{t('dataManager.title')}</h3>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-6">
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
           {t('dataManager.description')}
         </p>
+
+        {/* ===== 二级 Tab 切换 =====
+            功能分组过多时，一页顺序展示会拉出极长的滚动，新用户定位功能困难。
+            这里用"药丸式"二级 tab 把 5 个功能域（导出 / 导入 / 数据库 / 备份 / 危险区）
+            分开，点击切换；默认落在「导出」——最常用且相对安全。 */}
+        <div
+          role="tablist"
+          aria-label={t('dataManager.title')}
+          className="flex flex-wrap gap-1 p-1 rounded-lg bg-zinc-100/70 dark:bg-zinc-800/50 border border-zinc-200/60 dark:border-zinc-800"
+        >
+          {([
+            { id: "export",   icon: FolderDown,      label: t('dataManager.tabs.export'),   tone: "indigo"  },
+            { id: "import",   icon: FileUp,          label: t('dataManager.tabs.import'),   tone: "emerald" },
+            { id: "database", icon: Database,        label: t('dataManager.tabs.database'), tone: "sky"     },
+            { id: "backup",   icon: Save,            label: t('dataManager.tabs.backup'),   tone: "violet"  },
+            { id: "danger",   icon: AlertTriangle,   label: t('dataManager.tabs.danger'),   tone: "red"     },
+          ] as const).map((tab) => {
+            const active = activeSubTab === tab.id;
+            const Icon = tab.icon;
+            const activeToneClass =
+              tab.tone === "red"
+                ? "bg-white dark:bg-zinc-900 text-red-600 dark:text-red-400 shadow-sm"
+                : "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-sm";
+            return (
+              <button
+                key={tab.id}
+                role="tab"
+                aria-selected={active}
+                onClick={() => setActiveSubTab(tab.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  active
+                    ? activeToneClass
+                    : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-white/60 dark:hover:bg-zinc-900/40"
+                }`}
+              >
+                <Icon size={14} className={active && tab.tone === "red" ? "text-red-500" : undefined} />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* ===== 导出区域 ===== */}
+      {activeSubTab === "export" && (
       <section>
         <div className="flex items-center gap-2 mb-3">
           <FolderDown size={18} className="text-indigo-500" />
@@ -287,8 +335,11 @@ export default function DataManager() {
           </button>
         </div>
       </section>
+      )}
 
-      {/* ===== 导入区域 ===== */}
+      {/* ===== 导入区域（含第三方导入入口） ===== */}
+      {activeSubTab === "import" && (
+      <>
       <section>
         <div className="flex items-center gap-2 mb-3">
           <FileUp size={18} className="text-emerald-500" />
@@ -519,14 +570,21 @@ export default function DataManager() {
 
       {/* ===== 有道云笔记导入 ===== */}
       <YoudaoImport />
+      </>
+      )}
 
       {/* ===== 数据库文件 (.data) 导出/导入/占用统计 ===== */}
+      {activeSubTab === "database" && (
       <DataFileSection />
+      )}
 
       {/* ===== 备份与灾备（B 系列） ===== */}
+      {activeSubTab === "backup" && (
       <BackupSection />
+      )}
 
       {/* ===== 危险区域 (Danger Zone) ===== */}
+      {activeSubTab === "danger" && (
       <section className="mt-8 pt-6 border-t-2 border-dashed border-red-300/50 dark:border-red-900/40">
         <div className="flex items-center gap-2 mb-2">
           <AlertTriangle size={18} className="text-red-500" />
@@ -653,6 +711,7 @@ export default function DataManager() {
           )}
         </AnimatePresence>
       </section>
+      )}
     </div>
   );
 }
@@ -1325,6 +1384,33 @@ function BackupSection() {
   const [creating, setCreating] = useState<"db-only" | "full" | null>(null);
   const [createMsg, setCreateMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
+  // 「导入外部 .bak/.zip」状态独立于 create：它不生成新备份，而是把用户硬盘上
+  // 的文件搬进 backupDir 再补 .meta.json。独立 importing 让按钮 loading 态
+  // 不会卡住"立即备份"那两个按钮，UI 上也能并行显示。
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // 当前用户角色/邮箱：
+  //   - isAdmin 决定是否渲染「邮件通道（SMTP）」配置折叠区——SMTP 含凭证，非管理员看不到；
+  //   - currentEmail 作为发邮件对话框的默认值，省去管理员手输，降低误发风险。
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [currentEmail, setCurrentEmail] = useState<string>("");
+  useEffect(() => {
+    let cancelled = false;
+    api.getMe()
+      .then((u) => {
+        if (cancelled) return;
+        setIsAdmin((u as any)?.role === "admin");
+        setCurrentEmail((u as any)?.email || "");
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // 「发送到邮箱」目标备份与对话框状态
+  const [sendEmailTarget, setSendEmailTarget] = useState<BackupRow | null>(null);
+
   // sudoToken 缓存：withSudo 在 SUDO_REQUIRED 时会重新询问密码，
   // 缓存让"备份 → 删除 → 改间隔" 这串连续操作只需输一次密码。
   const sudoTokenRef = useRef<string | null>(null);
@@ -1426,6 +1512,53 @@ function BackupSection() {
       });
     } finally {
       setCreating(null);
+    }
+  };
+
+  /**
+   * 导入外部 .bak / .zip 备份到当前实例的备份仓库。
+   *
+   * 行为取舍：
+   *   - 上传成功后 **不自动进入恢复流程**，只是刷新列表让新备份显现 —— 恢复仍
+   *     要管理员自己在列表里点，走 dryRun 预览 + sudo 二次确认。理由是邮件
+   *     投递 / 跨机拷贝拿到的备份，管理员 80% 的情况下想先看"这份到底有多少
+   *     笔记 / 附件"再下决定，而不是一键覆盖当前库。
+   *   - 成功后把 input.value 清空，允许同一个文件重复选择（浏览器默认会静默
+   *     吞掉相同文件名的第二次 change）。
+   *   - 错误信息直接透传后端 error 字段，便于管理员看到"文件头校验失败 / 格式
+   *     版本过高"这类具体原因。
+   */
+  const handleImport = async (file: File) => {
+    setImporting(true);
+    setImportMsg(null);
+    try {
+      const out = await withSudo(
+        (tk) => api.backup.upload(file, tk),
+        askPassword,
+        sudoTokenRef.current,
+      );
+      if (!out) {
+        // 用户取消密码框
+        setImporting(false);
+        return;
+      }
+      sudoTokenRef.current = out.sudoToken;
+      setImportMsg({
+        type: "ok",
+        text: t("dataManager.backup.importSuccess", {
+          filename: out.result.filename,
+          size: fmtBytes(out.result.size),
+        }),
+      });
+      reload();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setImportMsg({
+        type: "err",
+        text: t("dataManager.backup.importFailed", { error: msg }),
+      });
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -1738,6 +1871,13 @@ function BackupSection() {
           </div>
         )}
 
+        {importMsg && (
+          <div className={`text-xs flex items-start gap-1 ${importMsg.type === "ok" ? "text-green-600" : "text-red-500"}`}>
+            {importMsg.type === "ok" ? <CheckCircle size={12} className="mt-0.5" /> : <AlertCircle size={12} className="mt-0.5" />}
+            <span>{importMsg.text}</span>
+          </div>
+        )}
+
         {/* ===== 立即备份按钮 =====
             布局取舍：
               - 之前用 grid-cols-3 等宽，导致中文最长的"立即备份（仅数据库）"被强制换行，
@@ -1798,6 +1938,56 @@ function BackupSection() {
           </button>
         </div>
 
+        {/* ===== 导入外部 .bak / .zip ===== 
+            —————————————————————————————————————————————————————————————————
+            场景：邮件投递回来的附件 / U盘异机拷贝 / 运维从别的实例搬过来。
+            
+            行为：仅上传 + 补 meta.json 入备份列表；不直接覆盖现网数据。用户上传
+            成功后，备份列表里会出现一条 `*-imported-*.bak|zip`，再由用户点击
+            旁边的「恢复」按钮走 dryRun 预览 + sudo 确认的常规路径。
+            
+            刻意与上面的"立即备份"放在同一区块下方而非放进顶部，是因为"导入"是
+            低频操作——默认视觉权重低于"就地创建备份"，避免首次看到的人被多个
+            并列按钮弄乱。 */}
+        <div className="flex items-center gap-2 pt-1">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".bak,.zip,application/octet-stream,application/zip"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              // 清空 input，允许用户连续选同一个文件（默认浏览器会静默吞第二次 change）
+              e.target.value = "";
+              if (f) void handleImport(f);
+            }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing || creating !== null}
+            className={`h-9 flex items-center justify-center px-3 rounded-lg font-medium text-sm whitespace-nowrap border transition-all ${
+              importing || creating !== null
+                ? "border-zinc-200 dark:border-zinc-700 text-zinc-400 cursor-not-allowed"
+                : "border-sky-300 dark:border-sky-600 text-sky-700 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-500/10"
+            }`}
+          >
+            {importing ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-1.5 animate-spin flex-shrink-0" />
+                <span className="truncate">{t("dataManager.backup.importing")}</span>
+              </>
+            ) : (
+              <>
+                <Upload className="w-4 h-4 mr-1.5 flex-shrink-0" />
+                <span className="truncate">{t("dataManager.backup.importBackup")}</span>
+              </>
+            )}
+          </button>
+          <span className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+            {t("dataManager.backup.importHint")}
+          </span>
+        </div>
+
         {/* ===== 备份列表 ===== */}
         <div>
           {backups.length === 0 ? (
@@ -1828,6 +2018,13 @@ function BackupSection() {
                     <Upload size={14} />
                   </button>
                   <button
+                    onClick={() => setSendEmailTarget(b)}
+                    className="p-1.5 rounded hover:bg-sky-50 dark:hover:bg-sky-500/10 text-zinc-400 hover:text-sky-600"
+                    title={t("dataManager.backup.sendEmailTooltip")}
+                  >
+                    <Mail size={14} />
+                  </button>
+                  <button
                     onClick={() => handleDelete(b.filename)}
                     className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-500/10 text-zinc-400 hover:text-red-500"
                     title={t("dataManager.backup.delete")}
@@ -1840,6 +2037,29 @@ function BackupSection() {
           )}
         </div>
       </div>
+
+      {/* ===== 邮件通道（SMTP）配置区：仅管理员 =====
+          放在「备份」分栏内而不是独立 Tab，是因为它的唯一用途就是配合
+          「发送到邮箱」使用——内聚在一起可减少管理员跨页面跳转。
+          折叠默认关闭，保持备份页首屏干净。 */}
+      {isAdmin && (
+        <SmtpConfigSection
+          askPassword={askPassword}
+          sudoTokenRef={sudoTokenRef}
+        />
+      )}
+
+      {/* ===== 发送到邮箱 对话框 ===== */}
+      {sendEmailTarget && (
+        <BackupSendEmailDialog
+          target={sendEmailTarget}
+          defaultTo={currentEmail}
+          onClose={() => setSendEmailTarget(null)}
+          askPassword={askPassword}
+          sudoTokenRef={sudoTokenRef}
+          onSent={reload}
+        />
+      )}
 
       {/* ===== 恢复对话框（高危） ===== */}
       {restoreTarget && (
@@ -2487,5 +2707,845 @@ function BackupDirSection(props: {
         )}
       </div>
     </div>
+  );
+}
+
+// ============================================================================
+// 发送备份到邮箱 —— 对话框
+// ----------------------------------------------------------------------------
+// 为什么要单独对话框：
+//   1. 发邮件触达互联网，必须让管理员先确认收件地址（从默认的"自己邮箱"改成别的
+//      地址是一个有意识的动作，不能一键误发给错误对象）；
+//   2. 附件上限 25 MB 的拦截在后端，UI 层提前做一次大小检查，避免把备份读进内存后
+//      才被后端拒；同时在"正在发送"态把按钮禁用，避免双击重发；
+//   3. 后端成功返回的 SMTP lastResponse（形如 "250 Ok: queued as xxx"）直接 toast，
+//      能让管理员对"邮件是不是真的被服务器收下"有确定感，比单纯 "发送成功" 可信。
+// ============================================================================
+function BackupSendEmailDialog(props: {
+  target: BackupRow;
+  defaultTo: string;
+  onClose: () => void;
+  askPassword: () => Promise<string | null>;
+  sudoTokenRef: React.MutableRefObject<string | null>;
+  /** 发送成功（尤其在 createNew 情况下）后触发，用于让上层刷新备份列表。 */
+  onSent?: () => void;
+}) {
+  const { t } = useTranslation();
+  const { target, defaultTo, onClose, askPassword, sudoTokenRef, onSent } = props;
+  const [to, setTo] = useState(defaultTo);
+  const [note, setNote] = useState("");
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // 附件格式：
+  //   - "current"：直接发当前这条备份（zip 或 .bak，取决于 target.type）
+  //   - "full"   ：请求后端现场新建一份 .zip 全量备份再发送
+  //   - "db-only"：请求后端现场新建一份 .bak 数据库快照再发送
+  // 说明：当用户选了一个"生成"选项，但所选格式恰好等于当前备份格式时，
+  //      前端不做聪明降级——后端照单生成，这样用户能拿到一份"新时间戳"的备份，
+  //      并与邮件投递时间一致，符合"每次发送 = 一次独立归档"的预期。
+  type SendFormat = "current" | "full" | "db-only";
+  const [format, setFormat] = useState<SendFormat>("current");
+
+  // 前端硬拦截上限（与后端 EMAIL_ATTACHMENT_LIMIT 保持一致，25MB）
+  const ATTACH_LIMIT = 25 * 1024 * 1024;
+  // 只有"发送当前备份"时才能预知大小；选"生成新备份"时大小未知，
+  // 超限由后端 413 再拦，不在前端硬拒——避免阻塞合理的小库全量备份。
+  const tooLarge = format === "current" && target.size > ATTACH_LIMIT;
+
+  const emailValid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to.trim());
+
+  const handleSend = async () => {
+    if (!emailValid || sending || tooLarge) return;
+    setSending(true);
+    setMsg(null);
+    try {
+      const out = await withSudo(
+        (tk) =>
+          api.backup.sendEmail(
+            target.filename,
+            to.trim(),
+            tk,
+            note.trim() || undefined,
+            format, // "current" | "full" | "db-only"
+          ),
+        askPassword,
+        sudoTokenRef.current,
+      );
+      if (!out) {
+        // 用户取消 sudo
+        setSending(false);
+        return;
+      }
+      sudoTokenRef.current = out.sudoToken;
+      const sentName = out.result.filename || target.filename;
+      setMsg({
+        type: "ok",
+        text: out.result.generatedNew
+          ? t("dataManager.backup.sendEmailGeneratedSuccess", {
+              filename: sentName,
+              to: to.trim(),
+              resp: out.result.lastResponse || "",
+            })
+          : t("dataManager.backup.sendEmailSuccess", {
+              to: to.trim(),
+              resp: out.result.lastResponse || "",
+            }),
+      });
+      // 生成了新备份时，通知上层刷新列表；发送当前备份时不需要
+      if (out.result.generatedNew && onSent) onSent();
+    } catch (err: any) {
+      setMsg({
+        type: "err",
+        text: t("dataManager.backup.sendEmailFailed", { error: err?.message || "error" }),
+      });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        key="send-email"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[65] flex items-center justify-center p-4"
+      >
+        <div
+          className="absolute inset-0 bg-zinc-900/40 dark:bg-black/60 backdrop-blur-sm"
+          onClick={onClose}
+        />
+        <motion.div
+          initial={{ scale: 0.95, y: 10, opacity: 0 }}
+          animate={{ scale: 1, y: 0, opacity: 1 }}
+          exit={{ scale: 0.95, y: 10, opacity: 0 }}
+          transition={{ type: "spring", duration: 0.3, bounce: 0 }}
+          className="relative w-full max-w-md bg-white dark:bg-zinc-950 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 overflow-hidden"
+        >
+          <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-100 dark:border-zinc-800">
+            <h4 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <Mail className="w-3.5 h-3.5 text-sky-500" />
+              {t("dataManager.backup.sendEmailTitle")}
+            </h4>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              aria-label="close"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="p-5 space-y-3">
+            {/* 备份摘要 */}
+            <div className="text-xs text-zinc-600 dark:text-zinc-400 p-2.5 rounded-lg bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 space-y-0.5">
+              <div className="font-mono truncate" title={target.filename}>{target.filename}</div>
+              <div className="opacity-70">
+                {target.type} · {fmtBytes(target.size)} · {new Date(target.createdAt).toLocaleString()}
+              </div>
+            </div>
+
+            {/* 附件格式选择
+                 - 当前备份：直接发 target 本身；
+                 - full(.zip)：数据库 + 附件 + 字体 + 插件 + 密钥，真正"全家桶"；
+                 - db-only(.bak)：仅 SQLite 快照，附件会丢，但体积最小最适合邮件。
+                "生成"两项会在后端顺手落成一条新备份，相当于"邮件发送 = 一次归档"。*/}
+            <div>
+              <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                {t("dataManager.backup.sendEmailFormat")}
+              </label>
+              <div className="grid grid-cols-1 gap-1.5">
+                {([
+                  {
+                    val: "current" as const,
+                    label: t("dataManager.backup.sendEmailFormatCurrent", {
+                      type: target.type,
+                      size: fmtBytes(target.size),
+                    }),
+                    hint: t("dataManager.backup.sendEmailFormatCurrentHint"),
+                  },
+                  {
+                    val: "full" as const,
+                    label: t("dataManager.backup.sendEmailFormatFull"),
+                    hint: t("dataManager.backup.sendEmailFormatFullHint"),
+                  },
+                  {
+                    val: "db-only" as const,
+                    label: t("dataManager.backup.sendEmailFormatDbOnly"),
+                    hint: t("dataManager.backup.sendEmailFormatDbOnlyHint"),
+                  },
+                ]).map((opt) => (
+                  <label
+                    key={opt.val}
+                    className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition ${
+                      format === opt.val
+                        ? "border-sky-400 dark:border-sky-500/60 bg-sky-50 dark:bg-sky-500/10"
+                        : "border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="send-email-format"
+                      value={opt.val}
+                      checked={format === opt.val}
+                      onChange={() => setFormat(opt.val)}
+                      className="mt-0.5 accent-sky-600"
+                    />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                        {opt.label}
+                      </span>
+                      <span className="block text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">
+                        {opt.hint}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* 超大提示（仅"发送当前备份"时按 target.size 预判） */}
+            {tooLarge && (
+              <div className="flex items-start gap-2 p-2.5 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-700/40 text-red-700 dark:text-red-300 text-xs leading-relaxed">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                <span>{t("dataManager.backup.sendEmailTooLarge")}</span>
+              </div>
+            )}
+
+            {/* 收件人 */}
+            <div>
+              <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                {t("dataManager.backup.sendEmailTo")}
+              </label>
+              <input
+                type="email"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full px-3 py-2 text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-zinc-900 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500"
+              />
+              {!emailValid && to && (
+                <div className="text-[11px] text-red-500 mt-1">
+                  {t("dataManager.backup.sendEmailInvalid")}
+                </div>
+              )}
+            </div>
+
+            {/* 备注（可选） */}
+            <div>
+              <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                {t("dataManager.backup.sendEmailNote")}
+                <span className="opacity-60 ml-1 font-normal">
+                  ({t("dataManager.backup.sendEmailNoteOptional")})
+                </span>
+              </label>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value.slice(0, 500))}
+                rows={2}
+                maxLength={500}
+                placeholder={t("dataManager.backup.sendEmailNotePlaceholder")}
+                className="w-full px-3 py-2 text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-zinc-900 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 resize-none"
+              />
+            </div>
+
+            {/* 结果 */}
+            {msg && (
+              <div
+                className={`flex items-start gap-2 p-2.5 rounded-lg text-xs leading-relaxed ${
+                  msg.type === "ok"
+                    ? "bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-700/40 text-emerald-700 dark:text-emerald-300"
+                    : "bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-700/40 text-red-700 dark:text-red-300"
+                }`}
+              >
+                {msg.type === "ok" ? (
+                  <CheckCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                )}
+                <span className="break-all">{msg.text}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-end gap-2 px-5 py-3 bg-zinc-50 dark:bg-zinc-900/40 border-t border-zinc-100 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 text-xs rounded-lg text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+            >
+              {t("common.close") || "关闭"}
+            </button>
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={!emailValid || sending || tooLarge}
+              className="px-3.5 py-1.5 text-xs rounded-lg bg-sky-600 hover:bg-sky-700 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-1.5"
+            >
+              {sending ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Send className="w-3.5 h-3.5" />
+              )}
+              {t("dataManager.backup.sendEmailBtn")}
+            </button>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
+// ============================================================================
+// SMTP 常见邮箱速查 / 教程入口（管理员）
+// ----------------------------------------------------------------------------
+// 为什么内置这块：
+//   - docs/backup-email-smtp.md 是完整文档，但"部署在内网 / 断网运维"的管理员
+//     点不到 GitHub；把最关键的速查表（主机/端口/TLS/密码来源）内联到前端，
+//     保证**不联网也能配通**常见的 QQ/163/Gmail/Outlook；
+//   - 同时给一个"查看完整教程"的外链（GitHub docs），能联网的用户一键跳走看
+//     详细点击路径、授权码生成步骤、故障排查；
+//   - 刻意做成默认折叠，避免老手每次看到一长串说明。
+// ============================================================================
+function SmtpProviderGuide() {
+  const { t, i18n } = useTranslation();
+  const [open, setOpen] = useState(false);
+
+  // 速查表按"中文环境优先本地邮箱，英文环境优先国际邮箱"的顺序排列，
+  // 让第一眼看到的就是当前用户最可能用的那家。
+  const zhFirst = i18n.language?.toLowerCase().startsWith("zh");
+  type Row = {
+    name: string;
+    host: string;
+    port: string;
+    tls: "on" | "off" | "465on-587off";
+    passNote: string; // 密码来源的一句话说明，已翻译
+  };
+  const cn: Row[] = [
+    { name: "QQ", host: "smtp.qq.com", port: "465", tls: "on", passNote: t("dataManager.smtp.guide.passAuthCodeQQ") },
+    { name: "163", host: "smtp.163.com", port: "465", tls: "on", passNote: t("dataManager.smtp.guide.passAuthCode163") },
+    { name: "126", host: "smtp.126.com", port: "465", tls: "on", passNote: t("dataManager.smtp.guide.passAuthCode163") },
+    { name: "exmail", host: "smtp.exmail.qq.com", port: "465", tls: "on", passNote: t("dataManager.smtp.guide.passClientPass") },
+  ];
+  const intl: Row[] = [
+    { name: "Gmail", host: "smtp.gmail.com", port: "465 / 587", tls: "465on-587off", passNote: t("dataManager.smtp.guide.passAppPassword") },
+    { name: "Outlook", host: "smtp.office365.com", port: "587", tls: "off", passNote: t("dataManager.smtp.guide.passAppPassword") },
+    { name: "Yahoo", host: "smtp.mail.yahoo.com", port: "465", tls: "on", passNote: t("dataManager.smtp.guide.passAppPassword") },
+  ];
+  const rows: Row[] = zhFirst ? [...cn, ...intl] : [...intl, ...cn];
+
+  const tlsLabel = (v: Row["tls"]) =>
+    v === "on"
+      ? t("dataManager.smtp.guide.tlsOn")
+      : v === "off"
+        ? t("dataManager.smtp.guide.tlsOff")
+        : t("dataManager.smtp.guide.tlsDepends");
+
+  const docUrl = "https://github.com/cropflre/nowen-note/blob/main/docs/backup-email-smtp.md";
+
+  return (
+    <div className="rounded-lg border border-sky-200/70 dark:border-sky-500/30 bg-sky-50/60 dark:bg-sky-500/5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left"
+      >
+        {open ? (
+          <ChevronDown size={14} className="text-sky-600 dark:text-sky-400" />
+        ) : (
+          <ChevronRight size={14} className="text-sky-600 dark:text-sky-400" />
+        )}
+        <BookOpen size={14} className="text-sky-600 dark:text-sky-400" />
+        <span className="text-xs font-medium text-sky-800 dark:text-sky-200">
+          {t("dataManager.smtp.guide.title")}
+        </span>
+        <span className="ml-auto text-[11px] text-sky-700/70 dark:text-sky-300/70">
+          {t("dataManager.smtp.guide.subtitle")}
+        </span>
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 space-y-2.5">
+          {/* 顶部简述：先告诉用户"必须用授权码 / App Password" */}
+          <p className="text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
+            {t("dataManager.smtp.guide.intro")}
+          </p>
+
+          {/* 速查表 */}
+          <div className="overflow-x-auto rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/60">
+            <table className="w-full text-[11px]">
+              <thead className="bg-zinc-50 dark:bg-zinc-800/60 text-zinc-600 dark:text-zinc-400">
+                <tr>
+                  <th className="px-2 py-1.5 text-left font-medium">{t("dataManager.smtp.guide.colProvider")}</th>
+                  <th className="px-2 py-1.5 text-left font-medium">{t("dataManager.smtp.guide.colHost")}</th>
+                  <th className="px-2 py-1.5 text-left font-medium">{t("dataManager.smtp.guide.colPort")}</th>
+                  <th className="px-2 py-1.5 text-left font-medium">{t("dataManager.smtp.guide.colTls")}</th>
+                  <th className="px-2 py-1.5 text-left font-medium">{t("dataManager.smtp.guide.colPass")}</th>
+                </tr>
+              </thead>
+              <tbody className="text-zinc-700 dark:text-zinc-300">
+                {rows.map((r) => (
+                  <tr key={r.name} className="border-t border-zinc-100 dark:border-zinc-800">
+                    <td className="px-2 py-1.5 font-medium">{r.name}</td>
+                    <td className="px-2 py-1.5 font-mono">{r.host}</td>
+                    <td className="px-2 py-1.5 font-mono">{r.port}</td>
+                    <td className="px-2 py-1.5">{tlsLabel(r.tls)}</td>
+                    <td className="px-2 py-1.5">{r.passNote}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 关键提醒 */}
+          <ul className="text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400 list-disc pl-4 space-y-0.5">
+            <li>{t("dataManager.smtp.guide.tipAuthCode")}</li>
+            <li>{t("dataManager.smtp.guide.tipFromEqLogin")}</li>
+            <li>{t("dataManager.smtp.guide.tipPortTls")}</li>
+            <li>{t("dataManager.smtp.guide.tipAttachmentLimit")}</li>
+          </ul>
+
+          {/* 外链：完整教程（需外网访问 GitHub） */}
+          <a
+            href={docUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-[11px] text-sky-700 dark:text-sky-300 hover:underline"
+          >
+            <ExternalLink size={12} />
+            {t("dataManager.smtp.guide.fullDocLink")}
+          </a>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// SMTP 邮件通道配置区（管理员）
+// ----------------------------------------------------------------------------
+// 设计要点：
+//   - 放在 BackupSection 内部，而不是另开一个 Tab 或独立页面 —— 它的存在仅服务于
+//     "备份发送到邮箱"，逻辑上和备份同域；
+//   - 默认折叠（由内部 expanded 控制），不干扰备份主流程；
+//   - 密码字段走"占位符模式"：hasPassword=true 时 input 显示 "••••••••"，用户不填
+//     就代表不修改，避免"编辑其它字段"意外清空密码的陷阱；
+//   - 保存成功后允许直接点"发送测试邮件"验证，所有操作都要 sudoToken。
+// ============================================================================
+function SmtpConfigSection(props: {
+  askPassword: () => Promise<string | null>;
+  sudoTokenRef: React.MutableRefObject<string | null>;
+}) {
+  const { t } = useTranslation();
+  const { askPassword, sudoTokenRef } = props;
+
+  const [expanded, setExpanded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  // 服务端回的"只读视图"：永远不含明文密码，只有 hasPassword 标记
+  const [hasPassword, setHasPassword] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+
+  // 表单字段（password 为空串意味着"不改动密码"）
+  const [enabled, setEnabled] = useState(false);
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState<number>(465);
+  const [secure, setSecure] = useState(true);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState(""); // 空串 = 不动旧密码；用户主动输入才覆盖
+  const [showPwd, setShowPwd] = useState(false);
+  const [fromName, setFromName] = useState("");
+  const [fromEmail, setFromEmail] = useState("");
+
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // 测试邮件
+  const [testTo, setTestTo] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testMsg, setTestMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  const loadConfig = useCallback(async () => {
+    setLoading(true);
+    try {
+      const cfg = await api.email.getSmtp();
+      setEnabled(cfg.enabled);
+      setHost(cfg.host);
+      setPort(cfg.port);
+      setSecure(cfg.secure);
+      setUsername(cfg.username);
+      setFromName(cfg.fromName);
+      setFromEmail(cfg.fromEmail);
+      setHasPassword(cfg.hasPassword);
+      setUpdatedAt(cfg.updatedAt);
+      setLoaded(true);
+    } catch (err: any) {
+      setSaveMsg({ type: "err", text: err?.message || "load failed" });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // 首次展开才拉取配置，避免没必要的 GET
+  useEffect(() => {
+    if (expanded && !loaded) loadConfig();
+  }, [expanded, loaded, loadConfig]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const out = await withSudo(
+        (tk) =>
+          api.email.putSmtp(
+            {
+              enabled,
+              host: host.trim(),
+              port: Number(port) || 465,
+              secure,
+              username: username.trim(),
+              // 空串代表"不动旧密码"；非空才传新值
+              password: password ? password : undefined,
+              fromName: fromName.trim(),
+              fromEmail: fromEmail.trim(),
+            },
+            tk,
+          ),
+        askPassword,
+        sudoTokenRef.current,
+      );
+      if (!out) {
+        setSaving(false);
+        return;
+      }
+      sudoTokenRef.current = out.sudoToken;
+      const cfg = out.result;
+      setHasPassword(cfg.hasPassword);
+      setUpdatedAt(cfg.updatedAt);
+      setPassword(""); // 保存后清空本地密码输入框，避免残留
+      setSaveMsg({ type: "ok", text: t("dataManager.smtp.saveSuccess") });
+    } catch (err: any) {
+      setSaveMsg({
+        type: "err",
+        text: t("dataManager.smtp.saveFailed", { error: err?.message || "error" }),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    const to = testTo.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
+      setTestMsg({ type: "err", text: t("dataManager.backup.sendEmailInvalid") });
+      return;
+    }
+    setTesting(true);
+    setTestMsg(null);
+    try {
+      const out = await withSudo(
+        (tk) => api.email.testSmtp(to, tk),
+        askPassword,
+        sudoTokenRef.current,
+      );
+      if (!out) {
+        setTesting(false);
+        return;
+      }
+      sudoTokenRef.current = out.sudoToken;
+      if (out.result.success) {
+        setTestMsg({
+          type: "ok",
+          text: t("dataManager.smtp.testSuccess", {
+            to,
+            resp: out.result.lastResponse || "",
+          }),
+        });
+      } else {
+        setTestMsg({
+          type: "err",
+          text: out.result.error || t("dataManager.smtp.testFailed", { error: "error" }),
+        });
+      }
+    } catch (err: any) {
+      setTestMsg({
+        type: "err",
+        text: t("dataManager.smtp.testFailed", { error: err?.message || "error" }),
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-800/30 hover:bg-zinc-100 dark:hover:bg-zinc-800/60 transition"
+      >
+        {expanded ? (
+          <ChevronDown size={14} className="text-zinc-500" />
+        ) : (
+          <ChevronRight size={14} className="text-zinc-500" />
+        )}
+        <SettingsIcon size={14} className="text-sky-500" />
+        <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+          {t("dataManager.smtp.title")}
+        </span>
+        <span className="ml-auto flex items-center gap-2">
+          {loaded && (
+            <span
+              className={`text-[11px] px-1.5 py-0.5 rounded ${
+                enabled
+                  ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                  : "bg-zinc-200 dark:bg-zinc-700/50 text-zinc-600 dark:text-zinc-400"
+              }`}
+            >
+              {enabled ? t("dataManager.smtp.enabled") : t("dataManager.smtp.disabled")}
+            </span>
+          )}
+          {updatedAt && (
+            <span className="text-[11px] text-zinc-400">
+              {new Date(updatedAt).toLocaleString()}
+            </span>
+          )}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="mt-2 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/40 space-y-3">
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+            {t("dataManager.smtp.description")}
+          </p>
+
+          {/* 常见邮箱 SMTP 配置教程入口
+              ——————————————————————————————————————————————
+              离线/内网环境：展开就能看到 QQ/163/Gmail/Outlook 的速查表与授权码要点，
+              无需联网也够用；有外网时还给一个指向 docs/backup-email-smtp.md 的
+              "完整教程"外链。刻意放在 description 下方、启用开关之上，
+              原则是"先教会，再让你配"，降低首次配置时的挫败感。 */}
+          <SmtpProviderGuide />
+
+
+          {loading && !loaded ? (
+            <div className="flex items-center gap-2 text-xs text-zinc-500 py-4 justify-center">
+              <Loader2 size={14} className="animate-spin" />
+              {t("common.loading") || "加载中…"}
+            </div>
+          ) : (
+            <>
+              {/* 启用开关 */}
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(e) => setEnabled(e.target.checked)}
+                  className="w-4 h-4 accent-sky-600"
+                />
+                <span className="text-zinc-700 dark:text-zinc-300">
+                  {t("dataManager.smtp.enable")}
+                </span>
+              </label>
+
+              {/* host / port / secure */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    {t("dataManager.smtp.host")}
+                  </label>
+                  <input
+                    type="text"
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    placeholder="smtp.example.com"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-zinc-900 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    {t("dataManager.smtp.port")}
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={port}
+                    onChange={(e) => setPort(Number(e.target.value) || 465)}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-zinc-900 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500"
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={secure}
+                  onChange={(e) => setSecure(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-sky-600"
+                />
+                <span>{t("dataManager.smtp.secure")}</span>
+              </label>
+
+              {/* 账号 / 密码 */}
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                  {t("dataManager.smtp.username")}
+                </label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-zinc-900 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                  {t("dataManager.smtp.password")}
+                  {hasPassword && (
+                    <span className="ml-2 text-[11px] text-emerald-600 dark:text-emerald-400 font-normal">
+                      {t("dataManager.smtp.passwordSet")}
+                    </span>
+                  )}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPwd ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={hasPassword ? "••••••••" : t("dataManager.smtp.passwordPlaceholder") || ""}
+                    className="w-full px-3 py-2 pr-9 text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-zinc-900 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPwd((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                    tabIndex={-1}
+                  >
+                    {showPwd ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+                <div className="text-[11px] text-zinc-400 mt-1">
+                  {t("dataManager.smtp.passwordHint")}
+                </div>
+              </div>
+
+              {/* From */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    {t("dataManager.smtp.fromName")}
+                  </label>
+                  <input
+                    type="text"
+                    value={fromName}
+                    onChange={(e) => setFromName(e.target.value)}
+                    placeholder="nowen-note"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-zinc-900 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    {t("dataManager.smtp.fromEmail")}
+                  </label>
+                  <input
+                    type="email"
+                    value={fromEmail}
+                    onChange={(e) => setFromEmail(e.target.value)}
+                    placeholder="no-reply@example.com"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-zinc-900 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500"
+                  />
+                </div>
+              </div>
+
+              {/* Save 结果 */}
+              {saveMsg && (
+                <div
+                  className={`flex items-start gap-2 p-2.5 rounded-lg text-xs leading-relaxed ${
+                    saveMsg.type === "ok"
+                      ? "bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-700/40 text-emerald-700 dark:text-emerald-300"
+                      : "bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-700/40 text-red-700 dark:text-red-300"
+                  }`}
+                >
+                  {saveMsg.type === "ok" ? (
+                    <CheckCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  ) : (
+                    <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  )}
+                  <span className="break-all">{saveMsg.text}</span>
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="px-3.5 py-1.5 text-xs rounded-lg bg-sky-600 hover:bg-sky-700 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-1.5"
+                >
+                  {saving ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Save className="w-3.5 h-3.5" />
+                  )}
+                  {t("dataManager.smtp.save")}
+                </button>
+              </div>
+
+              {/* ===== 发送测试邮件 ===== */}
+              <div className="pt-3 mt-1 border-t border-dashed border-zinc-200 dark:border-zinc-800 space-y-2">
+                <div className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                  {t("dataManager.smtp.testTitle")}
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="email"
+                    value={testTo}
+                    onChange={(e) => setTestTo(e.target.value)}
+                    placeholder="test@example.com"
+                    className="flex-1 px-3 py-2 text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent text-zinc-900 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTest}
+                    disabled={testing || !testTo}
+                    className="px-3 py-2 text-xs rounded-lg border border-sky-300 dark:border-sky-700/50 text-sky-700 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-500/10 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-1.5 justify-center"
+                  >
+                    {testing ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5" />
+                    )}
+                    {t("dataManager.smtp.testSend")}
+                  </button>
+                </div>
+                {testMsg && (
+                  <div
+                    className={`flex items-start gap-2 p-2.5 rounded-lg text-xs leading-relaxed ${
+                      testMsg.type === "ok"
+                        ? "bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-700/40 text-emerald-700 dark:text-emerald-300"
+                        : "bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-700/40 text-red-700 dark:text-red-300"
+                    }`}
+                  >
+                    {testMsg.type === "ok" ? (
+                      <CheckCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                    )}
+                    <span className="break-all">{testMsg.text}</span>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </section>
   );
 }

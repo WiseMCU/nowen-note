@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { api, resolveAttachmentUrl } from "@/lib/api";
 import { ShareInfo, SharedNoteContent, ShareComment, Note } from "@/types";
 import { cn } from "@/lib/utils";
+import { toast } from "@/lib/toast";
 import { common, createLowlight } from "lowlight";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -355,9 +356,40 @@ export default function SharedNoteView({ shareToken }: SharedNoteViewProps) {
   }, [content?.noteId, shareToken, content?.permission, content?.isLocked]);
 
 
-  // 分享页内的复制代码按钮事件委托
+  // 分享页内的复制代码按钮事件委托，以及 mailto/tel 链接拦截
   const handleSharedContentClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
+
+    // ---- 1. 拦截 mailto: / tel: / sms: 等会唤起系统客户端的链接 ----
+    // 笔记里常会出现邮箱地址（作者信息、联系方式等），autolink 后变成
+    // <a href="mailto:xxx">；用户在阅读时若误点，会直接唤起邮件客户端，
+    // 非常打断体验。改为阻止默认行为，把地址写入剪贴板并 toast 提示。
+    const anchor = target.closest("a") as HTMLAnchorElement | null;
+    if (anchor) {
+      const href = anchor.getAttribute("href") || "";
+      const lower = href.toLowerCase();
+      if (lower.startsWith("mailto:") || lower.startsWith("tel:") || lower.startsWith("sms:")) {
+        e.preventDefault();
+        // 去掉协议头展示更友好的明文
+        const plain = href.replace(/^(mailto:|tel:|sms:)/i, "").split("?")[0];
+        const label = lower.startsWith("mailto:") ? "邮箱" : lower.startsWith("tel:") ? "电话" : "号码";
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(plain).then(
+              () => toast.success(`已复制${label}：${plain}`),
+              () => toast.info(`${label}：${plain}`),
+            );
+          } else {
+            toast.info(`${label}：${plain}`);
+          }
+        } catch {
+          toast.info(`${label}：${plain}`);
+        }
+        return;
+      }
+    }
+
+    // ---- 2. 代码块复制按钮 ----
     const btn = target.closest("[data-copy-code]") as HTMLElement | null;
     if (!btn) return;
     e.preventDefault();

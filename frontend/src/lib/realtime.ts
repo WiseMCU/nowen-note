@@ -26,6 +26,13 @@ class RealtimeClient {
   private subscribedRooms = new Set<string>();
   private pendingSubs = new Set<string>();
   private connectionId: string | null = null;
+  /**
+   * 服务端在 "connected" 首帧里告知的当前用户 userId。
+   * 给 useRealtimeNote 之类的消费方提供"零等待"的 selfUserId——避免走 /api/me
+   * 异步拉取的窗口期内把自己的 presence / note:updated 也当成别人处理，
+   * 导致"我在编辑时出现 XX 正在编辑 / XX 更新了笔记" 的误提示。
+   */
+  private selfUserId: string | null = null;
   private reconnectTimer: number | null = null;
   private heartbeatTimer: number | null = null;
   private reconnectAttempts = 0;
@@ -97,9 +104,18 @@ class RealtimeClient {
           return;
         }
         if (!msg || typeof msg !== "object") return;
-        // connected 是第一个消息，保存 connectionId
+        // connected 是第一个消息，保存 connectionId 与 userId
         if (msg.type === "connected" && typeof msg.connectionId === "string") {
           this.connectionId = msg.connectionId;
+          if (typeof msg.userId === "string" && msg.userId) {
+            this.selfUserId = msg.userId;
+            // 同步写入 localStorage，给依赖 localStorage 同步读的初始化逻辑用
+            // （例如 EditorPane 的 selfUser 初始值、useRealtimeNote 的 SELF_USERID_CACHE_KEY）
+            try { localStorage.setItem("nowen-self-userid", msg.userId); } catch {}
+            if (typeof msg.username === "string" && msg.username) {
+              try { localStorage.setItem("nowen-self-username", msg.username); } catch {}
+            }
+          }
         }
         // 服务器强制踢下线（账号被禁用/删除、密码被重置、会话被吊销）
         // 立即清本地 token 并刷新；emit 出去以便业务层可选择展示 toast。
@@ -197,6 +213,20 @@ class RealtimeClient {
 
   getConnectionId(): string | null {
     return this.connectionId;
+  }
+
+  /**
+   * 当前已连接会话的用户 id。
+   * 来源优先级：WebSocket "connected" 帧 → localStorage 缓存。
+   * 若 WS 尚未建立且无本地缓存，返回 null（调用方需做 null 兜底）。
+   */
+  getSelfUserId(): string | null {
+    if (this.selfUserId) return this.selfUserId;
+    try {
+      const cached = localStorage.getItem("nowen-self-userid");
+      if (cached) return cached;
+    } catch {}
+    return null;
   }
 
   /** 订阅房间：note:<id> 或 workspace:<id> */

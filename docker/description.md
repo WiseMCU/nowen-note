@@ -12,8 +12,11 @@
 - AI 智能助手：通义千问 / OpenAI / Gemini / DeepSeek / 豆包 / Ollama
 - 实时协作编辑（WebSocket + Y.js CRDT）
 - 全文检索、笔记分享、版本历史、任务清单、思维导图
+- 文件管理：上传/下载/删除/分类/搜索/预览/反向引用跳转
 - 附件上传、自定义字体、多工作空间、日记、快速备忘
-- 数据导入：小米云 / Oppo 云 / iCloud / Markdown / HTML / Word
+- 数据导入：小米云 / Oppo 云 / iCloud / Markdown / HTML / Word / 有道笔记
+- 数据导出：Markdown / PDF / SVG / ZIP 备份
+- 备份一键发送邮箱（QQ/163/Gmail/Outlook SMTP）
 
 ## 快速部署
 
@@ -49,8 +52,39 @@ docker run -d --name nowen-note --restart unless-stopped \
 | `JWT_SECRET` | 自动生成并持久化 | JWT 签名密钥 |
 | `OLLAMA_URL` | （空） | Ollama 服务地址 |
 | `DISABLE_MDNS` | （空） | 设为 `1` 禁用局域网发现 |
+| `NOWEN_RESET_PASSWORD` | （空） | 设置后重启容器将管理员密码重置为该值 |
+| `SMTP_HOST` | （空） | SMTP 服务器地址（备份邮件发送） |
+| `SMTP_PORT` | `465` | SMTP 端口 |
+| `SMTP_USER` | （空） | SMTP 登录用户名 |
+| `SMTP_PASS` | （空） | SMTP 登录密码 |
+| `SMTP_FROM` | （空） | 发件人邮箱地址 |
 
 ## 更新日志
+
+### v1.0.26
+
+- 新增文件管理模块：上传/下载/删除/分类/搜索/预览/反向引用跳转
+- 备份一键发送邮箱（支持 QQ/163/Gmail/Outlook SMTP 配置）
+- 支持导入外部 .bak/.zip 备份到备份仓库
+- 单笔记导出 PDF / SVG
+- 标签右键/长按切换颜色（TagColorPopover 浮层）
+- 数据管理引入二级 Tab 分栏重构
+- 编辑器修复：图片序号不再顺延、邮箱链接不误唤起邮件客户端
+- 修复实时协作中本人编辑时误提示"XX 正在编辑"
+- 导出空段落往返修复：导出 .md 后重新导入不再丢失空白行
+- 笔记列表移除切换动画，消除多笔记切换时的向上冲效果
+- 编辑器默认字体改为等宽字体（可在设置→外观中切换）
+- 笔记本右键菜单新增导入 Markdown
+- NoteList 空笔记本和日历旁新增导入笔记快捷按钮
+- 融合上游 v1.0.26 全部更新
+
+### v1.0.25
+
+- 锁定笔记自动显示复制按钮（DOM splitText 精准定位 + 去重）
+- 侧边栏重构：笔记本上移、导航/标签折叠、主题切换按钮
+- AI 测试连接改为 toast 通知
+- frontmatter 收尾 --- 补全 + CRLF 兼容
+- Docker 密码重置仅生效一次（防重复标记）
 
 ### v1.0.24
 

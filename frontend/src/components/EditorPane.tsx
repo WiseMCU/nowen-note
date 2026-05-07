@@ -424,28 +424,13 @@ export default function EditorPane() {
   /** 远程删除横幅 */
   const [remoteDelete, setRemoteDelete] = useState<{ actorUserId?: string; trashed?: boolean } | null>(null);
 
-  const { presenceUsers, isConnected, setEditing: rtSetEditing } = useRealtimeNote({
-    noteId: activeNote?.id ?? null,
-    onRemoteUpdate: (msg) => {
-      // 只对当前激活笔记生效；注意闭包里用 activeNoteRef 拿最新值
-      const cur = activeNoteRef.current;
-      if (!cur || cur.id !== msg.noteId) return;
-      // 若我方 version 已经 >= 远程版本（自己刚保存过但广播延迟到达），忽略
-      if (cur.version >= msg.version) return;
-      // Phase 3: CRDT 托管的笔记不需要"请重新加载"横幅，因为 yCollab 会自动合并
-      if (collabYDoc) return;
-      setRemoteUpdate({ actorUserId: msg.actorUserId, version: msg.version });
-    },
-    onRemoteDelete: (msg) => {
-      const cur = activeNoteRef.current;
-      if (!cur || cur.id !== msg.noteId) return;
-      setRemoteDelete({ actorUserId: msg.actorUserId, trashed: msg.trashed });
-    },
-  });
-
   // ---------------------------------------------------------------------------
-  // Phase 3: Y.js CRDT 协同
+  // 当前登录用户信息
   // ---------------------------------------------------------------------------
+  // selfUser 同时服务于两处：
+  //   1) useRealtimeNote 的 selfUserId（过滤"自己的"presence / note:updated 回声）
+  //   2) Phase 3 Y.js CRDT 的 awareness（显示本人名字与颜色）
+  // 因此必须在 useRealtimeNote 之前声明，避免暂时性死区（TDZ）报错。
   /** 当前登录用户信息，用于 awareness 显示本人名字与颜色 */
   const [selfUser, setSelfUser] = useState<{ userId: string; username: string } | null>(() => {
     try {
@@ -470,6 +455,33 @@ export default function EditorPane() {
       .catch(() => { /* 未登录/网络失败静默 */ });
     return () => { cancelled = true; };
   }, [selfUser]);
+
+  const { presenceUsers, isConnected, setEditing: rtSetEditing } = useRealtimeNote({
+    noteId: activeNote?.id ?? null,
+    // 显式传入 selfUserId：EditorPane 里已有 selfUser（localStorage 缓存 + /api/me），
+    // 直接传下去能消除 hook 内部"selfUserId 为 null 窗口期"导致的误提示
+    // （自己编辑时弹 "XX 正在编辑 / XX 更新了笔记"）。
+    selfUserId: selfUser?.userId ?? null,
+    onRemoteUpdate: (msg) => {
+      // 只对当前激活笔记生效；注意闭包里用 activeNoteRef 拿最新值
+      const cur = activeNoteRef.current;
+      if (!cur || cur.id !== msg.noteId) return;
+      // 若我方 version 已经 >= 远程版本（自己刚保存过但广播延迟到达），忽略
+      if (cur.version >= msg.version) return;
+      // Phase 3: CRDT 托管的笔记不需要"请重新加载"横幅，因为 yCollab 会自动合并
+      if (collabYDoc) return;
+      setRemoteUpdate({ actorUserId: msg.actorUserId, version: msg.version });
+    },
+    onRemoteDelete: (msg) => {
+      const cur = activeNoteRef.current;
+      if (!cur || cur.id !== msg.noteId) return;
+      setRemoteDelete({ actorUserId: msg.actorUserId, trashed: msg.trashed });
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 3: Y.js CRDT 协同
+  // ---------------------------------------------------------------------------
 
   /**
    * Phase 3 启用条件：

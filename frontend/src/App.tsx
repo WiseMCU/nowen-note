@@ -9,6 +9,7 @@ import TaskCenter from "@/components/TaskCenter";
 import MindMapCenter from "@/components/MindMapEditor";
 import AIChatPanel from "@/components/AIChatPanel";
 import DiaryCenter from "@/components/DiaryCenter";
+import FileManager from "@/components/FileManager";
 import SharedNoteView from "@/components/SharedNoteView";
 import LoginPage from "@/components/LoginPage";
 import QuickLoginGate from "@/components/QuickLoginGate";
@@ -210,6 +211,7 @@ function AppLayout() {
   const isMindMapView = state.viewMode === "mindmaps";
   const isAIChatView = state.viewMode === "ai-chat";
   const isDiaryView = state.viewMode === "diary";
+  const isFilesView = state.viewMode === "files";
 
   /**
    * Cmd-K 全局搜索面板开关
@@ -392,6 +394,11 @@ function AppLayout() {
         <div className="flex-1 flex flex-col">
           <MobileTopBar />
           <DiaryCenter />
+        </div>
+      ) : isFilesView ? (
+        <div className="flex-1 flex flex-col">
+          <MobileTopBar />
+          <FileManager />
         </div>
       ) : (
         <div className="flex-1 flex relative overflow-hidden">

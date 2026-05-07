@@ -7,8 +7,13 @@
  *   膨胀到几 MB，GET /api/notes/:id 把整个 blob 当 TEXT 拖回前端，前端还得
  *   全量 rerender、生成 FTS、走乐观锁；规模一大体验就崩。
  *
- *   本路由把图片落盘，notes.content 里只保留 `/api/attachments/<id>` 的
- *   URL。attachments 表之前已经建好，只差路由。
+ *   本路由把**任意类型**的附件落盘，notes.content 里只保留
+ *   `/api/attachments/<id>` 的 URL：
+ *     - 图片（image/*）仍然以 <img> 内联渲染；
+ *     - 其它格式（pdf / docx / zip / 音视频 / 任意二进制）以附件链接形式
+ *       插入编辑器，点击下载（后端带 Content-Disposition: attachment）。
+ *   设计目标是「不限制格式」，因此只用一个很小的黑名单拒绝高危可执行类型，
+ *   其它任意 MIME 一律放行。
  *
  * 模块导出：
  *   - attachmentsAuthRouter：挂在 /api/attachments，受 JWT 中间件保护。
@@ -105,7 +110,7 @@ export function deleteAttachmentFilesByNoteIds(noteIds: string[]): number {
   return removed;
 }
 
-// 允许的图片 MIME（与 Tiptap Image 默认支持对齐；svg 允许但要注意 XSS）
+// 允许的图片 MIME（用于「是否作为 <img> 内联展示」的判定；非图片走附件链接）
 const ALLOWED_IMAGE_MIMES = new Set([
   "image/png",
   "image/jpeg",
@@ -128,8 +133,46 @@ export const MIME_TO_EXT: Record<string, string> = {
   "image/vnd.microsoft.icon": "ico",
 };
 
-// 单个附件最大 50MB。反向代理侧还会再设 body limit。
-const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024;
+// 判断附件是否属于「图片」——供 handleDownloadAttachment / 响应 category 字段共用。
+function isImageMime(mime: string): boolean {
+  return ALLOWED_IMAGE_MIMES.has((mime || "").toLowerCase());
+}
+
+/**
+ * 黑名单：出于安全考虑拒绝上传的高危可执行文件类型。
+ *
+ * 背景：需求是「不限制格式」，因此不再维护白名单；但下列 MIME 一旦被浏览器
+ * 识别为类型直接打开/执行仍然有风险。显式黑掉，其它任意类型放行。
+ */
+const BLOCKED_MIMES = new Set([
+  "application/x-msdownload",        // .exe / .dll
+  "application/x-ms-installer",      // .msi
+  "application/x-ms-shortcut",       // .lnk
+  "application/x-bat",               // .bat
+  "application/x-sh",                // .sh
+  "application/hta",                 // .hta
+]);
+
+// 从文件名兜底推断扩展名（file.name 为空或无点时用 MIME 映射，再兜底 "bin"）。
+function pickExt(filename: string | undefined, mime: string): string {
+  const name = filename || "";
+  const idx = name.lastIndexOf(".");
+  if (idx >= 0 && idx < name.length - 1) {
+    const ext = name.slice(idx + 1).toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (ext && ext.length <= 8) return ext;
+  }
+  return MIME_TO_EXT[mime.toLowerCase()] || "bin";
+}
+
+// 为响应头构造一个安全的 filename* 值（RFC 5987），避免中文/空格被截断或破坏。
+function encodeContentDispositionFilename(name: string): string {
+  const safe = (name || "attachment").replace(/[\r\n"]/g, "_");
+  return `attachment; filename*=UTF-8''${encodeURIComponent(safe)}`;
+}
+
+// 单个附件最大 200MB。反向代理侧还会再设 body limit。
+// 之前是 50MB（按"图片"设计），放开到任意格式后上调一档，方便传 PDF / 安装包零件 / 压缩包。
+const MAX_ATTACHMENT_SIZE = 200 * 1024 * 1024;
 
 /**
  * 不需要 JWT 的下载 handler。index.ts 直接把它挂在 JWT 中间件**之前**。
@@ -143,8 +186,8 @@ export function handleDownloadAttachment(c: Context): Response {
   const id = c.req.param("id");
   const db = getDb();
   const row = db
-    .prepare("SELECT id, mimeType, path FROM attachments WHERE id = ?")
-    .get(id) as { id: string; mimeType: string; path: string } | undefined;
+    .prepare("SELECT id, mimeType, path, filename FROM attachments WHERE id = ?")
+    .get(id) as { id: string; mimeType: string; path: string; filename: string } | undefined;
   if (!row) return c.json({ error: "附件不存在" }, 404);
 
   const absPath = path.join(ATTACHMENTS_DIR, row.path);
@@ -153,13 +196,18 @@ export function handleDownloadAttachment(c: Context): Response {
   }
 
   const buffer = fs.readFileSync(absPath);
-  return new Response(buffer, {
-    headers: {
-      "Content-Type": row.mimeType || "application/octet-stream",
-      // uuid 文件名不可变，可以长缓存
-      "Cache-Control": "public, max-age=31536000, immutable",
-    },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": row.mimeType || "application/octet-stream",
+    // uuid 文件名不可变，可以长缓存
+    "Cache-Control": "public, max-age=31536000, immutable",
+  };
+  // 非图片（或显式 ?download=1）：带 Content-Disposition，浏览器点击会按原名下载。
+  // 图片默认 inline，由 <img> 直接渲染。
+  const forceDownload = c.req.query("download") === "1";
+  if (!isImageMime(row.mimeType) || forceDownload) {
+    headers["Content-Disposition"] = encodeContentDispositionFilename(row.filename || "");
+  }
+  return new Response(buffer, { headers });
 }
 
 // ============================================================================
@@ -168,7 +216,7 @@ export function handleDownloadAttachment(c: Context): Response {
 const app = new Hono();
 
 /**
- * 上传附件。
+ * 上传附件（任意格式）。
  *
  * 请求：
  *   POST /api/attachments
@@ -177,8 +225,9 @@ const app = new Hono();
  *     noteId: string  // 必传，用于 ACL 校验 + 外键
  *
  * 响应：
- *   { id, url, mimeType, size, filename }
- *   url = `/api/attachments/<id>`，前端直接写到 <img src>。
+ *   { id, url, mimeType, size, filename, category: "image" | "file" }
+ *   - url = `/api/attachments/<id>`，前端直接写到 <img src> 或 <a href>；
+ *   - category 供前端决定编辑器里插 <img> 还是附件链接。
  *
  * 权限：需要对 noteId 所指笔记拥有 `write` 权限（上传即修改笔记内容）。
  */
@@ -217,14 +266,15 @@ app.post("/", async (c) => {
     );
   }
   const mime = (file.type || "application/octet-stream").toLowerCase();
-  if (!ALLOWED_IMAGE_MIMES.has(mime)) {
-    return c.json({ error: `不支持的 MIME 类型: ${mime}` }, 415);
+  // 不限制格式：只拒绝少数高危可执行文件类型，其它任意 MIME 都放行。
+  if (BLOCKED_MIMES.has(mime)) {
+    return c.json({ error: `出于安全考虑，不支持该类型: ${mime}` }, 415);
   }
 
   // 落盘
   ensureAttachmentsDir();
   const id = uuid();
-  const ext = MIME_TO_EXT[mime] || "bin";
+  const ext = pickExt(file.name, mime);
   const savePath = path.join(ATTACHMENTS_DIR, `${id}.${ext}`);
 
   try {
@@ -254,6 +304,8 @@ app.post("/", async (c) => {
       mimeType: mime,
       size: file.size,
       filename: file.name || `${id}.${ext}`,
+      // category 供前端决定「作为图片 <img> 还是附件链接 <a>」插入编辑器
+      category: isImageMime(mime) ? "image" : "file",
     },
     201,
   );

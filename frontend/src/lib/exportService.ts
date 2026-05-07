@@ -1001,3 +1001,394 @@ export async function exportSingleNote(
     return false;
   }
 }
+
+// ============================================================================
+// 单篇导出：PDF / 图片
+//
+// 思路：
+// - 复用 noteContentToHtml + inlineRemoteImages，把笔记渲染为自包含 HTML（图片
+//   全部 data URI 化，避免新窗口/canvas 跨域受限）。
+// - 把 HTML 注入一份独立的 styled 文档（含基础排版样式：标题、段落、代码块、
+//   表格、任务列表），让导出的产物看起来"像样"，而不是 raw HTML。
+// - PDF：在新窗口里打开该文档并调用 window.print()，由用户系统打印对话框
+//   "另存为 PDF"。这是零依赖跨平台最稳的方案。
+// - 图片：把同一份 HTML 包进 SVG <foreignObject>，draw 到 canvas 后导出 PNG。
+//   要求：所有 <img> 必须是 data: 或 same-origin（已通过 inlineRemoteImages 满足）。
+// ============================================================================
+
+// 公共：把笔记渲染为带样式的完整 HTML 文档字符串
+async function buildPrintableHtml(note: {
+  title: string;
+  content: string;
+  contentText: string;
+  createdAt: string;
+  updatedAt: string;
+}): Promise<string> {
+  let html = noteContentToHtml(note.content, note.contentText);
+  // 把 /api/attachments/<id> 全部 inline 成 data URI（避免新窗口加载失败、canvas tainted）
+  const stats = { ok: 0, failed: 0 };
+  html = await inlineRemoteImages(html, stats);
+
+  const safeTitle = (note.title || i18n.t('common.untitledNote'))
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const created = new Date(note.createdAt).toLocaleString();
+  const updated = new Date(note.updatedAt).toLocaleString();
+
+  // 内嵌一份基础排版样式：保证打印/截图独立于 app 主题
+  const css = `
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #ffffff; color: #1f2328; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      font-size: 14px; line-height: 1.7; }
+    .page { max-width: 760px; margin: 0 auto; padding: 48px 56px; }
+    .title { font-size: 28px; font-weight: 700; line-height: 1.3; margin: 0 0 8px; color: #111; }
+    .meta { font-size: 12px; color: #888; margin-bottom: 28px; }
+    .content { word-wrap: break-word; overflow-wrap: break-word; }
+    .content h1 { font-size: 24px; margin: 28px 0 12px; }
+    .content h2 { font-size: 20px; margin: 24px 0 10px; }
+    .content h3 { font-size: 17px; margin: 20px 0 8px; }
+    .content p { margin: 8px 0; }
+    .content a { color: #0969da; text-decoration: none; }
+    .content code { background: #f6f8fa; padding: 2px 5px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 0.92em; }
+    .content pre { background: #0d1117; color: #e6edf3; padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }
+    .content pre code { background: transparent; color: inherit; padding: 0; border-radius: 0; font-size: inherit; }
+    .content blockquote { border-left: 3px solid #d0d7de; color: #57606a; margin: 8px 0; padding: 4px 14px; background: #f6f8fa; border-radius: 4px; }
+    .content img { max-width: 100%; height: auto; border-radius: 6px; }
+    .content table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+    .content th, .content td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; }
+    .content th { background: #f6f8fa; font-weight: 600; }
+    .content ul, .content ol { padding-left: 1.4em; margin: 8px 0; }
+    .content ul[data-type="taskList"] { list-style: none; padding-left: 0; }
+    .content ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 8px; margin: 4px 0; }
+    .content ul[data-type="taskList"] li > label { user-select: none; }
+    .content ul[data-type="taskList"] li > div { flex: 1; }
+    .content hr { border: 0; border-top: 1px solid #e1e4e8; margin: 20px 0; }
+    .content mark { background: #fff3a3; padding: 0 2px; border-radius: 3px; }
+    @media print {
+      .page { padding: 24px 28px; max-width: 100%; }
+      a { color: inherit; text-decoration: none; }
+      pre, blockquote, table, img { page-break-inside: avoid; }
+    }
+  `;
+
+  return `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>${safeTitle}</title>
+<style>${css}</style>
+</head>
+<body>
+<div class="page">
+  <h1 class="title">${safeTitle}</h1>
+  <div class="meta">${i18n.t('export.metaCreated')}: ${created} · ${i18n.t('export.metaUpdated')}: ${updated}</div>
+  <div class="content">${html || ""}</div>
+</div>
+</body>
+</html>`;
+}
+
+/**
+ * 把可打印 HTML 渲染到离屏 iframe，再用 html2canvas 截图 → jsPDF 按 A4 分页塞图，
+ * 最终产出 PDF Blob。供纯浏览器 / Electron 降级路径使用。
+ *
+ * 注意：
+ *  - html2canvas 和 jsPDF 使用**动态 import**，避免初始包体积因一个低频功能多 300KB+。
+ *  - 所有图片都已在 buildPrintableHtml 里 inline 成 data URI，故 html2canvas 不会
+ *    因跨域 taint 失败。
+ *  - PDF 为 A4 纵向，按图像高度换算分页；每页之间的"图像偏移"通过 `addImage` 的负 y 实现。
+ */
+async function renderPrintableHtmlToPdfBlob(docHtml: string): Promise<Blob> {
+  // 离屏 iframe 承载 HTML；宽度固定 800px，保证 html2canvas 截图后再按 A4 缩放时分辨率足够。
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.left = "-99999px";
+  iframe.style.top = "0";
+  iframe.style.width = "820px";
+  iframe.style.height = "100px";
+  iframe.style.border = "0";
+  iframe.setAttribute("aria-hidden", "true");
+  document.body.appendChild(iframe);
+
+  const cleanup = () => {
+    try { document.body.removeChild(iframe); } catch { /* noop */ }
+  };
+
+  try {
+    const doc = iframe.contentDocument;
+    if (!doc) throw new Error("IFRAME_NO_DOCUMENT");
+    doc.open();
+    doc.write(docHtml);
+    doc.close();
+
+    // 等所有图片加载完成（data: 也是异步 decode）
+    await new Promise<void>((resolve) => {
+      const imgs = Array.from(doc.images);
+      if (imgs.length === 0) { setTimeout(resolve, 50); return; }
+      let pending = imgs.length;
+      const done = () => { if (--pending <= 0) resolve(); };
+      imgs.forEach((img) => {
+        if (img.complete) done();
+        else {
+          img.addEventListener("load", done, { once: true });
+          img.addEventListener("error", done, { once: true });
+        }
+      });
+      // 兜底 5s
+      setTimeout(resolve, 5000);
+    });
+
+    const page = doc.querySelector(".page") as HTMLElement | null;
+    if (!page) throw new Error("PAGE_ELEMENT_NOT_FOUND");
+
+    // 适配 iframe 高度，html2canvas 才会截到完整内容
+    const fullHeight = Math.max(page.scrollHeight, page.offsetHeight, page.clientHeight);
+    iframe.style.height = `${fullHeight + 40}px`;
+
+    // 动态引入，降低首屏 JS 体积
+    const [{ default: html2canvas }, jspdfMod] = await Promise.all([
+      import("html2canvas"),
+      import("jspdf"),
+    ]);
+    const jsPDF = jspdfMod.jsPDF;
+
+    const canvas = await html2canvas(page, {
+      backgroundColor: "#ffffff",
+      scale: 2, // 2x DPI，兼顾清晰度与体积
+      useCORS: true,
+      logging: false,
+      windowWidth: page.scrollWidth,
+      windowHeight: fullHeight,
+    });
+
+    // A4: 210mm × 297mm
+    const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+    const pageWidthMm = pdf.internal.pageSize.getWidth();   // 210
+    const pageHeightMm = pdf.internal.pageSize.getHeight(); // 297
+    // 左右各留 10mm 边距
+    const marginMm = 10;
+    const contentWidthMm = pageWidthMm - marginMm * 2;
+
+    // canvas 宽度映射到 PDF 的 contentWidthMm；对应的 canvas 高度换算为 mm：
+    const canvasWidthPx = canvas.width;
+    const canvasHeightPx = canvas.height;
+    const pxPerMm = canvasWidthPx / contentWidthMm;
+    const imageHeightMm = canvasHeightPx / pxPerMm;
+
+    // 上下各留 10mm 边距；每页可用内容高度
+    const contentHeightMm = pageHeightMm - marginMm * 2;
+
+    // 用单张大图分页：每页 addImage 时，y 偏移 = -(页序 * contentHeightMm)，
+    // 并通过在整页范围之外让 jsPDF 裁剪。最简单稳妥的做法：
+    // 把 canvas 按 contentHeightMm 切片，每页 drawImage 一段到新 canvas 再 addImage。
+    const imgData = canvas.toDataURL("image/jpeg", 0.92);
+
+    if (imageHeightMm <= contentHeightMm) {
+      // 单页即可放下
+      pdf.addImage(imgData, "JPEG", marginMm, marginMm, contentWidthMm, imageHeightMm);
+    } else {
+      // 多页：每页切一块 canvas
+      const sliceHeightPx = Math.floor(contentHeightMm * pxPerMm);
+      let offsetY = 0;
+      let pageIndex = 0;
+      while (offsetY < canvasHeightPx) {
+        const thisSliceHeightPx = Math.min(sliceHeightPx, canvasHeightPx - offsetY);
+
+        const sliceCanvas = document.createElement("canvas");
+        sliceCanvas.width = canvasWidthPx;
+        sliceCanvas.height = thisSliceHeightPx;
+        const ctx = sliceCanvas.getContext("2d");
+        if (!ctx) throw new Error("SLICE_CANVAS_CTX_NULL");
+        // 从原 canvas 拷贝对应区域
+        ctx.drawImage(
+          canvas,
+          0, offsetY, canvasWidthPx, thisSliceHeightPx,
+          0, 0, canvasWidthPx, thisSliceHeightPx
+        );
+        const sliceData = sliceCanvas.toDataURL("image/jpeg", 0.92);
+        const sliceHeightMm = thisSliceHeightPx / pxPerMm;
+
+        if (pageIndex > 0) pdf.addPage();
+        pdf.addImage(sliceData, "JPEG", marginMm, marginMm, contentWidthMm, sliceHeightMm);
+
+        offsetY += thisSliceHeightPx;
+        pageIndex++;
+      }
+    }
+
+    return pdf.output("blob");
+  } finally {
+    cleanup();
+  }
+}
+
+/**
+ * 单篇导出为 PDF。
+ *
+ * 优先级：
+ *   1) Electron 桌面端：走 `window.nowenDesktop.exportNoteToPDF`，
+ *      主进程用离屏 BrowserWindow + webContents.printToPDF **直接保存矢量 PDF**，
+ *      用户只需选保存位置，不会弹系统打印对话框；中文/文字可选/体积小。
+ *   2) 纯浏览器环境：用 html2canvas + jsPDF **直接生成 PDF 并触发下载**——
+ *      把笔记渲染到离屏 iframe，截图后按 A4 分页塞进 PDF。文字为光栅图（不可选），
+ *      但零系统依赖、不弹打印对话框，符合"直接下载 PDF"的体验。
+ *
+ * 返回值：
+ *   { ok: true,  mode: 'desktop' }  — 桌面端已写入文件
+ *   { ok: true,  mode: 'web'     }  — 浏览器端已触发 PDF 下载
+ *   { ok: false, mode: 'canceled' } — 桌面端用户取消保存
+ *   { ok: false, mode: 'error' }   — 失败
+ */
+export type ExportPdfResult =
+  | { ok: true; mode: "desktop"; path?: string }
+  | { ok: true; mode: "web" }
+  | { ok: false; mode: "canceled" }
+  | { ok: false; mode: "error"; error?: string };
+
+export async function exportSingleNoteAsPDF(noteId: string): Promise<ExportPdfResult> {
+  try {
+    const note = await api.getNote(noteId);
+    const docHtml = await buildPrintableHtml(note);
+
+    // —— 优先：Electron 静默导出 ——
+    const desktop = (window as unknown as {
+      nowenDesktop?: {
+        exportNoteToPDF?: (payload: { html: string; suggestedName?: string }) =>
+          Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+      };
+    }).nowenDesktop;
+    if (desktop && typeof desktop.exportNoteToPDF === "function") {
+      const res = await desktop.exportNoteToPDF({
+        html: docHtml,
+        suggestedName: sanitizeFilename(note.title),
+      });
+      if (res?.canceled) return { ok: false, mode: "canceled" };
+      if (res?.ok) return { ok: true, mode: "desktop", path: res.path };
+      // 桌面端偶发失败 → 继续走 Web 生成路径，保证体验不中断
+      console.warn("[exportSingleNoteAsPDF] desktop export failed, fallback to web:", res?.error);
+    }
+
+    // —— Web 直接下载 PDF ——
+    const blob = await renderPrintableHtmlToPdfBlob(docHtml);
+    const filename = `${sanitizeFilename(note.title) || "note"}.pdf`;
+    saveAs(blob, filename);
+    return { ok: true, mode: "web" };
+  } catch (error) {
+    console.error("导出 PDF 失败:", error);
+    return { ok: false, mode: "error", error: String(error) };
+  }
+}
+
+/**
+ * 单篇导出为 PNG 图片：用 SVG <foreignObject> 把 HTML 渲染到 canvas。
+ * - 不依赖第三方库；
+ * - 所有图片需为 data: 或 same-origin（已被 inlineRemoteImages 处理）；
+ * - 输出宽度固定为 800px（适合分享/截图），高度按内容自适应。
+ */
+export async function exportSingleNoteAsImage(noteId: string): Promise<boolean> {
+  try {
+    const note = await api.getNote(noteId);
+    const docHtml = await buildPrintableHtml(note);
+
+    // 1) 通过隐藏 iframe 渲染一遍，拿到真实高度
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.left = "-99999px";
+    iframe.style.top = "0";
+    iframe.style.width = "820px";
+    iframe.style.height = "100px";
+    iframe.style.border = "0";
+    iframe.setAttribute("aria-hidden", "true");
+    document.body.appendChild(iframe);
+
+    const cleanup = () => {
+      try { document.body.removeChild(iframe); } catch { /* noop */ }
+    };
+
+    const doc = iframe.contentDocument;
+    if (!doc) {
+      cleanup();
+      return false;
+    }
+    doc.open();
+    doc.write(docHtml);
+    doc.close();
+
+    // 等图片加载
+    await new Promise<void>((resolve) => {
+      const imgs = Array.from(doc.images);
+      if (imgs.length === 0) { setTimeout(resolve, 50); return; }
+      let pending = imgs.length;
+      const done = () => { if (--pending <= 0) resolve(); };
+      imgs.forEach((img) => {
+        if (img.complete) done();
+        else {
+          img.addEventListener("load", done, { once: true });
+          img.addEventListener("error", done, { once: true });
+        }
+      });
+      // 兜底
+      setTimeout(resolve, 4000);
+    });
+
+    const pageEl = doc.querySelector(".page") as HTMLElement | null;
+    if (!pageEl) { cleanup(); return false; }
+
+    // 读取真实尺寸
+    const rect = pageEl.getBoundingClientRect();
+    const width = Math.max(820, Math.ceil(rect.width));
+    const height = Math.max(100, Math.ceil(pageEl.scrollHeight + 32));
+
+    // 2) 序列化 page 节点为 SVG/foreignObject
+    // 关键点：<foreignObject> 内部必须是合法 XML（XHTML），不能用 HTML5 的 outerHTML（
+    // 会产出 <br>、<img ...> 这种自闭合不规范的字符串，导致 SVG 解析失败，img.onerror 立即触发）。
+    // 所以用 XMLSerializer + 先把节点克隆到一份 XHTML 文档里，保证所有标签合规。
+    const styleEl = doc.querySelector("style");
+    const styleText = styleEl ? styleEl.textContent || "" : "";
+
+    const XHTML_NS = "http://www.w3.org/1999/xhtml";
+    // 创建一份 XHTML 文档作为序列化载体
+    const xhtmlDoc = document.implementation.createDocument(XHTML_NS, "html", null);
+    const xBody = xhtmlDoc.createElementNS(XHTML_NS, "body");
+    xhtmlDoc.documentElement.appendChild(xBody);
+    // 克隆 pageEl 到 xhtml 文档（importNode 会递归转命名空间）
+    const importedPage = xhtmlDoc.importNode(pageEl, true) as Element;
+    xBody.appendChild(importedPage);
+
+    const serializer = new XMLSerializer();
+    const pageXml = serializer.serializeToString(importedPage);
+
+    // style 里的 CSS 可能含 <，要包在 CDATA 里避免 XML 解析报错
+    const safeStyle = `<style xmlns="${XHTML_NS}"><![CDATA[${styleText}]]></style>`;
+
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
+        `<foreignObject width="100%" height="100%">` +
+          `<div xmlns="${XHTML_NS}" style="background:#ffffff;width:${width}px;">` +
+            safeStyle +
+            pageXml +
+          `</div>` +
+        `</foreignObject>` +
+      `</svg>`;
+
+    cleanup();
+
+    // 3) 直接保存为 SVG 文件。
+    // 历史教训：SVG <foreignObject> 绘制到 canvas 在 Chromium 下会把 canvas 标
+    // 脏（出于保守策略，即便所有资源都是 data:），toBlob 抛 SecurityError。
+    // 引入 html2canvas/dom-to-image 等库能解决，但会新增 ~200KB 依赖。
+    // 当前方案：输出矢量 SVG（现代浏览器、看图软件、Office、设计工具均支持），
+    // 用户可再自行转 PNG；同时文件小、可无损缩放。
+    const svgBlob = new Blob(
+      ['<?xml version="1.0" encoding="UTF-8"?>\n', svg],
+      { type: "image/svg+xml;charset=utf-8" }
+    );
+    const safeTitle = sanitizeFilename(note.title);
+    saveAs(svgBlob, `${safeTitle}.svg`);
+    return true;
+  } catch (error) {
+    console.error("导出图片失败:", error);
+    return false;
+  }
+}

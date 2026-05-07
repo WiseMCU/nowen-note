@@ -17,6 +17,7 @@ import settingsRouter from "./routes/settings";
 import fontsRouter from "./routes/fonts";
 import attachmentsRouter, { handleDownloadAttachment } from "./routes/attachments";
 import taskAttachmentsRouter, { handleDownloadTaskAttachment } from "./routes/task-attachments";
+import filesRouter from "./routes/files";
 import micloudRouter from "./routes/micloud";
 import oppoCloudRouter from "./routes/oppocloud";
 import icloudRouter from "./routes/icloud";
@@ -28,6 +29,7 @@ import pluginsRouter from "./routes/plugins";
 import webhooksRouter from "./routes/webhooks";
 import auditRouter from "./routes/audit";
 import backupsRouter from "./routes/backups";
+import emailRouter from "./routes/email";
 import { sharesRouter, sharedRouter } from "./routes/shares";
 import workspacesRouter from "./routes/workspaces";
 import authRouter from "./routes/auth";
@@ -367,6 +369,7 @@ app.route("/api/plugins", pluginsRouter);
 app.route("/api/webhooks", webhooksRouter);
 app.route("/api/audit", auditRouter);
 app.route("/api/backups", backupsRouter);
+app.route("/api/email", emailRouter);
 app.route("/api/shares", sharesRouter);
 app.route("/api/workspaces", workspacesRouter);
 app.route("/api/users", usersRouter);
@@ -376,6 +379,7 @@ app.route("/api/settings", settingsRouter);
 app.route("/api/fonts", fontsRouter);
 app.route("/api/attachments", attachmentsRouter);
 app.route("/api/task-attachments", taskAttachmentsRouter);
+app.route("/api/files", filesRouter);
 
 // 获取当前登录用户信息
 app.get("/api/me", (c) => {

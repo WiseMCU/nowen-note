@@ -136,7 +136,79 @@ export interface SearchResult {
   snippet: string;
 }
 
-export type ViewMode = "notebook" | "favorites" | "trash" | "all" | "search" | "tasks" | "tag" | "mindmaps" | "ai-chat" | "diary";
+export type ViewMode = "notebook" | "favorites" | "trash" | "all" | "search" | "tasks" | "tag" | "mindmaps" | "ai-chat" | "diary" | "files";
+
+// ========== 文件管理（/api/files 聚合视图） ==========
+
+/** 文件分类：按 MIME 粗分，UI 用图标/筛选。 */
+export type FileCategory = "image" | "file";
+
+/** 文件排序键（与后端 resolveOrderBy 白名单一致）。 */
+export type FileSortKey =
+  | "created_desc"
+  | "created_asc"
+  | "name_asc"
+  | "name_desc"
+  | "size_asc"
+  | "size_desc";
+
+/**
+ * 文件管理列表 / 详情共用的基础行。
+ *
+ * - `url` 永远是相对路径 `/api/attachments/<id>`；前端消费时走 resolveAttachmentUrl()
+ *   补 origin，避免把变动端口 / 多域部署写死进持久化数据。
+ * - `primaryNote` 是首次归属的笔记；对"从文件管理直传"的附件，这里指向
+ *   holder note（isArchived=1 的"未归档文件"占位笔记）。
+ */
+export interface FileItem {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+  category: FileCategory;
+  url: string;
+  primaryNote: {
+    id: string;
+    title: string;
+    notebookId: string | null;
+    notebookName: string | null;
+    notebookIcon: string | null;
+    isTrashed: number;
+  } | null;
+}
+
+/** 引用该附件的一条笔记（反向关联）。 */
+export interface FileReference {
+  id: string;
+  title: string;
+  notebookId: string | null;
+  notebookName: string | null;
+  notebookIcon: string | null;
+  isTrashed: number;
+  updatedAt: string;
+  /** 是否为"首次归属"笔记（attachments.noteId 指向的那一条）。 */
+  isPrimary: boolean;
+}
+
+export interface FileDetail extends FileItem {
+  references: FileReference[];
+}
+
+export interface FileListResponse {
+  items: FileItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface FileStats {
+  total: number;
+  totalBytes: number;
+  images: { count: number; bytes: number };
+  files: { count: number; bytes: number };
+  byMime: Array<{ mime: string; count: number; bytes: number }>;
+}
 
 
 

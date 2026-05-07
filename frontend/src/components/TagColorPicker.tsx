@@ -26,8 +26,8 @@ const PRESET_COLORS = [
 interface TagColorPickerProps {
   currentColor: string;
   onColorChange: (color: string) => void;
-  /** 触发器大小 — sidebar 用小圆点，TagInput 用正常大小 */
-  size?: "sm" | "md";
+  /** 触发器大小 — xs=6px（侧边栏 mini）、sm=8px（sidebar 常规/TagInput）、md=12px */
+  size?: "xs" | "sm" | "md";
 }
 
 export default function TagColorPicker({ currentColor, onColorChange, size = "sm" }: TagColorPickerProps) {
@@ -99,7 +99,7 @@ export default function TagColorPicker({ currentColor, onColorChange, size = "sm
     };
   }, [open]);
 
-  const dotSize = size === "sm" ? "w-2 h-2" : "w-3 h-3";
+  const dotSize = size === "xs" ? "w-1.5 h-1.5" : size === "sm" ? "w-2 h-2" : "w-3 h-3";
 
   return (
     <>
@@ -107,7 +107,7 @@ export default function TagColorPicker({ currentColor, onColorChange, size = "sm
       <button
         ref={triggerRef}
         type="button"
-        className={`${dotSize} rounded-full shrink-0 ring-2 ring-transparent hover:ring-accent-primary/40 transition-all cursor-pointer`}
+        className={`${dotSize} rounded-full shrink-0 ring-1 ring-transparent hover:ring-accent-primary/40 transition-all cursor-pointer`}
         style={{ backgroundColor: currentColor }}
         onClick={(e) => {
           e.stopPropagation();

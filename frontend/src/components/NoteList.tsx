@@ -921,6 +921,8 @@ export default function NoteList() {
   const { menu, menuRef, openMenu, closeMenu } = useContextMenu();
   const [moveModal, setMoveModal] = useState<{ noteIds: string[]; noteTitle: string; notebookId: string } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerMode, setPickerMode] = useState<"create" | "import">("create");
+  const pendingImportNotebookRef = useRef<string | null>(null);
   const [dateFilter, setDateFilter] = useState<string | null>(null); // YYYY-MM-DD
   const [showCalendar, setShowCalendar] = useState(false);
   // 排序偏好（持久化到 localStorage，不入 store；用户在不同设备/浏览器下可独立设置）
@@ -946,11 +948,35 @@ export default function NoteList() {
   const importFileInputRef = useRef<HTMLInputElement>(null);
   const { t } = useTranslation();
 
+  const handleImportClick = useCallback(() => {
+    if (state.notebooks.length === 0) {
+      toast.warning(t('common.needNotebookFirst'));
+      return;
+    }
+    let notebookId = state.selectedNotebookId;
+    if (!notebookId) {
+      if (state.notebooks.length === 1) {
+        notebookId = state.notebooks[0].id;
+      } else {
+        setPickerMode("import");
+        setPickerOpen(true);
+        return;
+      }
+    }
+    pendingImportNotebookRef.current = notebookId;
+    importFileInputRef.current?.click();
+  }, [state.notebooks, state.selectedNotebookId, t]);
+
   const handleImportFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || !files.length) return;
-    const notebookId = state.selectedNotebookId;
+    const notebookId = pendingImportNotebookRef.current || state.selectedNotebookId;
+    pendingImportNotebookRef.current = null;
     if (!notebookId) return;
+    await executeImport(files, notebookId);
+  }, [state.selectedNotebookId]);
+
+  const executeImport = useCallback(async (files: FileList, notebookId: string) => {
     const notebook = state.notebooks.find(n => n.id === notebookId);
     try {
       const fileArray = Array.from(files);
@@ -958,7 +984,6 @@ export default function NoteList() {
       const fileInfos = zipFile
         ? await readMarkdownFromZip(zipFile)
         : await readMarkdownFiles(files);
-      e.target.value = "";
       const selected = fileInfos.filter(f => f.selected);
       if (!selected.length) {
         toast.error("未找到可导入的文件（支持 .md / .txt / .html / .zip）");
@@ -971,10 +996,11 @@ export default function NoteList() {
       actions.refreshNotebooks();
       fetchNotesRef.current?.();
     } catch (err: any) {
-      e.target.value = "";
       toast.error(err?.message || "导入失败");
+    } finally {
+      if (importFileInputRef.current) importFileInputRef.current.value = "";
     }
-  }, [state.notebooks, state.selectedNotebookId, actions]);
+  }, [state.notebooks, actions]);
 
   const fetchNotesRef = useRef<() => Promise<void>>(null as any);
 
@@ -1206,6 +1232,7 @@ export default function NoteList() {
         notebookId = state.notebooks[0].id;
       } else {
         // 多个笔记本，弹选择器让用户决定
+        setPickerMode("create");
         setPickerOpen(true);
         return;
       }
@@ -1788,7 +1815,7 @@ export default function NoteList() {
             </button>
           )}
           <button
-            onClick={() => importFileInputRef.current?.click()}
+            onClick={handleImportClick}
             className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
             title={t("dataManager.importNotes")}
           >
@@ -2037,13 +2064,18 @@ export default function NoteList() {
         onClose={() => setMoveModal(null)}
       />
 
-      {/* 新建笔记 - 笔记本选择器 */}
+      {/* 新建笔记 / 导入笔记 - 笔记本选择器 */}
       <NotebookPickerModal
         isOpen={pickerOpen}
         notebooks={state.notebooks}
         onPick={async (nbId) => {
           setPickerOpen(false);
-          await createNoteInNotebook(nbId);
+          if (pickerMode === "import") {
+            pendingImportNotebookRef.current = nbId;
+            importFileInputRef.current?.click();
+          } else {
+            await createNoteInNotebook(nbId);
+          }
         }}
         onClose={() => setPickerOpen(false)}
       />

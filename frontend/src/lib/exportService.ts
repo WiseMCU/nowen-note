@@ -559,29 +559,29 @@ function createTurndown(): TurndownService {
 }
 
 /**
- * Markdown 输出后处理：把多余的连续空行折叠为"至多 1 个空行"。
- *
- * 背景：Tiptap 用 `<p></p>` 表示用户在两段之间多按的回车，Turndown 会把每个
- * 块元素之间塞进 `\n\n`，于是 `<p>a</p><p></p><p>b</p>` 会输出 `a\n\n\n\nb`
- * —— 在 markdown 渲染里就是 2 个空行；导入回 Tiptap 后再次产生 `<p></p>`
- * 空段，往返几次空行越来越多。
- *
- * 本函数把 3 个及以上连续 `\n` 折叠成 2 个 `\n`（=1 个空行），保证段落间
- * 始终是稳定的"恰好 1 个空行"，让"导出 → 导入"格式幂等。
- *
- * 注意：fenced code block (```...```) 内部不应折叠，否则会破坏代码空行；
- * 这里用 split-by-fence 的方式只对围栏外的部分做替换。
+ * 将 TipTap 生成的 HTML 转为 Markdown。
+ * 弃用 Turndown 整体转换（会丢弃空 <p>），改为逐段 DOM 解析：
+ * - 有内容的 <p>：用 Turndown 转换内联格式
+ * - 空 <p>：直接输出 \n\n
  */
-function postProcessMarkdown(md: string): string {
-  if (!md) return md;
-  // 用 ``` 行作为分隔，奇数下标段（在围栏内部）原样保留
-  const parts = md.split(/(^```[^\n]*\n[\s\S]*?^```[ \t]*$)/gm);
-  for (let i = 0; i < parts.length; i++) {
-    if (i % 2 === 1) continue; // 围栏代码块原样保留
-    // 折叠 3+ 个换行为 2 个；同时去掉行尾多余空格
-    parts[i] = parts[i].replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+function htmlToMarkdown(html: string, td: TurndownService): string {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  let md = "";
+  for (const child of Array.from(div.children)) {
+    if (child.tagName === "P") {
+      const text = child.textContent || "";
+      if (text.trim()) {
+        md += td.turndown(child.innerHTML).replace(/\n+$/, "") + "\n\n";
+      } else {
+        md += "\n\n";
+      }
+    } else {
+      // 非 <p> 元素（标题、列表、代码块等）交 Turndown 整体转换
+      md += td.turndown(child.outerHTML).replace(/\n+$/, "") + "\n\n";
+    }
   }
-  return parts.join("");
+  return md;
 }
 
 export type ExportProgress = {
@@ -662,8 +662,7 @@ export async function exportAllNotes(
       }
 
       // 转换为 Markdown
-      const markdown = html ? postProcessMarkdown(td.turndown(html)) : "";
-
+      const markdown = html ? htmlToMarkdown(html, td) : "";
       // 添加 YAML frontmatter
       const frontmatter = [
         "---",
@@ -848,7 +847,7 @@ export async function exportNotebook(
         html = await inlineRemoteImages(html, imgStats);
       }
 
-      const markdown = html ? postProcessMarkdown(td.turndown(html)) : "";
+      const markdown = html ? htmlToMarkdown(html, td) : "";
       const frontmatter = [
         "---",
         `title: "${note.title.replace(/"/g, '\\"')}"`,
@@ -965,7 +964,7 @@ export async function exportSingleNote(
       }
     }
 
-    const markdown = html ? postProcessMarkdown(td.turndown(html)) : "";
+    const markdown = html ? htmlToMarkdown(html, td) : "";
 
     const frontmatter = [
       "---",

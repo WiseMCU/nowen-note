@@ -483,7 +483,7 @@ export async function readMarkdownFromZip(file: File): Promise<ImportFileInfo[]>
 
 // 从 YAML frontmatter 中提取日期信息
 function extractFrontmatterDates(md: string): { createdAt?: string; updatedAt?: string } {
-  const fmMatch = md.match(/^---\n([\s\S]*?)\n---/m);
+  const fmMatch = md.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---/m);
   if (!fmMatch) return {};
 
   const fm = fmMatch[1];
@@ -549,6 +549,14 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
   // 脱壳：整段被 ```markdown ... ``` 包裹时，剥掉外层
   content = unwrapOuterMarkdownFence(content);
 
+  // 将连续空白行还原为 <p>&nbsp;</p>（空段落）。
+  // 导出端用 <br/> 占位，Turndown → `  \n\n\n`，postProcess → `\n\n\n\n`
+  // 即每个空段 = \n\n\n\n。这里检测 \n\n\n\n → 1空段，\n\n\n\n\n\n → 2空段……
+  content = content.replace(/\n{4,}/g, (match) => {
+    const blanks = (match.length / 2) - 1;
+    return "\n\n" + "<!--blank-->".repeat(blanks) + "\n\n";
+  });
+
   // 使用 marked 解析 Markdown → HTML
   // marked 是业界成熟的 CommonMark 兼容解析器，正确处理嵌套围栏代码块、表格、任务列表等
   const renderer = new Renderer();
@@ -573,7 +581,8 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
   marked.use({ renderer, gfm: true, breaks: false });
 
   const html = marked.parse(content) as string;
-  return html;
+  const result = html.replace(/<!--blank-->/g, "<p>&nbsp;</p>");
+  return result;
 }
 
 // 在 imageMap 中查找图片路径对应的 data URI

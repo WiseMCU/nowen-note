@@ -11,7 +11,7 @@ export interface SiteConfig {
 const DEFAULT_CONFIG: SiteConfig = {
   title: "nowen-note",
   favicon: "",
-  editorFontFamily: "",
+  editorFontFamily: "__mono",
 };
 
 // 内置字体选项（不需要上传）

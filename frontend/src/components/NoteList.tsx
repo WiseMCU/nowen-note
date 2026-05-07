@@ -725,9 +725,6 @@ const NoteCard = React.memo(React.forwardRef<HTMLDivElement, {
   return (
     <motion.div
       ref={ref}
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -4 }}
       onClick={onClick}
       onContextMenu={onContextMenu}
       draggable={draggable}
@@ -1882,9 +1879,8 @@ export default function NoteList() {
             noteCardRefs={noteCardRefs}
           />
         ) : (
-        <ScrollArea className="flex-1 min-h-0">
+        <ScrollArea className="flex-1 min-h-0" key={state.selectedNotebookId || state.viewMode}>
         <div className="px-2 pb-2 space-y-1">
-          <AnimatePresence>
             {sortedNotes.map((note) => (
               <NoteCard
                 key={note.id}
@@ -1910,7 +1906,6 @@ export default function NoteList() {
                 onTouchEnd={handleTouchEnd}
               />
             ))}
-          </AnimatePresence>
           {state.notes.length === 0 && !state.isLoading && (
             <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
               <div className="w-16 h-16 rounded-2xl bg-accent-primary/10 flex items-center justify-center mb-4">

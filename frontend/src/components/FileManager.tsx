@@ -47,6 +47,8 @@ import {
   Inbox,
   Copy,
   Check,
+  Clipboard,
+  Eraser,
 } from "lucide-react";
 import { api, resolveAttachmentUrl } from "@/lib/api";
 import { FileItem, FileDetail, FileStats, FileSortKey, FileCategory } from "@/types";
@@ -148,7 +150,7 @@ export default function FileManager() {
   const [searchQuery, setSearchQuery] = useState(""); // debounced
 
   // 视图模式：图片分类默认 grid；文件分类默认 list；"all" 跟随上次选择
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("list");
 
   // 详情抽屉
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -158,6 +160,14 @@ export default function FileManager() {
   // 上传
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [confirmState, setConfirmState] = useState<{ message: string; resolve: (v: boolean) => void } | null>(null);
+
+  const askConfirm = useCallback((message: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      setConfirmState({ message, resolve });
+    });
+  }, []);
 
   // ---- 搜索防抖（300ms，避免每个字都打接口）----
   useEffect(() => {
@@ -242,7 +252,7 @@ export default function FileManager() {
   // ---- 删除 ----
   const handleDelete = useCallback(
     async (id: string) => {
-      if (!window.confirm("确定要删除此文件吗？\n\n删除后，引用该文件的笔记里将显示为破图 / 失效链接。该操作不可撤销。")) {
+      if (!await askConfirm("确定要删除此文件吗？删除后引用该文件的笔记将显示为破图或失效链接，不可撤销。")) {
         return;
       }
       try {
@@ -305,6 +315,78 @@ export default function FileManager() {
     },
     [handleUpload],
   );
+
+  // ---- 清理未引用文件 ----
+  const handleCleanup = useCallback(async () => {
+    if (cleaning) return;
+    if (!await askConfirm("确定要扫描并清理未引用的文件吗？此操作不可撤销。")) return;
+    setCleaning(true);
+    try {
+      // 1. 扫描所有文件，收集 ID 列表
+      const allIds: string[] = [];
+      let scanPage = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const res = await api.files.list({ page: scanPage, pageSize: 200 });
+        allIds.push(...res.items.map((f) => f.id));
+        hasMore = scanPage * 200 < res.total;
+        scanPage++;
+      }
+
+      if (allIds.length === 0) {
+        toast.success("没有文件可清理");
+        return;
+      }
+
+      // 2. 分批获取详情，检查 references 是否为空（真·未被引用）
+      const unreferenced: string[] = [];
+      const BATCH = 20;
+      for (let i = 0; i < allIds.length; i += BATCH) {
+        const batch = allIds.slice(i, i + BATCH);
+        const results = await Promise.allSettled(batch.map((id) => api.files.get(id)));
+        results.forEach((r) => {
+          if (r.status === "fulfilled" && r.value.references.length === 0) {
+            unreferenced.push(r.value.id);
+          }
+        });
+      }
+
+      if (unreferenced.length === 0) {
+        // 没有未引用文件，仍尝试清理数据库级孤儿
+        const orphanRes = await api.dataFile.cleanupOrphans();
+        toast.success(`未发现未引用的文件。清理数据库孤儿 ${orphanRes.dbOrphansRemoved} 条`);
+        loadList();
+        loadStats();
+        return;
+      }
+
+      if (!await askConfirm(`发现 ${unreferenced.length} 个未引用的文件，确定要全部删除吗？`)) return;
+
+      let deleted = 0;
+      for (const id of unreferenced) {
+        try {
+          await api.files.remove(id);
+          deleted++;
+        } catch (e: any) {
+          console.warn(`[FileManager] 删除文件失败:`, e?.message);
+        }
+      }
+
+      // 3. 顺便清理数据库级孤儿
+      const orphanRes = await api.dataFile.cleanupOrphans();
+
+      toast.success(
+        `清理完成：删除未引用文件 ${deleted} 个` +
+        (orphanRes.dbOrphansRemoved > 0 ? `，清理数据库孤儿 ${orphanRes.dbOrphansRemoved} 条` : "")
+      );
+      loadList();
+      loadStats();
+    } catch (err: any) {
+      toast.error(`清理失败：${err?.message || "未知错误"}`);
+    } finally {
+      setCleaning(false);
+    }
+  }, [cleaning, loadList, loadStats]);
 
   // ---- 拖拽上传整区 ----
   const [dragOver, setDragOver] = useState(false);
@@ -421,13 +503,36 @@ export default function FileManager() {
     return `共 ${stats.total} 个文件 · ${humanSize(stats.totalBytes)}（图片 ${stats.images.count} · 其他 ${stats.files.count}）`;
   }, [stats]);
 
+  // ---- 粘贴上传 ----
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === "file") {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        handleUpload(files);
+      }
+    },
+    [handleUpload],
+  );
+
   return (
     <div
       className="flex-1 flex flex-col h-full bg-app-bg overflow-hidden relative"
+      tabIndex={0}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
       onDragOver={onDragOver}
       onDrop={onDrop}
+      onPaste={handlePaste}
     >
       {/* 顶栏 */}
       <div
@@ -445,6 +550,12 @@ export default function FileManager() {
         </div>
 
         <div className="flex-1" />
+
+        <span className="hidden lg:flex items-center gap-1 text-[11px] text-tx-tertiary">
+          <Clipboard size={11} />
+          <kbd className="px-1 text-[10px] bg-app-elevated border border-app-border rounded font-mono">Ctrl+V</kbd>
+          粘贴上传
+        </span>
 
         {/* 视图切换 */}
         <div className="hidden md:flex items-center rounded-lg border border-app-border bg-app-bg p-0.5">
@@ -474,6 +585,28 @@ export default function FileManager() {
           {uploading ? <Loader2 size={14} className="animate-spin mr-1" /> : <Upload size={14} className="mr-1" />}
           {uploading ? "上传中" : "上传文件"}
         </Button>
+        <button
+          onClick={handleCleanup}
+          disabled={cleaning}
+          className={cn(
+            "flex items-center justify-center shrink-0 h-8 rounded-md px-3 text-xs font-medium transition-all",
+            cleaning
+              ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
+              : "bg-rose-600 hover:bg-rose-700 text-white shadow-sm"
+          )}
+        >
+          {cleaning ? (
+            <>
+              <Loader2 size={14} className="animate-spin mr-1" />
+              清理中
+            </>
+          ) : (
+            <>
+              <Eraser size={14} className="mr-1" />
+              清理未引用
+            </>
+          )}
+        </button>
         <input
           ref={fileInputRef}
           type="file"
@@ -631,6 +764,44 @@ export default function FileManager() {
           />
         )}
       </AnimatePresence>
+
+      {/* 确认弹窗 */}
+      <AnimatePresence>
+        {confirmState && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <div className="absolute inset-0 bg-black/40" onClick={() => { confirmState.resolve(false); setConfirmState(null); }} />
+            <motion.div
+              className="relative z-10 w-80 p-6 rounded-xl bg-app-elevated border border-app-border shadow-xl"
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+            >
+              <p className="text-sm text-tx-primary leading-relaxed">{confirmState.message}</p>
+              <div className="flex justify-end gap-2 mt-5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { confirmState.resolve(false); setConfirmState(null); }}
+                >
+                  取消
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => { confirmState.resolve(true); setConfirmState(null); }}
+                >
+                  确定
+                </Button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -652,7 +823,7 @@ function EmptyState({ hasFilter, onUpload }: { hasFilter: boolean; onUpload: () 
     <div className="flex flex-col items-center justify-center py-16 text-tx-tertiary">
       <Inbox size={40} className="mb-3 opacity-40" />
       <p className="text-sm">还没有任何文件</p>
-      <p className="text-xs mt-1 mb-4">上传一张图片或任意文件开始使用</p>
+      <p className="text-xs mt-1 mb-4">上传、拖拽或 Ctrl+V 粘贴文件开始使用</p>
       <Button size="sm" onClick={onUpload}>
         <Upload size={14} className="mr-1" />
         上传文件

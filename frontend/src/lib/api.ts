@@ -1138,6 +1138,13 @@ export const api = {
     remove: (id: string) =>
       request<{ success: boolean }>(`/files/${id}`, { method: "DELETE" }),
 
+    /** 批量删除附件。一次事务完成，返回成功/失败明细。 */
+    batchRemove: (ids: string[]) =>
+      request<{ success: boolean; deleted: number; failed: Array<{ id: string; reason: string }> }>(
+        `/files/batch-delete`,
+        { method: "POST", body: JSON.stringify({ ids }) },
+      ),
+
     /**
      * 上传一份文件到文件管理（无笔记归属时后端落到 holder note）。
      * 用 FormData；不要手动设 Content-Type，交给浏览器注入 multipart boundary。

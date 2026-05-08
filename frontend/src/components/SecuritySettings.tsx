@@ -17,6 +17,10 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api, broadcastLogout, withSudo } from "@/lib/api";
+import {
+  confirm as confirmDialog,
+  prompt as promptDialog,
+} from "@/components/ui/confirm";
 
 /**
  * 顶层组件：组合账号/密码修改 + 2FA + 会话管理三个区块。
@@ -325,7 +329,12 @@ function TwoFactorSection() {
     try {
       const ran = await withSudo(
         (tk) => api.disableTwoFactor(ui.code.trim(), tk),
-        () => window.prompt(t("securitySettings.twoFactor.disableHint")) || null,
+        () =>
+          promptDialog({
+            title: t("securitySettings.twoFactor.disableHint"),
+            type: "password",
+            placeholder: t("securitySettings.currentPasswordPlaceholder"),
+          }),
         sudoToken,
       );
       if (!ran) {
@@ -345,7 +354,13 @@ function TwoFactorSection() {
     try {
       const ran = await withSudo(
         (tk) => api.regenerateRecoveryCodes(tk),
-        () => window.prompt(t("securitySettings.twoFactor.regenerateHint") + "\n\n" + t("securitySettings.currentPasswordPlaceholder")) || null,
+        () =>
+          promptDialog({
+            title: t("securitySettings.twoFactor.regenerateHint"),
+            description: t("securitySettings.currentPasswordPlaceholder"),
+            type: "password",
+            placeholder: t("securitySettings.currentPasswordPlaceholder"),
+          }),
         sudoToken,
       );
       if (!ran) return;
@@ -624,7 +639,11 @@ function SessionsSection() {
   const revokeOthers = async () => {
     const others = sessions.filter((s) => !s.current).length;
     if (others === 0) return;
-    if (!window.confirm(t("securitySettings.sessions.revokeOthersConfirm", { count: others }))) return;
+    const ok = await confirmDialog({
+      title: t("securitySettings.sessions.revokeOthersConfirm", { count: others }),
+      danger: true,
+    });
+    if (!ok) return;
     await api.revokeOtherSessions(true);
     await refresh();
   };

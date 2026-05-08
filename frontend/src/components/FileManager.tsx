@@ -47,6 +47,8 @@ import {
   Inbox,
   Copy,
   Check,
+  CheckSquare,
+  Square,
   Clipboard,
   Eraser,
 } from "lucide-react";
@@ -58,6 +60,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useApp, useAppActions } from "@/store/AppContext";
 import { toast } from "@/lib/toast";
+import { confirm as confirmDialog } from "@/components/ui/confirm";
 
 // ---------------------------------------------------------------------------
 // 工具：文件大小可读化 / MIME → 图标 / 时间格式化
@@ -160,14 +163,16 @@ export default function FileManager() {
   // 上传
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [cleaning, setCleaning] = useState(false);
-  const [confirmState, setConfirmState] = useState<{ message: string; resolve: (v: boolean) => void } | null>(null);
 
-  const askConfirm = useCallback((message: string): Promise<boolean> => {
-    return new Promise((resolve) => {
-      setConfirmState({ message, resolve });
-    });
-  }, []);
+  // 批量选择
+  // - selectionMode 决定 UI 是否进入"多选"形态：卡片左上出现 checkbox、
+  //   工具条上方显示选择栏、点击卡片不再打开详情而是切换勾选。
+  // - selectedIds 用 Set 维护，便于 O(1) 增删；切分类/换页/退出选择模式
+  //   会自动清空。
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchDeleting, setBatchDeleting] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
 
   // ---- 搜索防抖（300ms，避免每个字都打接口）----
   useEffect(() => {
@@ -252,7 +257,14 @@ export default function FileManager() {
   // ---- 删除 ----
   const handleDelete = useCallback(
     async (id: string) => {
-      if (!await askConfirm("确定要删除此文件吗？删除后引用该文件的笔记将显示为破图或失效链接，不可撤销。")) {
+      const ok = await confirmDialog({
+        title: "确定要删除此文件吗？",
+        description:
+          "删除后，引用该文件的笔记里将显示为破图 / 失效链接。该操作不可撤销。",
+        confirmText: "删除",
+        danger: true,
+      });
+      if (!ok) {
         return;
       }
       try {
@@ -270,6 +282,175 @@ export default function FileManager() {
     },
     [closeDetail, loadStats],
   );
+
+  // ---- 批量选择 ----
+  const toggleSelectionMode = useCallback(() => {
+    setSelectionMode((m) => {
+      const next = !m;
+      if (!next) setSelectedIds(new Set()); // 退出选择模式自动清空
+      return next;
+    });
+  }, []);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // 全选 / 反全选：仅作用于"当前页面已加载"的 items；不会越过分页边界。
+  const allSelectedOnPage =
+    items.length > 0 && items.every((it) => selectedIds.has(it.id));
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      if (items.length === 0) return prev;
+      const allOn = items.every((it) => prev.has(it.id));
+      if (allOn) {
+        // 仅取消"当前页"的勾选；保留其它页已勾选的（如果有）
+        const next = new Set(prev);
+        for (const it of items) next.delete(it.id);
+        return next;
+      }
+      const next = new Set(prev);
+      for (const it of items) next.add(it.id);
+      return next;
+    });
+  }, [items]);
+
+  // ---- 批量删除 ----
+  const handleBatchDelete = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    const count = selectedIds.size;
+    const ok = await confirmDialog({
+      title: `确定要删除选中的 ${count} 个文件吗？`,
+      description:
+        "删除后，引用这些文件的笔记里将显示为破图 / 失效链接。该操作不可撤销。",
+      confirmText: `删除 ${count} 个`,
+      danger: true,
+    });
+    if (!ok) {
+      return;
+    }
+    setBatchDeleting(true);
+    try {
+      const ids = Array.from(selectedIds);
+      const res = await api.files.batchRemove(ids);
+      // 本地列表即时剔除（按"实际删除成功的 id"——失败项不剔除，便于用户看到）
+      const failedIdSet = new Set(res.failed.map((f) => f.id));
+      const succeededIds = new Set(ids.filter((id) => !failedIdSet.has(id)));
+      setItems((prev) => prev.filter((it) => !succeededIds.has(it.id)));
+      setTotal((t) => Math.max(0, t - succeededIds.size));
+      // 选择集合：移除已成功删除的，保留失败项让用户再处理
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of succeededIds) next.delete(id);
+        return next;
+      });
+      // 详情抽屉里若是已删项，关掉
+      if (detailId && succeededIds.has(detailId)) closeDetail();
+
+      if (res.failed.length === 0) {
+        toast.success(`已删除 ${res.deleted} 个文件`);
+        // 全部成功 → 退出选择模式
+        setSelectionMode(false);
+      } else {
+        toast.error(
+          `已删除 ${res.deleted} 个，${res.failed.length} 个失败：${res.failed[0].reason}${res.failed.length > 1 ? " 等" : ""}`,
+        );
+      }
+      loadStats();
+    } catch (err: any) {
+      console.error("[FileManager] batch delete failed:", err);
+      toast.error(err?.message || "批量删除失败");
+    } finally {
+      setBatchDeleting(false);
+    }
+  }, [selectedIds, detailId, closeDetail, loadStats]);
+
+  // 切换分类 / 搜索 / 排序 / 翻页时，已勾选的 id 可能不再在当前 items 里，
+  // 体验上保留集合也容易让用户产生"幽灵勾选"。统一在这些维度变化时清空。
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [category, sort, searchQuery, page]);
+
+  // ---- 清理未引用文件 ----
+  const handleCleanup = useCallback(async () => {
+    if (cleaning) return;
+    const ok = await confirmDialog({
+      title: "确定要扫描并清理未引用的文件吗？",
+      description: "此操作不可撤销。",
+      confirmText: "开始清理",
+      danger: true,
+    });
+    if (!ok) return;
+    setCleaning(true);
+    try {
+      const allIds: string[] = [];
+      let scanPage = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const res = await api.files.list({ page: scanPage, pageSize: 200 });
+        allIds.push(...res.items.map((f) => f.id));
+        hasMore = scanPage * 200 < res.total;
+        scanPage++;
+      }
+
+      if (allIds.length === 0) {
+        toast.success("没有文件可清理");
+        return;
+      }
+
+      const unreferenced: string[] = [];
+      const BATCH = 20;
+      for (let i = 0; i < allIds.length; i += BATCH) {
+        const batch = allIds.slice(i, i + BATCH);
+        const results = await Promise.allSettled(batch.map((id) => api.files.get(id)));
+        results.forEach((r) => {
+          if (r.status === "fulfilled" && r.value.references.length === 0) {
+            unreferenced.push(r.value.id);
+          }
+        });
+      }
+
+      if (unreferenced.length === 0) {
+        const orphanRes = await api.dataFile.cleanupOrphans();
+        toast.success(`未发现未引用的文件。清理数据库孤儿 ${orphanRes.dbOrphansRemoved} 条`);
+        loadList();
+        loadStats();
+        return;
+      }
+
+      const ok2 = await confirmDialog({
+        title: `发现 ${unreferenced.length} 个未引用的文件，确定要全部删除吗？`,
+        confirmText: `删除 ${unreferenced.length} 个`,
+        danger: true,
+      });
+      if (!ok2) return;
+
+      // 使用批量删除
+      const res = await api.files.batchRemove(unreferenced);
+      const failedIdSet = new Set(res.failed.map((f) => f.id));
+      const succeededIds = new Set(unreferenced.filter((id) => !failedIdSet.has(id)));
+      setItems((prev) => prev.filter((it) => !succeededIds.has(it.id)));
+      setTotal((t) => Math.max(0, t - succeededIds.size));
+
+      const orphanRes = await api.dataFile.cleanupOrphans();
+
+      toast.success(
+        `清理完成：删除未引用文件 ${res.deleted} 个` +
+        (orphanRes.dbOrphansRemoved > 0 ? `，清理数据库孤儿 ${orphanRes.dbOrphansRemoved} 条` : "")
+      );
+      loadList();
+      loadStats();
+    } catch (err: any) {
+      toast.error(`清理失败：${err?.message || "未知错误"}`);
+    } finally {
+      setCleaning(false);
+    }
+  }, [cleaning, loadList, loadStats]);
 
   // ---- 上传 ----
   const handleUpload = useCallback(
@@ -316,77 +497,26 @@ export default function FileManager() {
     [handleUpload],
   );
 
-  // ---- 清理未引用文件 ----
-  const handleCleanup = useCallback(async () => {
-    if (cleaning) return;
-    if (!await askConfirm("确定要扫描并清理未引用的文件吗？此操作不可撤销。")) return;
-    setCleaning(true);
-    try {
-      // 1. 扫描所有文件，收集 ID 列表
-      const allIds: string[] = [];
-      let scanPage = 1;
-      let hasMore = true;
-      while (hasMore) {
-        const res = await api.files.list({ page: scanPage, pageSize: 200 });
-        allIds.push(...res.items.map((f) => f.id));
-        hasMore = scanPage * 200 < res.total;
-        scanPage++;
-      }
-
-      if (allIds.length === 0) {
-        toast.success("没有文件可清理");
-        return;
-      }
-
-      // 2. 分批获取详情，检查 references 是否为空（真·未被引用）
-      const unreferenced: string[] = [];
-      const BATCH = 20;
-      for (let i = 0; i < allIds.length; i += BATCH) {
-        const batch = allIds.slice(i, i + BATCH);
-        const results = await Promise.allSettled(batch.map((id) => api.files.get(id)));
-        results.forEach((r) => {
-          if (r.status === "fulfilled" && r.value.references.length === 0) {
-            unreferenced.push(r.value.id);
-          }
-        });
-      }
-
-      if (unreferenced.length === 0) {
-        // 没有未引用文件，仍尝试清理数据库级孤儿
-        const orphanRes = await api.dataFile.cleanupOrphans();
-        toast.success(`未发现未引用的文件。清理数据库孤儿 ${orphanRes.dbOrphansRemoved} 条`);
-        loadList();
-        loadStats();
-        return;
-      }
-
-      if (!await askConfirm(`发现 ${unreferenced.length} 个未引用的文件，确定要全部删除吗？`)) return;
-
-      let deleted = 0;
-      for (const id of unreferenced) {
-        try {
-          await api.files.remove(id);
-          deleted++;
-        } catch (e: any) {
-          console.warn(`[FileManager] 删除文件失败:`, e?.message);
+  // ---- 粘贴上传 ----
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === "file") {
+          const f = item.getAsFile();
+          if (f) files.push(f);
         }
       }
-
-      // 3. 顺便清理数据库级孤儿
-      const orphanRes = await api.dataFile.cleanupOrphans();
-
-      toast.success(
-        `清理完成：删除未引用文件 ${deleted} 个` +
-        (orphanRes.dbOrphansRemoved > 0 ? `，清理数据库孤儿 ${orphanRes.dbOrphansRemoved} 条` : "")
-      );
-      loadList();
-      loadStats();
-    } catch (err: any) {
-      toast.error(`清理失败：${err?.message || "未知错误"}`);
-    } finally {
-      setCleaning(false);
-    }
-  }, [cleaning, loadList, loadStats]);
+      if (files.length > 0) {
+        e.preventDefault();
+        handleUpload(files);
+      }
+    },
+    [handleUpload],
+  );
 
   // ---- 拖拽上传整区 ----
   const [dragOver, setDragOver] = useState(false);
@@ -503,27 +633,6 @@ export default function FileManager() {
     return `共 ${stats.total} 个文件 · ${humanSize(stats.totalBytes)}（图片 ${stats.images.count} · 其他 ${stats.files.count}）`;
   }, [stats]);
 
-  // ---- 粘贴上传 ----
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      const files: File[] = [];
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.kind === "file") {
-          const f = item.getAsFile();
-          if (f) files.push(f);
-        }
-      }
-      if (files.length > 0) {
-        e.preventDefault();
-        handleUpload(files);
-      }
-    },
-    [handleUpload],
-  );
-
   return (
     <div
       className="flex-1 flex flex-col h-full bg-app-bg overflow-hidden relative"
@@ -551,12 +660,6 @@ export default function FileManager() {
 
         <div className="flex-1" />
 
-        <span className="hidden lg:flex items-center gap-1 text-[11px] text-tx-tertiary">
-          <Clipboard size={11} />
-          <kbd className="px-1 text-[10px] bg-app-elevated border border-app-border rounded font-mono">Ctrl+V</kbd>
-          粘贴上传
-        </span>
-
         {/* 视图切换 */}
         <div className="hidden md:flex items-center rounded-lg border border-app-border bg-app-bg p-0.5">
           <button
@@ -580,6 +683,26 @@ export default function FileManager() {
             <List size={14} />
           </button>
         </div>
+
+        <Button
+          size="sm"
+          variant={selectionMode ? "default" : "outline"}
+          onClick={toggleSelectionMode}
+          className="shrink-0"
+          title={selectionMode ? "退出多选" : "进入多选"}
+        >
+          {selectionMode ? (
+            <>
+              <X size={14} className="mr-1" />
+              退出多选
+            </>
+          ) : (
+            <>
+              <CheckSquare size={14} className="mr-1" />
+              选择
+            </>
+          )}
+        </Button>
 
         <Button size="sm" onClick={onPickFiles} disabled={uploading} className="shrink-0">
           {uploading ? <Loader2 size={14} className="animate-spin mr-1" /> : <Upload size={14} className="mr-1" />}
@@ -614,6 +737,13 @@ export default function FileManager() {
           className="hidden"
           onChange={onFileInputChange}
         />
+      </div>
+
+      {/* 粘贴提示 */}
+      <div className="hidden lg:flex items-center justify-center gap-1.5 px-3 py-1 text-[11px] text-tx-tertiary border-b border-app-border/60 bg-app-surface/20">
+        <Clipboard size={11} />
+        <kbd className="px-1 text-[10px] bg-app-elevated border border-app-border rounded font-mono">Ctrl+V</kbd>
+        粘贴上传文件
       </div>
 
       {/* 工具条：分类 / 搜索 / 排序 */}
@@ -683,6 +813,68 @@ export default function FileManager() {
         </div>
       </div>
 
+      {/* 批量操作栏（仅选择模式下出现） */}
+      <AnimatePresence initial={false}>
+        {selectionMode && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden border-b border-app-border bg-accent-primary/5"
+          >
+            <div className="flex flex-wrap items-center gap-2 px-4 md:px-6 py-2">
+              <button
+                onClick={toggleSelectAll}
+                className="flex items-center gap-1.5 text-xs text-tx-secondary hover:text-tx-primary transition-colors"
+                disabled={items.length === 0}
+                title={allSelectedOnPage ? "取消选择本页全部" : "选择本页全部"}
+              >
+                {allSelectedOnPage ? (
+                  <CheckSquare size={14} className="text-accent-primary" />
+                ) : (
+                  <Square size={14} />
+                )}
+                {allSelectedOnPage ? "取消全选" : "全选本页"}
+              </button>
+              <span className="text-xs text-tx-tertiary">
+                已选 <b className="text-accent-primary">{selectedIds.size}</b> 个
+                {items.length > 0 && (
+                  <span className="ml-1 opacity-60">
+                    （本页 {items.length} / 全部 {total}）
+                  </span>
+                )}
+              </span>
+
+              <div className="flex-1" />
+
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setSelectedIds(new Set())}
+                disabled={selectedIds.size === 0}
+              >
+                清空选择
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleBatchDelete}
+                disabled={selectedIds.size === 0 || batchDeleting}
+                className="text-red-500 border-red-500/40 hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/60 disabled:opacity-50"
+              >
+                {batchDeleting ? (
+                  <Loader2 size={14} className="mr-1 animate-spin" />
+                ) : (
+                  <Trash2 size={14} className="mr-1" />
+                )}
+                删除选中
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* 主区 */}
       <div className="flex-1 min-h-0 relative">
         <ScrollArea className="h-full">
@@ -702,6 +894,9 @@ export default function FileManager() {
                 onDownload={downloadItem}
                 copiedId={copiedId}
                 downloadingId={downloadingId}
+                selectionMode={selectionMode}
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelect}
               />
             ) : (
               <ListView
@@ -710,8 +905,12 @@ export default function FileManager() {
                 onCopyUrl={copyUrl}
                 onJumpToNote={jumpToNote}
                 onDownload={downloadItem}
+                onDelete={handleDelete}
                 copiedId={copiedId}
                 downloadingId={downloadingId}
+                selectionMode={selectionMode}
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelect}
               />
             )}
 
@@ -764,44 +963,6 @@ export default function FileManager() {
           />
         )}
       </AnimatePresence>
-
-      {/* 确认弹窗 */}
-      <AnimatePresence>
-        {confirmState && (
-          <motion.div
-            className="fixed inset-0 z-50 flex items-center justify-center"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <div className="absolute inset-0 bg-black/40" onClick={() => { confirmState.resolve(false); setConfirmState(null); }} />
-            <motion.div
-              className="relative z-10 w-80 p-6 rounded-xl bg-app-elevated border border-app-border shadow-xl"
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-            >
-              <p className="text-sm text-tx-primary leading-relaxed">{confirmState.message}</p>
-              <div className="flex justify-end gap-2 mt-5">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => { confirmState.resolve(false); setConfirmState(null); }}
-                >
-                  取消
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => { confirmState.resolve(true); setConfirmState(null); }}
-                >
-                  确定
-                </Button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
@@ -842,6 +1003,9 @@ function GridView({
   onDownload,
   copiedId,
   downloadingId,
+  selectionMode,
+  selectedIds,
+  onToggleSelect,
 }: {
   items: FileItem[];
   onOpen: (id: string) => void;
@@ -849,6 +1013,9 @@ function GridView({
   onDownload: (item: FileItem) => void;
   copiedId: string | null;
   downloadingId: string | null;
+  selectionMode: boolean;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
 }) {
   return (
     <div
@@ -864,6 +1031,9 @@ function GridView({
           onDownload={onDownload}
           copiedId={copiedId}
           downloadingId={downloadingId}
+          selectionMode={selectionMode}
+          selected={selectedIds.has(it.id)}
+          onToggleSelect={onToggleSelect}
         />
       ))}
     </div>
@@ -877,6 +1047,9 @@ function GridCard({
   onDownload,
   copiedId,
   downloadingId,
+  selectionMode,
+  selected,
+  onToggleSelect,
 }: {
   item: FileItem;
   onOpen: (id: string) => void;
@@ -884,12 +1057,24 @@ function GridCard({
   onDownload: (item: FileItem) => void;
   copiedId: string | null;
   downloadingId: string | null;
+  selectionMode: boolean;
+  selected: boolean;
+  onToggleSelect: (id: string) => void;
 }) {
   const isImage = item.category === "image";
+  const handleCardClick = () => {
+    if (selectionMode) onToggleSelect(item.id);
+    else onOpen(item.id);
+  };
   return (
     <div
-      className="group relative rounded-lg border border-app-border bg-app-surface overflow-hidden hover:border-accent-primary/50 hover:shadow-sm transition-all cursor-pointer"
-      onClick={() => onOpen(item.id)}
+      className={cn(
+        "group relative rounded-lg border bg-app-surface overflow-hidden hover:shadow-sm transition-all cursor-pointer",
+        selected
+          ? "border-accent-primary ring-2 ring-accent-primary/40"
+          : "border-app-border hover:border-accent-primary/50",
+      )}
+      onClick={handleCardClick}
       title={item.filename}
     >
       <div className="aspect-square w-full bg-app-bg flex items-center justify-center overflow-hidden">
@@ -926,30 +1111,53 @@ function GridCard({
         <div className="text-[10px] text-tx-tertiary">{humanSize(item.size)}</div>
       </div>
 
-      {/* hover 工具条 */}
-      <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          className="w-6 h-6 rounded-md bg-black/50 hover:bg-black/70 text-white flex items-center justify-center disabled:opacity-50"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDownload(item);
-          }}
-          disabled={downloadingId === item.id}
-          title="下载"
-        >
-          {downloadingId === item.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-        </button>
-        <button
-          className="w-6 h-6 rounded-md bg-black/50 hover:bg-black/70 text-white flex items-center justify-center"
-          onClick={(e) => {
-            e.stopPropagation();
-            onCopyUrl(item);
-          }}
-          title="复制链接"
-        >
-          {copiedId === item.id ? <Check size={12} /> : <Copy size={12} />}
-        </button>
-      </div>
+      {/* 选择 checkbox：选择模式下常驻显示，非选择模式下隐藏 */}
+      {selectionMode && (
+        <div className="absolute top-1.5 left-1.5 z-10">
+          <button
+            className={cn(
+              "w-6 h-6 rounded-md flex items-center justify-center transition-colors shadow-sm",
+              selected
+                ? "bg-accent-primary text-white"
+                : "bg-white/85 text-tx-secondary hover:bg-white",
+            )}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSelect(item.id);
+            }}
+            title={selected ? "取消选择" : "选择"}
+          >
+            {selected ? <Check size={14} /> : <Square size={14} />}
+          </button>
+        </div>
+      )}
+
+      {/* hover 工具条（选择模式下隐藏，避免误操作） */}
+      {!selectionMode && (
+        <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            className="w-6 h-6 rounded-md bg-black/50 hover:bg-black/70 text-white flex items-center justify-center disabled:opacity-50"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDownload(item);
+            }}
+            disabled={downloadingId === item.id}
+            title="下载"
+          >
+            {downloadingId === item.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+          </button>
+          <button
+            className="w-6 h-6 rounded-md bg-black/50 hover:bg-black/70 text-white flex items-center justify-center"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCopyUrl(item);
+            }}
+            title="复制链接"
+          >
+            {copiedId === item.id ? <Check size={12} /> : <Copy size={12} />}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -963,100 +1171,146 @@ function ListView({
   onCopyUrl,
   onJumpToNote,
   onDownload,
+  onDelete,
   copiedId,
   downloadingId,
+  selectionMode,
+  selectedIds,
+  onToggleSelect,
 }: {
   items: FileItem[];
   onOpen: (id: string) => void;
   onCopyUrl: (item: FileItem) => void;
   onJumpToNote: (noteId: string) => void;
   onDownload: (item: FileItem) => void;
+  onDelete: (id: string) => void;
   copiedId: string | null;
   downloadingId: string | null;
+  selectionMode: boolean;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
 }) {
   return (
     <div className="rounded-lg border border-app-border bg-app-surface overflow-hidden">
       <table className="w-full text-xs">
         <thead className="bg-app-bg/60 text-tx-tertiary">
           <tr>
+            {selectionMode && <th className="text-center font-normal px-2 py-2 w-8"></th>}
             <th className="text-left font-normal px-3 py-2 w-10"></th>
             <th className="text-left font-normal px-3 py-2">文件名</th>
             <th className="text-left font-normal px-3 py-2 hidden md:table-cell w-32">类型</th>
             <th className="text-right font-normal px-3 py-2 w-20">大小</th>
             <th className="text-left font-normal px-3 py-2 hidden lg:table-cell w-40">来源笔记</th>
             <th className="text-left font-normal px-3 py-2 hidden sm:table-cell w-36">上传时间</th>
-            <th className="text-right font-normal px-3 py-2 w-24"></th>
+            <th className="text-right font-normal px-3 py-2 w-28"></th>
           </tr>
         </thead>
         <tbody>
-          {items.map((it) => (
-            <tr
-              key={it.id}
-              className="border-t border-app-border hover:bg-app-hover/50 cursor-pointer transition-colors"
-              onClick={() => onOpen(it.id)}
-            >
-              <td className="px-3 py-2 w-10">
-                <div className="w-8 h-8 rounded-md bg-app-bg flex items-center justify-center overflow-hidden">
-                  {it.category === "image" ? (
-                    <img src={resolveAttachmentUrl(it.url)} alt="" loading="lazy" className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-accent-primary/70">{mimeIcon(it.mimeType)}</span>
-                  )}
-                </div>
-              </td>
-              <td className="px-3 py-2 text-tx-primary max-w-[240px]">
-                <div className="truncate" title={it.filename}>{it.filename}</div>
-              </td>
-              <td className="px-3 py-2 text-tx-tertiary hidden md:table-cell">
-                <code className="text-[11px]">{it.mimeType || "-"}</code>
-              </td>
-              <td className="px-3 py-2 text-right text-tx-secondary tabular-nums">{humanSize(it.size)}</td>
-              <td className="px-3 py-2 hidden lg:table-cell text-tx-secondary">
-                {it.primaryNote ? (
-                  <button
-                    className="inline-flex items-center gap-1 hover:text-accent-primary transition-colors max-w-full"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onJumpToNote(it.primaryNote!.id);
-                    }}
-                    title={it.primaryNote.title}
-                  >
-                    {it.primaryNote.notebookIcon && <span>{it.primaryNote.notebookIcon}</span>}
-                    <span className="truncate max-w-[150px]">{it.primaryNote.title || "(无标题)"}</span>
-                    <ExternalLink size={10} className="shrink-0" />
-                  </button>
-                ) : (
-                  <span className="text-tx-tertiary">-</span>
+          {items.map((it) => {
+            const isSelected = selectedIds.has(it.id);
+            return (
+              <tr
+                key={it.id}
+                className={cn(
+                  "border-t border-app-border cursor-pointer transition-colors",
+                  isSelected ? "bg-accent-primary/10 hover:bg-accent-primary/15" : "hover:bg-app-hover/50",
                 )}
-              </td>
-              <td className="px-3 py-2 text-tx-tertiary hidden sm:table-cell">{formatLocalTime(it.createdAt)}</td>
-              <td className="px-3 py-2 text-right">
-                <div className="inline-flex items-center gap-0.5">
-                  <button
-                    className="p-1 rounded hover:bg-app-hover text-tx-tertiary hover:text-tx-primary disabled:opacity-50"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDownload(it);
-                    }}
-                    disabled={downloadingId === it.id}
-                    title="下载"
-                  >
-                    {downloadingId === it.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-                  </button>
-                  <button
-                    className="p-1 rounded hover:bg-app-hover text-tx-tertiary hover:text-tx-primary"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onCopyUrl(it);
-                    }}
-                    title="复制链接"
-                  >
-                    {copiedId === it.id ? <Check size={12} /> : <Copy size={12} />}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
+                onClick={() => {
+                  if (selectionMode) onToggleSelect(it.id);
+                  else onOpen(it.id);
+                }}
+              >
+                {selectionMode && (
+                  <td className="px-2 py-2 w-8 text-center">
+                    <button
+                      className={cn(
+                        "w-5 h-5 rounded flex items-center justify-center transition-colors",
+                        isSelected
+                          ? "bg-accent-primary text-white"
+                          : "border border-app-border bg-app-bg text-tx-tertiary hover:border-accent-primary",
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleSelect(it.id);
+                      }}
+                    >
+                      {isSelected && <Check size={12} />}
+                    </button>
+                  </td>
+                )}
+                <td className="px-3 py-2 w-10">
+                  <div className="w-8 h-8 rounded-md bg-app-bg flex items-center justify-center overflow-hidden">
+                    {it.category === "image" ? (
+                      <img src={resolveAttachmentUrl(it.url)} alt="" loading="lazy" className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-accent-primary/70">{mimeIcon(it.mimeType)}</span>
+                    )}
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-tx-primary max-w-[240px]">
+                  <div className="truncate" title={it.filename}>{it.filename}</div>
+                </td>
+                <td className="px-3 py-2 text-tx-tertiary hidden md:table-cell">
+                  <code className="text-[11px]">{it.mimeType || "-"}</code>
+                </td>
+                <td className="px-3 py-2 text-right text-tx-secondary tabular-nums">{humanSize(it.size)}</td>
+                <td className="px-3 py-2 hidden lg:table-cell text-tx-secondary">
+                  {it.primaryNote ? (
+                    <button
+                      className="inline-flex items-center gap-1 hover:text-accent-primary transition-colors max-w-full"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onJumpToNote(it.primaryNote!.id);
+                      }}
+                      title={it.primaryNote.title}
+                    >
+                      {it.primaryNote.notebookIcon && <span>{it.primaryNote.notebookIcon}</span>}
+                      <span className="truncate max-w-[150px]">{it.primaryNote.title || "(无标题)"}</span>
+                      <ExternalLink size={10} className="shrink-0" />
+                    </button>
+                  ) : (
+                    <span className="text-tx-tertiary">-</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-tx-tertiary hidden sm:table-cell">{formatLocalTime(it.createdAt)}</td>
+                <td className="px-3 py-2 text-right">
+                  <div className="inline-flex items-center gap-0.5">
+                    <button
+                      className="p-1 rounded hover:bg-app-hover text-tx-tertiary hover:text-tx-primary disabled:opacity-50"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDownload(it);
+                      }}
+                      disabled={downloadingId === it.id}
+                      title="下载"
+                    >
+                      {downloadingId === it.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                    </button>
+                    <button
+                      className="p-1 rounded hover:bg-app-hover text-tx-tertiary hover:text-tx-primary"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCopyUrl(it);
+                      }}
+                      title="复制链接"
+                    >
+                      {copiedId === it.id ? <Check size={12} /> : <Copy size={12} />}
+                    </button>
+                    <button
+                      className="p-1 rounded hover:bg-red-500/10 text-tx-tertiary hover:text-red-500 transition-colors"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(it.id);
+                      }}
+                      title="删除"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -1158,7 +1412,7 @@ function DetailDrawer({
                       <Download size={11} />
                       <span className="truncate">{detail.url}</span>
                     </a>
-                  }
+      }
                 />
               </div>
 

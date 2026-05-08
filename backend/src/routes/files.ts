@@ -423,6 +423,125 @@ app.delete("/:id", (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /api/files/batch-delete
+// 批量删除文件（DB 行 + 磁盘文件）。
+//
+// 请求体：{ ids: string[] }   —— 不超过 200 个 / 次（避免单事务锁太久）
+//
+// 响应：
+//   {
+//     success: true,
+//     deleted: number,                          —— 实际删除条数
+//     failed:  Array<{ id: string; reason: string }>   —— 跳过的明细
+//   }
+//
+// 设计要点：
+//   - 整个删除过程放在单事务里（先把可删的 id 收集出来，再一次性 DELETE），
+//     即便后面磁盘 unlink 报错也不影响 DB 一致性。
+//   - 与单删 DELETE /:id 完全同款的两层鉴权（attachments.userId == 当前用户
+//     + resolveNotePermission(noteId).write）；任何一项不通过则该 id 进入
+//     failed[]，不阻塞其它 id 继续删。
+//   - 物理文件 unlink 失败也只记一条 reason，不回滚——与单删保持一致：DB
+//     一致性优先。
+// ---------------------------------------------------------------------------
+app.post("/batch-delete", async (c) => {
+  const userId = c.req.header("X-User-Id") || "";
+  if (!userId) return c.json({ error: "未授权" }, 401);
+
+  let body: { ids?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid json body" }, 400);
+  }
+  const rawIds = Array.isArray(body.ids) ? body.ids : [];
+  // 去重 + 过滤掉非字符串项
+  const ids = Array.from(
+    new Set(
+      rawIds.filter((x): x is string => typeof x === "string" && x.length > 0),
+    ),
+  );
+  if (ids.length === 0) {
+    return c.json({ error: "ids 不能为空" }, 400);
+  }
+  if (ids.length > 200) {
+    return c.json({ error: "单次最多删除 200 个文件" }, 400);
+  }
+
+  const db = getDb();
+  const failed: Array<{ id: string; reason: string }> = [];
+
+  // 第一步：把全部 id 拉出来，做权限筛选，得到"可删除集合"+ 物理路径列表
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT id, noteId, userId, path FROM attachments WHERE id IN (${placeholders})`,
+    )
+    .all(...ids) as Array<{
+      id: string;
+      noteId: string;
+      userId: string;
+      path: string;
+    }>;
+
+  const foundIds = new Set(rows.map((r) => r.id));
+  for (const id of ids) {
+    if (!foundIds.has(id)) {
+      failed.push({ id, reason: "文件不存在" });
+    }
+  }
+
+  const deletable: typeof rows = [];
+  for (const row of rows) {
+    if (row.userId !== userId) {
+      failed.push({ id: row.id, reason: "无权删除他人文件" });
+      continue;
+    }
+    const { permission } = resolveNotePermission(row.noteId, userId);
+    if (!hasPermission(permission, "write")) {
+      failed.push({ id: row.id, reason: "无权删除该文件" });
+      continue;
+    }
+    deletable.push(row);
+  }
+
+  // 第二步：单事务批量删 DB 行
+  let deletedCount = 0;
+  if (deletable.length > 0) {
+    const delIds = deletable.map((r) => r.id);
+    const delPlaceholders = delIds.map(() => "?").join(",");
+    const tx = db.transaction((arr: string[]) => {
+      const info = db
+        .prepare(`DELETE FROM attachments WHERE id IN (${delPlaceholders})`)
+        .run(...arr);
+      return Number(info.changes || 0);
+    });
+    deletedCount = tx(delIds);
+
+    // 第三步：删磁盘文件（DB 已经一致；磁盘层错误降级为 failed 项，
+    // 但不会让用户误以为 DB 没删——文件已经从列表里消失了）
+    const dir = getAttachmentsDir();
+    for (const row of deletable) {
+      const absPath = path.join(dir, row.path);
+      try {
+        if (fs.existsSync(absPath)) fs.unlinkSync(absPath);
+      } catch (err) {
+        failed.push({
+          id: row.id,
+          reason: `磁盘文件清理失败: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }
+  }
+
+  return c.json({
+    success: true,
+    deleted: deletedCount,
+    failed,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/files/upload
 // "无绑定笔记"上传入口：从文件管理界面直接上传文件。
 //

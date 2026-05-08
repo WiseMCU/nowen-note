@@ -1081,7 +1081,7 @@ export default function Sidebar() {
     const sourceId = moveNbTarget.id;
     // 循环引用防护
     if (newParentId && isDescendant(sourceId, newParentId)) {
-      alert(t('sidebar.moveCannotSelf'));
+      toast.error(t('sidebar.moveCannotSelf'));
       return;
     }
     // 无变化直接关闭
@@ -1111,7 +1111,7 @@ export default function Sidebar() {
       }
     } catch (err) {
       console.error("Failed to move notebook:", err);
-      alert(t('sidebar.moveFailed'));
+      toast.error(t('sidebar.moveFailed'));
       actions.refreshNotebooks();
     }
     setMoveNbTarget(null);

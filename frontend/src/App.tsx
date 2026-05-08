@@ -18,6 +18,7 @@ import { AppProvider, useApp, useAppActions, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDT
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { SiteSettingsProvider, useSiteSettings } from "@/hooks/useSiteSettings";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ConfirmProvider } from "@/components/ui/confirm";
 import Toaster from "@/components/Toaster";
 import { User } from "@/types";
 import { getServerUrl, clearServerUrl, broadcastLogout } from "@/lib/api";
@@ -686,8 +687,10 @@ function App() {
   if (shareMatch) {
     return (
       <ThemeProvider>
-        <SharedNoteView shareToken={shareMatch[1]} />
-        <Toaster />
+        <ConfirmProvider>
+          <SharedNoteView shareToken={shareMatch[1]} />
+          <Toaster />
+        </ConfirmProvider>
       </ThemeProvider>
     );
   }
@@ -695,8 +698,10 @@ function App() {
   return (
     <ThemeProvider>
       <SiteSettingsProvider>
-        <AuthGate />
-        <Toaster />
+        <ConfirmProvider>
+          <AuthGate />
+          <Toaster />
+        </ConfirmProvider>
       </SiteSettingsProvider>
     </ThemeProvider>
   );

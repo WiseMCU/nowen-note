@@ -16,6 +16,7 @@ import { Diary, DiaryStats } from "@/types";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "react-i18next";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { toast } from "@/lib/toast";
 
 // 心情选项
 const MOODS = [
@@ -181,17 +182,13 @@ function ComposeBox({ onPost }: { onPost: () => void }) {
         accepted.push(f);
       }
       if (rejected.length) {
-        // 简单提示。后续如果要替换为 toast，把 alert 换掉即可，逻辑无影响。
+        // 多条拒绝原因逐条 toast：保持视觉一致，避免原生 alert 的尴尬抬头
         const lines = rejected.map((r) =>
           r.reason === "size"
             ? t("diary.imageTooLarge").replace("{{name}}", r.name)
             : t("diary.imageTypeUnsupported").replace("{{name}}", r.name),
         );
-        try {
-          alert(lines.join("\n"));
-        } catch {
-          /* ignore */
-        }
+        for (const line of lines) toast.error(line);
       }
       if (!accepted.length) return;
 

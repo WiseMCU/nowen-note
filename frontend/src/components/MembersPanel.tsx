@@ -11,6 +11,7 @@ import { Workspace, WorkspaceMember, WorkspaceInvite, WorkspaceRole } from "@/ty
 import { Modal } from "@/components/WorkspaceSwitcher";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { confirm as confirmDialog } from "@/components/ui/confirm";
 
 const ROLE_LABEL: Record<WorkspaceRole, string> = {
   owner: "所有者",
@@ -83,7 +84,12 @@ export default function MembersPanel({ workspaceId, onClose }: Props) {
   };
 
   const handleRemove = async (userId: string, username: string) => {
-    if (!confirm(`确定要移除成员「${username}」吗？`)) return;
+    const ok = await confirmDialog({
+      title: `确定要移除成员「${username}」吗？`,
+      confirmText: "移除",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.removeWorkspaceMember(workspaceId, userId);
       toast.success("已移除");
@@ -94,7 +100,12 @@ export default function MembersPanel({ workspaceId, onClose }: Props) {
   };
 
   const handleDeleteInvite = async (inviteId: string) => {
-    if (!confirm("确定要撤销这个邀请码吗？")) return;
+    const ok = await confirmDialog({
+      title: "确定要撤销这个邀请码吗？",
+      confirmText: "撤销",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteWorkspaceInvite(workspaceId, inviteId);
       toast.success("邀请码已撤销");

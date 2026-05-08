@@ -17,6 +17,7 @@ import {
 } from "@/lib/importService";
 import { useApp, useAppActions } from "@/store/AppContext";
 import { api, withSudo } from "@/lib/api";
+import { confirm as confirmDialog } from "@/components/ui/confirm";
 import MiCloudImport from "@/components/MiCloudImport";
 import OppoCloudImport from "@/components/OppoCloudImport";
 import ICloudImport from "@/components/iCloudImport";
@@ -1564,7 +1565,12 @@ function BackupSection() {
 
   const handleDelete = async (filename: string) => {
     // 删除虽然不影响业务运行，但同样要 sudo（后端强制）；UI 仍弹 confirm 防误点
-    if (!window.confirm(t("dataManager.backup.deleteConfirm"))) return;
+    const ok = await confirmDialog({
+      title: t("dataManager.backup.deleteConfirm"),
+      confirmText: t("common.delete", "删除"),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       const out = await withSudo(
         (tk) => api.backup.remove(filename, tk),
@@ -2521,7 +2527,11 @@ function BackupDirSection(props: {
   const handleSwitch = async () => {
     if (!checkResult?.ok) return;
     // 二次 confirm —— 这是会影响所有未来备份位置的全局操作
-    if (!window.confirm(t("dataManager.backup.dirSwitchConfirm", { path: checkResult.resolved }))) {
+    const ok = await confirmDialog({
+      title: t("dataManager.backup.dirSwitchConfirm", { path: checkResult.resolved }),
+      danger: true,
+    });
+    if (!ok) {
       return;
     }
     setSwitching(true);

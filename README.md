@@ -3,6 +3,8 @@
 > 自托管的私有知识库，对标群晖 Note Station。
 >
 > A self-hosted private knowledge base. [English README](./README.en.md)
+>
+> 本项目为二次开发项目，原项目地址https://github.com/cropflre/nowen-note
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/Node-20%2B-green.svg)](https://nodejs.org/)
@@ -97,14 +99,6 @@ Android 可直接从 [Releases](https://github.com/cropflre/nowen-note/releases)
 ## 问题反馈
 
 QQ 群：`1093473044`
-
-## 支持作者
-
-如果这个项目对你有帮助，欢迎扫码请作者喝杯咖啡 ☕
-
-<p align="center">
-  <img src="./weixin.jpg" alt="微信赞赏码" width="280" />
-</p>
 
 ## 开源协议
 

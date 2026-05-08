@@ -920,12 +920,18 @@ export default function EditorPane() {
 
   const handleMoveToNotebook = useCallback(async (notebookId: string) => {
     if (!activeNote || notebookId === activeNote.notebookId) return;
+    if (activeNote.isLocked) {
+      toast.warning(t('editor.lockedBanner'));
+      return;
+    }
+    const targetName = state.notebooks.find(n => n.id === notebookId)?.name || "";
     const updated = await api.updateNote(activeNote.id, { notebookId } as any);
     actions.setActiveNote(updated);
-    actions.updateNoteInList({ id: updated.id, notebookId: updated.notebookId });
+    actions.removeNoteFromList(activeNote.id);
     setShowMoveDropdown(false);
     actions.refreshNotebooks();
-  }, [activeNote, actions]);
+    toast.success(t('noteList.bulkMoveSuccess', { count: 1 }));
+  }, [activeNote, actions, state.notebooks]);
 
   // 构建与左侧侧边栏完全一致的笔记本树
   const notebookTree = useMemo(() => buildTree(state.notebooks), [state.notebooks]);
@@ -1062,8 +1068,19 @@ export default function EditorPane() {
                 >
                   {/* 移动笔记本 */}
                   <button
-                    onClick={() => setShowMobileMoveMenu(!showMobileMoveMenu)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-tx-secondary active:bg-app-hover transition-colors"
+                    onClick={() => {
+                      if (activeNote?.isLocked) {
+                        toast.warning(t('editor.lockedBanner'));
+                        return;
+                      }
+                      setShowMobileMoveMenu(!showMobileMoveMenu);
+                    }}
+                    className={cn(
+                      "w-full flex items-center gap-2.5 px-3 py-2.5 text-sm transition-colors",
+                      activeNote?.isLocked
+                        ? "text-tx-tertiary cursor-not-allowed opacity-50"
+                        : "text-tx-secondary active:bg-app-hover"
+                    )}
                   >
                     <FolderInput size={15} className="text-tx-tertiary" />
                     <span className="flex-1 text-left">{t('editor.moveToNotebook')}</span>
@@ -1276,9 +1293,20 @@ export default function EditorPane() {
       <div className="hidden md:flex items-center justify-between px-4 py-2 border-b border-app-border bg-app-surface/30 transition-colors">
         <div className="relative">
           <button
-            onClick={() => setShowMoveDropdown(!showMoveDropdown)}
-            className="flex items-center gap-1 text-xs text-tx-tertiary hover:text-tx-secondary transition-colors rounded-md px-1.5 py-1 hover:bg-app-hover max-w-[520px]"
-            title={t('editor.moveToNotebook')}
+            onClick={() => {
+              if (activeNote?.isLocked) {
+                toast.warning(t('editor.lockedBanner'));
+                return;
+              }
+              setShowMoveDropdown(!showMoveDropdown);
+            }}
+            className={cn(
+              "flex items-center gap-1 text-xs rounded-md px-1.5 py-1 max-w-[520px] transition-colors",
+              activeNote?.isLocked
+                ? "text-tx-tertiary/50 cursor-not-allowed"
+                : "text-tx-tertiary hover:text-tx-secondary hover:bg-app-hover"
+            )}
+            title={activeNote?.isLocked ? t('editor.lockedBanner') : t('editor.moveToNotebook')}
           >
             {currentPath.length > 0 ? (
               <span className="flex items-center gap-1 min-w-0">

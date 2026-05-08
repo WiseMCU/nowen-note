@@ -1553,11 +1553,23 @@ export default function NoteList() {
     setMoveModal(null);
     setSelectedIds(new Set());
     setLastClickedId(null);
-    await fetchNotes();
-    actions.refreshNotebooks();
+
+    // 先从当前列表中移除已移动的笔记，避免刷新前的视觉跳跃
+    for (const id of ids) {
+      actions.removeNoteFromList(id);
+    }
+    // 延迟刷新，等列表移除动画完成
+    setTimeout(() => {
+      fetchNotes();
+      actions.refreshNotebooks();
+    }, 150);
 
     if (ids.length === 1) {
-      if (failed) toast.error(t('noteList.bulkMoveFailed', { error: '' }));
+      if (failed) {
+        toast.error(t('noteList.bulkMoveFailed', { error: '' }));
+      } else {
+        toast.success(t('noteList.bulkMoveSuccess', { count: 1 }));
+      }
     } else if (failed === 0) {
       toast.success(t('noteList.bulkMoveSuccess', { count: success }));
     } else if (success === 0) {

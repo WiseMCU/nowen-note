@@ -2360,14 +2360,17 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     const dom = editor.view.dom;
     const COPY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>';
     const CHECK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    // 邮箱和 URL 保持精确匹配；其余用启发式判断
     const PATTERNS: RegExp[] = [
       /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
       /https?:\/\/[^\s<>"'}\]?]+/g,
     ];
 
+    // 启发式：非中文且长度 >= 6 的 token 即可复制
     const looksCopyable = (s: string): boolean =>
       s.length >= 6 && !/[一-鿿]/.test(s);
 
+    // 按中文/中文标点拆 token；英文空格不分隔，让整个词组成为一体
     const tokenRe = /[^一-鿿　-〿＀-￯]+/g;
 
     const copyToClipboard = (text: string): Promise<boolean> => {
@@ -2420,13 +2423,16 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       return btn;
     };
 
+    // 在 textNode 上按照 ranges 拆分并插入按钮
     const patchTextNode = (node: Text) => {
       const parent = node.parentNode;
       if (!parent) return;
 
-      parent.normalize();
+      parent.normalize(); // 合并被前次 split 拆散的同级文本节点
+
       const text = parent.textContent || "";
       const allRanges: Array<{ start: number; end: number; text: string }> = [];
+      // 精确匹配：邮箱 + URL
       for (const pattern of PATTERNS) {
         pattern.lastIndex = 0;
         let m: RegExpExecArray | null;
@@ -2434,6 +2440,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
           allRanges.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
         }
       }
+      // 启发式匹配：非中文、非纯单词的较长 token
       tokenRe.lastIndex = 0;
       let tm: RegExpExecArray | null;
       while ((tm = tokenRe.exec(text)) !== null) {
@@ -2449,39 +2456,99 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
           });
         }
       }
+      if (!allRanges.length) return;
 
-      if (allRanges.length === 0) return;
+      // 过滤"夹心" token：被中文前后包围的（如"查看 supernode 进程"中的 supernode）
+      // 整段中文在前则排除（如 "root // ssh端口6022"），但中文打头时保留尾部 token
+      const firstNonCjk = text.search(/[^一-鿿\s]/);
+      const firstCjk = text.search(/[一-鿿]/);
+      if (firstNonCjk >= 0 && firstCjk >= 0 && firstNonCjk < firstCjk) return;
+      // 逐个 token 判断：前后都有中文 → 跳过
+      const filtered = allRanges.filter((r) => {
+        const before = text.substring(0, r.start);
+        const after = text.substring(r.end);
+        const hasCjkBefore = /[一-鿿]/.test(before);
+        const hasCjkAfter = /[一-鿿]/.test(after);
+        return !(hasCjkBefore && hasCjkAfter);
+      });
+      if (!filtered.length) return;
 
-      // Sort by start position descending to avoid offset shifts
-      allRanges.sort((a, b) => b.start - a.start);
+      filtered.sort((a, b) => a.start - b.start || b.end - a.end);
+      // 合并重叠区间（同位置的重复匹配，保留最长）
+      const merged: typeof allRanges = [];
+      for (const r of filtered) {
+        const last = merged[merged.length - 1];
+        if (last && r.start < last.end) {
+          if (r.text.length > last.text.length) { last.text = r.text; last.end = r.end; }
+        } else { merged.push({ ...r }); }
+      }
 
-      const walker = document.createTreeWalker(parent, NodeFilter.SHOW_TEXT);
-      let currentNode: Text | null = walker.nextNode() as Text;
-      while (currentNode) {
-        const nodeText = currentNode.textContent || "";
-        const nodeStart = text.indexOf(nodeText);
-        if (nodeStart === -1) {
-          currentNode = walker.nextNode() as Text;
-          continue;
+      // 找 normalize 后的第一个文本节点
+      let cursor: Text | null = null;
+      for (let c = parent.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType === 3 && (c.textContent?.length || 0) > 0) { cursor = c as Text; break; }
+      }
+      if (!cursor) return;
+
+      let consumed = 0;
+      for (const r of merged) {
+        let curText = cursor.textContent || "";
+        let localStart = r.start - consumed;
+        let localEnd = r.end - consumed;
+
+        if (localStart > curText.length) continue;
+
+        // 拆分起始位置
+        if (localStart > 0) {
+          cursor = cursor.splitText(localStart);
+          localEnd -= localStart;
+          curText = cursor.textContent || "";
         }
 
-        for (const range of allRanges) {
-          if (range.start >= nodeStart && range.end <= nodeStart + nodeText.length) {
-            const localStart = range.start - nodeStart;
-            const localEnd = range.end - nodeStart;
-            const after = currentNode.splitText(localEnd);
-            const match = currentNode.splitText(localStart);
-            const btn = makeBtn(range.text);
-            parent.insertBefore(btn, after);
+        // 范围跨出当前文本节点 → 找到 r.end 在父节点中的 DOM 位置
+        if (localEnd > (cursor.textContent?.length || 0)) {
+          let offset = 0;
+          let insertAfter: Node | null = null;
+          for (let c = parent.firstChild; c; c = c.nextSibling) {
+            offset += (c.textContent || "").length;
+            if (offset >= r.end) {
+              insertAfter = c;
+              break;
+            }
           }
+          const btn = makeBtn(r.text);
+          if (insertAfter) {
+            parent.insertBefore(btn, insertAfter.nextSibling);
+          } else {
+            parent.appendChild(btn);
+          }
+          cursor = null;
+          consumed = r.end;
+          break;
         }
 
-        currentNode = walker.nextNode() as Text;
+        // 正常路径：范围完全在当前文本节点内
+        const matchLen = localEnd;
+        if (matchLen > 0 && matchLen < (cursor.textContent?.length || 0)) {
+          cursor.splitText(matchLen);
+        }
+        const btn = makeBtn(r.text);
+        parent.insertBefore(btn, cursor.nextSibling);
+        const next = btn.nextSibling;
+        cursor = (next && next.nodeType === 3) ? next as Text : null;
+        consumed = r.end;
+        if (!cursor) break;
       }
     };
 
-    const scan = () => {
-      dom.querySelectorAll(".locked-copy-btn").forEach((btn) => btn.remove());
+    // 应用按钮：用 rAF 自循环避免 observer 递归，同时去重
+    let applyTimer = 0;
+    let applying = false;
+    const applyButtons = () => {
+      if (applying) return;
+      applying = true;
+      dom.querySelectorAll(".locked-copy-btn").forEach((b) => b.remove());
+
       const walker = document.createTreeWalker(dom, NodeFilter.SHOW_TEXT);
       const textNodes: Text[] = [];
       let node: Text | null;
@@ -2489,16 +2556,22 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
         textNodes.push(node);
       }
       textNodes.forEach(patchTextNode);
+      applying = false;
     };
 
-    const t1 = setTimeout(scan, 100);
-    const t2 = setTimeout(scan, 500);
-    const t3 = setTimeout(scan, 1500);
+    // 首次渲染后 + MutationObserver 自动补扫
+    applyTimer = requestAnimationFrame(applyButtons);
+    const observer = new MutationObserver(() => {
+      if (!applying) {
+        cancelAnimationFrame(applyTimer);
+        applyTimer = requestAnimationFrame(applyButtons);
+      }
+    });
+    observer.observe(dom, { childList: true, subtree: true, characterData: true });
 
     return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
+      cancelAnimationFrame(applyTimer);
+      observer.disconnect();
       dom.querySelectorAll(".locked-copy-btn").forEach((btn) => btn.remove());
     };
   }, [editor, editable]);

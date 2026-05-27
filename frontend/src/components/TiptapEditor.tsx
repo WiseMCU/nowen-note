@@ -2353,7 +2353,155 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     }
   }, [editor, editable]);
 
+  // 锁定笔记复制按钮：仅在 !editable 时通过 DOM splitText 精准定位
+  useEffect(() => {
+    if (!editor || editable || !editor.view?.dom) return;
 
+    const dom = editor.view.dom;
+    const COPY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>';
+    const CHECK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    const PATTERNS: RegExp[] = [
+      /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+      /https?:\/\/[^\s<>"'}\]?]+/g,
+    ];
+
+    const looksCopyable = (s: string): boolean =>
+      s.length >= 6 && !/[一-鿿]/.test(s);
+
+    const tokenRe = /[^一-鿿　-〿＀-￯]+/g;
+
+    const copyToClipboard = (text: string): Promise<boolean> => {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).then(() => true);
+      }
+      return new Promise((resolve) => {
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.cssText = "position:fixed;left:-9999px;top:-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          resolve(document.execCommand("copy"));
+          document.body.removeChild(ta);
+        } catch { resolve(false); }
+      });
+    };
+
+    const makeBtn = (text: string): HTMLElement => {
+      const btn = document.createElement("span");
+      btn.className = "locked-copy-btn";
+      btn.contentEditable = "false";
+      btn.style.cssText =
+        "display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin:0 3px;vertical-align:middle;border-radius:6px;cursor:pointer;background:rgba(139,92,246,0.1);color:#7c3aed;flex-shrink:0;pointer-events:auto;";
+      btn.title = "点击复制";
+      btn.dataset.copyText = text;
+      btn.innerHTML = COPY_SVG;
+      btn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.dataset.copied === "1") return;
+        const ok = await copyToClipboard(text);
+        if (ok) {
+          btn.innerHTML = CHECK_SVG;
+          btn.style.background = "rgba(16,185,129,0.15)";
+          btn.style.color = "#10b981";
+          btn.dataset.copied = "1";
+          btn.title = "已复制";
+          toast.success("已复制", 1200);
+          setTimeout(() => {
+            btn.innerHTML = COPY_SVG;
+            btn.style.background = "rgba(139,92,246,0.1)";
+            btn.style.color = "#7c3aed";
+            delete btn.dataset.copied;
+            btn.title = "点击复制";
+          }, 1200);
+        }
+      };
+      return btn;
+    };
+
+    const patchTextNode = (node: Text) => {
+      const parent = node.parentNode;
+      if (!parent) return;
+
+      parent.normalize();
+      const text = parent.textContent || "";
+      const allRanges: Array<{ start: number; end: number; text: string }> = [];
+      for (const pattern of PATTERNS) {
+        pattern.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = pattern.exec(text)) !== null) {
+          allRanges.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
+        }
+      }
+      tokenRe.lastIndex = 0;
+      let tm: RegExpExecArray | null;
+      while ((tm = tokenRe.exec(text)) !== null) {
+        const raw = tm[0];
+        const trimmed = raw.trim();
+        if (looksCopyable(trimmed)) {
+          const leading = raw.length - raw.trimStart().length;
+          const trailing = raw.length - raw.trimEnd().length;
+          allRanges.push({
+            start: tm.index + leading,
+            end: tm.index + raw.length - trailing,
+            text: trimmed,
+          });
+        }
+      }
+
+      if (allRanges.length === 0) return;
+
+      // Sort by start position descending to avoid offset shifts
+      allRanges.sort((a, b) => b.start - a.start);
+
+      const walker = document.createTreeWalker(parent, NodeFilter.SHOW_TEXT);
+      let currentNode: Text | null = walker.nextNode() as Text;
+      while (currentNode) {
+        const nodeText = currentNode.textContent || "";
+        const nodeStart = text.indexOf(nodeText);
+        if (nodeStart === -1) {
+          currentNode = walker.nextNode() as Text;
+          continue;
+        }
+
+        for (const range of allRanges) {
+          if (range.start >= nodeStart && range.end <= nodeStart + nodeText.length) {
+            const localStart = range.start - nodeStart;
+            const localEnd = range.end - nodeStart;
+            const after = currentNode.splitText(localEnd);
+            const match = currentNode.splitText(localStart);
+            const btn = makeBtn(range.text);
+            parent.insertBefore(btn, after);
+          }
+        }
+
+        currentNode = walker.nextNode() as Text;
+      }
+    };
+
+    const scan = () => {
+      dom.querySelectorAll(".locked-copy-btn").forEach((btn) => btn.remove());
+      const walker = document.createTreeWalker(dom, NodeFilter.SHOW_TEXT);
+      const textNodes: Text[] = [];
+      let node: Text | null;
+      while ((node = walker.nextNode() as Text)) {
+        textNodes.push(node);
+      }
+      textNodes.forEach(patchTextNode);
+    };
+
+    const t1 = setTimeout(scan, 100);
+    const t2 = setTimeout(scan, 500);
+    const t3 = setTimeout(scan, 1500);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      dom.querySelectorAll(".locked-copy-btn").forEach((btn) => btn.remove());
+    };
+  }, [editor, editable]);
 
   // ---------- 链接编辑：弹项目统一 prompt 弹窗，工具栏 & 链接气泡共用 ----------
   // 抽成共享回调避免两处重复 ~40 行 prompt + 解析 + apply 逻辑。

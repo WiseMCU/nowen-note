@@ -853,6 +853,14 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
   // 脱壳：整段被 ```markdown ... ``` 包裹时，剥掉外层
   content = unwrapOuterMarkdownFence(content);
 
+  // 将连续空白行还原为 <p>&nbsp;</p>（空段落）。
+  // 导出端用 <br/> 占位，Turndown → `  \n\n\n`，postProcess → `\n\n\n\n`
+  // 即每个空段 = \n\n\n\n。这里检测 \n\n\n\n → 1空段，\n\n\n\n\n\n → 2空段……
+  content = content.replace(/\n{4,}/g, (match) => {
+    const blanks = (match.length / 2) - 1;
+    return "\n\n" + "<!--blank-->".repeat(blanks) + "\n\n";
+  });
+
   // 使用 marked 解析 Markdown → HTML
   // marked 是业界成熟的 CommonMark 兼容解析器，正确处理嵌套围栏代码块、表格、任务列表等
   const renderer = new Renderer();
@@ -877,12 +885,13 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
   marked.use({ renderer, gfm: true, breaks: false });
 
   const html = marked.parse(content) as string;
+  const result = html.replace(/<!--blank-->/g, "<p>&nbsp;</p>");
   // 规范化 marked 输出的 GFM 表格 HTML，使其符合 Tiptap table schema
   // （否则带表格的 md 在下游 generateJSON 时会产出非法 content，触发
   //  ProseMirror 的 "Called contentMatchAt on a node with invalid content"）
   // 同时把 GFM 任务列表（- [x] / - [ ]）改写成 Tiptap TaskList 格式，
   // 否则会被 schema 当成普通 <ul>，checkbox 直接丢失退化成无序列表。
-  return normalizeTaskListHtml(normalizeTableHtml(html));
+  return normalizeTaskListHtml(normalizeTableHtml(result));
 }
 
 // 把 marked 输出的 GFM 任务列表 HTML 改写成 Tiptap TaskList/TaskItem 期望的形态。

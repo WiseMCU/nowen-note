@@ -1283,6 +1283,7 @@ export default function NoteList() {
     sourceWorkspaceId: string | null;
   } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerMode, setPickerMode] = useState<"create" | "import">("create");
   // 新建按钮的下拉菜单（普通笔记 / Word 文档）。
   // 默认行为是单击 + 按钮直接走 normal；下拉箭头点开后才能选 word。
   // 三个 + 按钮各自一个 ref（桌面顶部 / 移动顶部 / 移动 FAB）；
@@ -1330,6 +1331,9 @@ export default function NoteList() {
     ghostEl: HTMLDivElement | null;
   } | null>(null);
   const noteCardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  // Markdown 导入相关
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+  const pendingImportNotebookRef = useRef<string | null>(null);
   // 非虚拟列表分支用 Radix ScrollArea 包裹，需要在切换筛选条件时把内部 viewport
   // 滚动复位。Radix 的 ScrollArea forwardRef 暴露的是 Root 节点，真正的滚动容器
   // 是它内部带 data-radix-scroll-area-viewport 的子节点。
@@ -1717,6 +1721,62 @@ export default function NoteList() {
       toast.error(err?.message || t('noteList.createFailed'));
     }
   };
+
+  // Markdown 导入功能
+  const handleImportClick = useCallback(() => {
+    if (state.notebooks.length === 0) {
+      toast.warning(t('common.needNotebookFirst'));
+      return;
+    }
+    let notebookId = state.selectedNotebookId;
+    if (!notebookId) {
+      if (state.notebooks.length === 1) {
+        notebookId = state.notebooks[0].id;
+      } else {
+        setPickerMode("import");
+        setPickerOpen(true);
+        return;
+      }
+    }
+    pendingImportNotebookRef.current = notebookId;
+    importFileInputRef.current?.click();
+  }, [state.notebooks, state.selectedNotebookId, t]);
+
+  const handleImportFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || !files.length) return;
+    const notebookId = pendingImportNotebookRef.current || state.selectedNotebookId;
+    pendingImportNotebookRef.current = null;
+    if (!notebookId) return;
+    await executeImport(files, notebookId);
+  }, [state.selectedNotebookId]);
+
+  const executeImport = useCallback(async (files: FileList, notebookId: string) => {
+    const notebook = state.notebooks.find(n => n.id === notebookId);
+    try {
+      const { readMarkdownFiles, readMarkdownFromZip, importNotes } = await import("@/lib/importService");
+      const fileArray = Array.from(files);
+      const zipFile = fileArray.find(f => f.name.endsWith(".zip"));
+      const fileInfos = zipFile
+        ? await readMarkdownFromZip(zipFile)
+        : await readMarkdownFiles(files);
+      const selected = fileInfos.filter(f => f.selected);
+      if (!selected.length) {
+        toast.error("未找到可导入的文件（支持 .md / .txt / .html / .zip）");
+        return;
+      }
+      const toastId = toast.info(`正在导入 ${selected.length} 个文件到"${notebook?.name || ""}"...`, 0);
+      const result = await importNotes(fileInfos, notebookId);
+      toast.dismiss(toastId);
+      toast.success(`成功导入 ${result.count} 篇笔记到"${notebook?.name || ""}"`);
+      actions.refreshNotebooks();
+      fetchNotes();
+    } catch (err: any) {
+      toast.error(err?.message || "导入失败");
+    } finally {
+      if (importFileInputRef.current) importFileInputRef.current.value = "";
+    }
+  }, [state.notebooks, actions, fetchNotes]);
 
   // =========================================================================
   // P4：批量 AI 操作
@@ -2634,6 +2694,16 @@ export default function NoteList() {
               <ArrowUpDown size={18} />
             </button>
           )}
+          {/* 导入 Markdown 按钮 */}
+          {state.viewMode !== "trash" && state.viewMode !== "search" && (
+            <button
+              onClick={handleImportClick}
+              className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
+              title={t("sidebar.importMarkdown") || "导入 Markdown"}
+            >
+              <Upload size={18} />
+            </button>
+          )}
           {state.viewMode === "trash" ? (
             // 回收站视图下用"一键清空"按钮替换"新建"——后者在回收站语义不通且会被禁止；
             // 通过自定义事件复用 Sidebar 已有的清空确认弹窗（含锁定检测 / 体量统计 / VACUUM 提示）。
@@ -2703,6 +2773,16 @@ export default function NoteList() {
               title={t("noteList.sortBy")}
             >
               <ArrowUpDown size={15} />
+            </button>
+          )}
+          {/* 导入 Markdown 按钮 */}
+          {state.viewMode !== "trash" && state.viewMode !== "search" && (
+            <button
+              onClick={handleImportClick}
+              className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
+              title={t("sidebar.importMarkdown") || "导入 Markdown"}
+            >
+              <Upload size={15} />
             </button>
           )}
           {state.viewMode === "trash" ? (
@@ -3086,18 +3166,24 @@ export default function NoteList() {
         onClose={() => setMoveModal(null)}
       />
 
-      {/* 新建笔记 - 笔记本选择器 */}
+      {/* 新建笔记 / 导入 Markdown - 笔记本选择器 */}
       <NotebookPickerModal
         isOpen={pickerOpen}
         notebooks={state.notebooks}
         onPick={async (nbId) => {
           setPickerOpen(false);
-          await createNoteInNotebook(nbId, pendingNoteType);
-          setPendingNoteType("normal"); // 用完归位，避免下次默认到 word
+          if (pickerMode === "import") {
+            pendingImportNotebookRef.current = nbId;
+            importFileInputRef.current?.click();
+          } else {
+            await createNoteInNotebook(nbId, pendingNoteType);
+            setPendingNoteType("normal"); // 用完归位，避免下次默认到 word
+          }
         }}
         onClose={() => {
           setPickerOpen(false);
           setPendingNoteType("normal");
+          setPickerMode("create");
         }}
       />
 
@@ -3134,6 +3220,16 @@ export default function NoteList() {
           setPendingClassify((prev) => prev ? prev.map((p) => ({ ...p, checked })) : prev);
         }}
         onConfirm={confirmClassifyPlan}
+      />
+
+      {/* 隐藏的 Markdown 导入文件输入 */}
+      <input
+        ref={importFileInputRef}
+        type="file"
+        accept=".md,.txt,.html,.htm,.zip"
+        multiple
+        className="hidden"
+        onChange={handleImportFiles}
       />
     </div>
   );

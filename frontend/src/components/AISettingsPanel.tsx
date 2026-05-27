@@ -3,6 +3,7 @@ import { Bot, Loader2, Check, RefreshCw, Eye, EyeOff, ChevronDown, Zap, CircleCh
 import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { toast } from "@/lib/toast";
 
 interface AISettingsState {
   ai_provider: string;

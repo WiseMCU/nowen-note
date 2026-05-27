@@ -1,0 +1,96 @@
+# Docker 镜像自动构建与发布
+#
+# 触发条件：
+#   - 推送 develop 分支，且 package.json 版本号发生变化 → 自动构建
+#   - workflow_dispatch                                      → 手动触发
+#
+# 需要配置 GitHub Secrets：
+#   DOCKERHUB_USERNAME  : Docker Hub 用户名
+#   DOCKERHUB_TOKEN     : Docker Hub 访问令牌
+#     (在 https://hub.docker.com/settings/security 创建)
+
+name: Docker Build & Publish
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - "package.json"
+  workflow_dispatch:
+
+jobs:
+  # ---------- 第一步：检测版本是否真的变化 ----------
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
+      version: ${{ steps.detect.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect version change
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CUR=$(node -e "console.log(require('./package.json').version)")
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "version=$CUR" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          CUR=$(node -e "console.log(require('./package.json').version)")
+          PREV=$(git show HEAD~1:package.json | node -e "process.stdin.on('data',d=>{console.log(JSON.parse(d).version)})" 2>/dev/null || echo "")
+          if [ "$CUR" != "$PREV" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "version=$CUR" >> $GITHUB_OUTPUT
+            echo "Version changed: $PREV → $CUR"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Version unchanged ($CUR), skipping Docker build"
+          fi
+
+  # ---------- 第二步：构建并推送 ----------
+  docker:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/nowen-note:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/nowen-note:v${{ needs.check.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/nowen-note
+          readme-filepath: ./docker/description.md

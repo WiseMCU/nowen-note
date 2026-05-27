@@ -1,55 +1,13 @@
-# =============================================================================
-# nowen-note .dockerignore
-# 目的：收窄 docker build 上下文，避免把 node_modules / 构建产物 / 桌面端资源
-# 一并传进 builder，既加速构建、也让层更小（防止意外拖进 238MB 级别的垃圾）。
-# =============================================================================
-
-# --- 版本控制 / CI ---
+# Build context exclusions — reduce size sent to Docker daemon
 .git
 .github
-.gitignore
-.gitattributes
-
-# --- 文档 / 周边（镜像运行时都用不到）---
-*.md
-docs
-weixin.jpg
-LICENSE
-
-# --- Node 依赖 / 构建产物（容器里会重新 npm ci + build）---
-**/node_modules
-**/dist
-**/dist-electron
-**/dist-fpk
-**/build
-**/.cache
-**/.turbo
-**/.next
-**/coverage
-**/*.log
-**/npm-debug.log*
-
-# --- 桌面端 / 移动端（Docker 镜像不需要）---
-electron
-android
-ios
-capacitor.config.*
-build-resources
-
-# --- 飞牛 fpk / 打包脚本临时产物 ---
-scripts/fpk/work
-scripts/fpk/dist
+node_modules
+backend/node_modules
+frontend/node_modules
+build
 release
-out
-
-# --- IDE / 系统文件 ---
-.vscode
-.idea
+data
+*.log
+.env
 .DS_Store
 Thumbs.db
-*.swp
-
-# --- 仅桌面端使用的重依赖 ---
-# sharp / electron / electron-builder 只在 electron:build 时需要，
-# 容器里一律不用；根 package.json 整个我们也不 COPY，但保险起见列一下
-electron-builder.yml

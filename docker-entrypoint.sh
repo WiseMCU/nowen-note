@@ -62,5 +62,43 @@ else
   echo "[entrypoint] JWT_SECRET provided via environment (length=$(printf %s "$JWT_SECRET" | wc -c)), using as-is"
 fi
 
+# =============================================================================
+# 管理员密码重置
+# -----------------------------------------------------------------------------
+# 如果忘记管理员密码，在 docker run / docker-compose 中设置环境变量：
+#   NOWEN_RESET_PASSWORD=新密码
+# 容器启动时自动将 admin 密码重置为指定值，并在 /app/data 写入
+# .password_reset_done 标记文件。后续重启即使环境变量还在也不会再次重置，
+# 避免每次重启都被改回同一个密码。
+#
+# 如需再次重置：删除数据卷中的 .password_reset_done 并重新设置该环境变量。
+#
+# 用法示例：
+#   docker run -e NOWEN_RESET_PASSWORD=mypass123 ... wisemcu/nowen-note:latest
+# =============================================================================
+if [ -n "${NOWEN_RESET_PASSWORD:-}" ]; then
+  RESET_FLAG="$DATA_DIR/.password_reset_done"
+  if [ -f "$RESET_FLAG" ]; then
+    echo "[entrypoint] .password_reset_done 标记已存在，跳过密码重置"
+    echo "[entrypoint]   → 如需再次重置，请删除数据卷中的 .password_reset_done 后重启"
+  else
+    echo "[entrypoint] NOWEN_RESET_PASSWORD 已设置，正在重置管理员密码..."
+    node -e "
+      const bcrypt = require('./backend/node_modules/bcryptjs');
+      const Database = require('./backend/node_modules/better-sqlite3');
+      const db = new Database('$DB_PATH');
+      const hash = bcrypt.hashSync('$NOWEN_RESET_PASSWORD', 10);
+      const info = db.prepare('UPDATE users SET passwordHash = ? WHERE username = ?').run(hash, 'admin');
+      db.close();
+      if (info.changes > 0) {
+        console.log('[entrypoint] ✓ 管理员 admin 密码已重置');
+      } else {
+        console.log('[entrypoint] ✗ 未找到 admin 用户，请确认数据库正常');
+      }
+    "
+    touch "$RESET_FLAG"
+  fi
+fi
+
 # 交棒给原 CMD
 exec "$@"

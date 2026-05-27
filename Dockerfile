@@ -1,96 +1,95 @@
 # =============================================================================
-# nowen-note 多架构 Dockerfile（Alpine 精简版）
+# nowen-note 多架构 Dockerfile（极致精简版 v2）
 # -----------------------------------------------------------------------------
-# 支持 linux/amd64 与 linux/arm64。较旧的 slim 版本镜像约 238MB，
-# 改用 alpine 基座 + 构建工具链 virtual 卸载 + musl 原生编译后约 85–95MB。
-#
-# 关键设计：
-#   - 基础镜像：node:20-alpine（~42MB），而非 node:20-slim（~150MB）
-#   - better-sqlite3 / sqlite-vec 在 musl 下需要本地编译 → 用 --virtual
-#     安装构建链，npm ci 完立即 `apk del`，不留任何构建产物在运行层
-#   - rollup 的原生绑定根据 TARGETARCH 选 musl 版（linux-*-musl）而不是 gnu
-#   - QEMU 模拟 arm64 编译 better-sqlite3 仍然会慢，属预期
+# 支持 linux/amd64 与 linux/arm64
+# 优化：UPX 压缩 Node.js 二进制 + 裸 Alpine 运行时
 # =============================================================================
 
 ARG TARGETARCH=amd64
 
 # ---------- Stage 1: 前端构建 ----------
-FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-build
+FROM --platform=$BUILDPLATFORM node:20-slim AS frontend-build
 ARG TARGETARCH
 WORKDIR /app/frontend
 
-# 根 package.json 被 vite.config.ts 读取用于注入 __APP_VERSION__
 COPY package.json /app/package.json
-
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci
 
-# rollup 原生绑定按目标架构选 musl 版（alpine 必须 musl，不能用 gnu）
 RUN ROLLUP_VER=$(node -e "try{const l=require('./package-lock.json');const v=(l.packages||{})['node_modules/rollup']||(l.dependencies||{}).rollup||{};console.log(v.version||'')}catch(e){console.log('')}") && \
     [ -z "$ROLLUP_VER" ] && ROLLUP_VER="4.59.0" ; \
     case "$TARGETARCH" in \
-      amd64) ROLLUP_PKG="@rollup/rollup-linux-x64-musl@${ROLLUP_VER}" ;; \
-      arm64) ROLLUP_PKG="@rollup/rollup-linux-arm64-musl@${ROLLUP_VER}" ;; \
+      amd64) ROLLUP_PKG="@rollup/rollup-linux-x64-gnu@${ROLLUP_VER}" ;; \
+      arm64) ROLLUP_PKG="@rollup/rollup-linux-arm64-gnu@${ROLLUP_VER}" ;; \
       *)     ROLLUP_PKG="" ;; \
     esac; \
     if [ -n "$ROLLUP_PKG" ]; then \
-      echo "Installing $ROLLUP_PKG ..." && \
-      npm install "$ROLLUP_PKG" --save-optional --no-audit --no-fund 2>/dev/null || true; \
+      npm install "$ROLLUP_PKG" --save-optional 2>/dev/null || true; \
     fi
 
 COPY frontend/ .
 RUN npx vite build
 
-# ---------- Stage 2: 后端构建（tsc） ----------
+# ---------- Stage 2: 后端构建 ----------
 FROM node:20-alpine AS backend-build
+RUN apk add --no-cache python3 make g++
 WORKDIR /app/backend
-
-# tsc 纯 JS 架构无关，但 npm ci 会触发 better-sqlite3 / sqlite-vec 编译
-RUN apk add --no-cache --virtual .build-deps python3 make g++ linux-headers
-
 COPY backend/package.json backend/package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci
 COPY backend/ .
-RUN npx tsc
+RUN npx tsc && \
+    rm -rf node_modules && \
+    npm ci --omit=dev && \
+    find ./node_modules -type d \( \
+      -name test -o -name tests -o -name __tests__ \
+      -o -name doc -o -name docs -o -name example -o -name examples \
+      -o -name .github -o -name benchmark -o -name benchmarks \
+      -o -name spec -o -name specs -o -name fixture -o -name fixtures \
+      -o -name sample -o -name samples -o -name demo -o -name demos \
+      -o -name coverage -o -name .circleci -o -name .travis \) \
+      -exec rm -rf {} + 2>/dev/null || true && \
+    find ./node_modules -type f \( \
+      -name "*.md" -o -name "*.ts" -o -name "*.map" -o -name "*.d.ts" \
+      -o -name "*.flow" -o -name ".eslintrc*" -o -name ".prettierrc*" \
+      -o -name "tsconfig*.json" -o -name "jest.config*" -o -name "*.gyp" \
+      -o -name ".npmignore" -o -name ".npmrc" -o -name "Makefile" \
+      -o -name "LICENSE" -o -name "LICENCE" -o -name "CHANGELOG*" \
+      -o -name "HISTORY*" -o -name "CONTRIBUTING*" -o -name "CODE_OF_CONDUCT*" \
+      -o -name "SECURITY*" -o -name "AUTHORS*" -o -name "*.yml" -o -name "*.yaml" \
+      -o -name "*.ini" -o -name "*.toml" -o -name "*.xml" -o -name "*.html" \) \
+      -delete 2>/dev/null || true && \
+    find ./node_modules -type d -name "build" -exec sh -c ' \
+      for d; do find "$d" -type f ! -name "*.node" ! -name "*.so" -delete 2>/dev/null || true; done \
+    ' _ {} + && \
+    find ./node_modules -type d -empty -delete 2>/dev/null || true && \
+    rm -rf /root/.npm /root/.cache /tmp/*
 
-# build-deps 在这个 stage 用不着保留，最终运行时镜像会从 runtime stage 重新编译
-RUN apk del .build-deps
+# ---------- Stage 3: UPX 压缩 Node.js ----------
+FROM alpine:3.21 AS node-compress
+# 下载 UPX 并压缩从 build 阶段来的 node 二进制
+RUN wget -q "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-amd64_linux.tar.xz" -O /tmp/upx.tar.xz && \
+    tar -xf /tmp/upx.tar.xz -C /tmp && \
+    mv /tmp/upx-*/upx /usr/local/bin/ && \
+    rm -rf /tmp/upx*
+COPY --from=backend-build /usr/local/bin/node /tmp/node
+RUN upx --best -o /usr/local/bin/node /tmp/node && \
+    rm /tmp/node
 
-# ---------- Stage 3: 运行时镜像 ----------
-FROM node:20-alpine
+# ---------- Stage 4: 运行时 ----------
+FROM alpine:3.21 AS runtime
+RUN apk add --no-cache libstdc++ libgcc
+COPY --from=node-compress /usr/local/bin/node /usr/local/bin/node
 WORKDIR /app
 
-# tini 提供 PID 1 信号转发，15KB，避免容器 kill 时僵尸进程
-RUN apk add --no-cache tini
-
-# 运行时依赖（production only）：独立编译一次，确保 .node 是 musl 版
-COPY backend/package.json backend/package-lock.json ./backend/
-RUN apk add --no-cache --virtual .build-deps python3 make g++ linux-headers \
-    && cd backend && npm ci --omit=dev --no-audit --no-fund \
-    && apk del .build-deps \
-    && npm cache clean --force \
-    && rm -rf /root/.npm /tmp/* /var/cache/apk/*
-
+COPY --from=backend-build /app/backend/node_modules ./backend/node_modules
 COPY --from=backend-build /app/backend/dist ./backend/dist
 COPY backend/templates ./backend/templates
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
-RUN mkdir -p /app/data
-
-# 数据卷（见原 Dockerfile 注释：便于 NAS 面板自动识别）
-VOLUME ["/app/data"]
-
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /app/data
 
-# ---- 版本/构建元信息（由 release.sh 通过 --build-arg 注入；本机 docker build 也兼容空值） ----
-# BUILD_DATE   : ISO8601 UTC，如 2026-05-09T10:23:01Z；run-time 通过 NOWEN_BUILD_TIME 暴露给 /api/version
-# APP_VERSION  : 形如 1.0.31，写入 NOWEN_APP_VERSION 兜底（即便镜像里 package.json 与发版号偏差也不会报错）
-# 这两个 ARG 都是可选的——空字符串场景下后端 resolveAppVersion()/resolveBuildTime() 仍会走原有 fallback。
-ARG BUILD_DATE=""
-ARG APP_VERSION=""
-ENV NOWEN_BUILD_TIME=${BUILD_DATE}
-ENV NOWEN_APP_VERSION=${APP_VERSION}
+VOLUME ["/app/data"]
 
 ENV NODE_ENV=production
 ENV DB_PATH=/app/data/nowen-note.db
@@ -98,6 +97,5 @@ ENV PORT=3001
 
 EXPOSE 3001
 
-WORKDIR /app
-ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "backend/dist/index.js"]

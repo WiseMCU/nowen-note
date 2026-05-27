@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader2, Lock, User, BookOpen, CheckCircle2, AlertCircle, Mail, UserPlus, ShieldCheck, Eye, EyeOff, Sparkles } from "lucide-react";
+import { Loader2, Lock, User, BookOpen, CheckCircle2, AlertCircle, Mail, UserPlus, ShieldCheck, Eye, EyeOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getServerUrl, setServerUrl, clearServerUrl, testServerConnection, fetchRegisterConfig, registerAccount } from "@/lib/api";
 import { buildServerUrl, parseServerUrl, type ServerAddressParts } from "@/lib/serverUrl";
@@ -23,12 +23,6 @@ interface LoginPageProps {
 }
 
 type Mode = "login" | "register";
-
-// 体验环境配置（仅 demo 站点构建时通过 VITE_DEMO_MODE=true 开启；自部署用户默认 false）。
-// 账号/密码可通过 VITE_DEMO_USERNAME / VITE_DEMO_PASSWORD 覆盖，未设置时使用默认值。
-const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
-const DEMO_USERNAME = import.meta.env.VITE_DEMO_USERNAME || "demo";
-const DEMO_PASSWORD = import.meta.env.VITE_DEMO_PASSWORD || "demo123456";
 
 export default function LoginPage({ onLogin, isClientMode = false, onDisconnect }: LoginPageProps) {
   const [mode, setMode] = useState<Mode>("login");
@@ -597,32 +591,6 @@ export default function LoginPage({ onLogin, isClientMode = false, onDisconnect 
 
           {/* 体验环境提示卡片（仅 VITE_DEMO_MODE=true 构建时 + 登录模式 + 非 2FA 阶段显示）。
               一键填入只填用户名/密码到输入框，不会自动提交，让用户自己点登录按钮。 */}
-          {DEMO_MODE && !isRegister && !twoFactor && (
-            <div className="mb-4 p-3 rounded-xl border border-indigo-200/70 dark:border-indigo-500/30 bg-gradient-to-br from-indigo-50 to-purple-50/50 dark:from-indigo-500/10 dark:to-purple-500/5">
-              <div className="flex items-start gap-2.5">
-                <Sparkles className="w-4 h-4 mt-0.5 flex-shrink-0 text-indigo-600 dark:text-indigo-400" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-indigo-900 dark:text-indigo-200">
-                    {t("auth.demoBanner.title")}
-                  </p>
-                  <p className="text-[11px] mt-0.5 text-indigo-700/80 dark:text-indigo-300/80 leading-relaxed">
-                    {t("auth.demoBanner.desc", { username: DEMO_USERNAME, password: DEMO_PASSWORD })}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUsername(DEMO_USERNAME);
-                      setPassword(DEMO_PASSWORD);
-                      setError("");
-                    }}
-                    className="mt-2 inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-400 text-white transition-colors"
-                  >
-                    {t("auth.demoBanner.fillButton")}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
           <form ref={formRef} onSubmit={handleSubmit} className="space-y-4">
             {/* Phase 6: 2FA 面板（取代登录表单） */}

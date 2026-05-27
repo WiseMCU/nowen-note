@@ -21,8 +21,6 @@
     "build:frontend": "cd frontend && npm run build",
     "build:backend": "cd backend && npm run build",
     "build:all": "npm run build:backend && npm run build:frontend",
-    "cap:sync:ios": "cd frontend && npm run build && npx cap sync ios",
-    "cap:open:ios": "cd frontend && npx cap open ios",
     "zip": "node scripts/export-zip.mjs",
     "zip:jszip": "node scripts/export-zip-jszip.mjs",
     "fpk": "node scripts/fpk/build-fpk.mjs",

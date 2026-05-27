@@ -91,6 +91,7 @@
     "importWordNote": "Import Word Document",
     "importUrlNote": "Import Article from URL",
     "importUrlPrompt": "Paste a WeChat article URL (https://mp.weixin.qq.com/s/...)",
+    "importMarkdown": "Import Markdown",
     "newSubNotebook": "New Sub-Notebook",
     "railMode": {
       "switchTo": {
@@ -223,6 +224,7 @@
     "aiClassifyTip": "Recommend the best notebook based on note content",
     "aiClassifyNoSuggestion": "AI did not find a better notebook suggestion",
     "aiClassifyFailed": "AI classify request failed",
+    "aiNotConfigured": "Please configure AI service in Settings",
     "unpinTooltip": "Unpin",
     "pinTooltip": "Pin",
     "unfavoriteTooltip": "Unfavorite",

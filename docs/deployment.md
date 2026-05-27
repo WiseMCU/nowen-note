@@ -215,29 +215,6 @@ storeFile=你的keystore路径
 
 ## 方式七：飞牛 fnOS 安装
 
-飞牛 fnOS 有两种安装方式，**强烈推荐方式 A（.fpk 一键安装）**。
-
-### A. .fpk 一键安装（推荐）
-
-**步骤：**
-
-1. **下载 .fpk**
-   - 从 [GitHub Releases](https://github.com/cropflre/nowen-note/releases) 下载最新的 `nowen-note-<version>.fpk`
-
-2. **手动安装**
-   - 把 `.fpk` 文件上传到飞牛 NAS 任意目录
-   - 飞牛桌面 → 「**应用中心**」 → 右上角「**设置**」 → 「**手动安装应用**」
-   - 选中刚才上传的 `.fpk` 文件，确认安装
-
-3. **使用**
-   - 桌面出现「弄文笔记」图标，点击在浏览器中打开
-   - 数据卷由飞牛自动管理在 `${TRIM_PKGVAR}/data`，升级覆盖安装不会丢数据
-
-> 限制：当前仅支持 **x86_64** 飞牛设备。
-> 自行打包：参见 [scripts/fpk/README.md](../scripts/fpk/README.md)。
-
-### B. Docker 手动部署（兼容 ARM 设备）
-
 **前提：** 飞牛 fnOS 已开启 Docker 功能。
 
 **步骤：**

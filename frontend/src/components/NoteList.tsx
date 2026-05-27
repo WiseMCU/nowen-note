@@ -2634,23 +2634,6 @@ export default function NoteList() {
               <ArrowUpDown size={18} />
             </button>
           )}
-          {/* 移动端日历筛选按钮 */}
-          {state.viewMode !== "trash" && state.viewMode !== "search" && (
-            <button
-              onClick={() => setShowCalendar(!showCalendar)}
-              className={cn(
-                "p-1.5 rounded-md transition-colors relative",
-                showCalendar || dateFilter
-                  ? "text-accent-primary bg-accent-primary/10"
-                  : "text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
-              )}
-            >
-              <CalendarDays size={18} />
-              {dateFilter && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-accent-primary" />
-              )}
-            </button>
-          )}
           {state.viewMode === "trash" ? (
             // 回收站视图下用"一键清空"按钮替换"新建"——后者在回收站语义不通且会被禁止；
             // 通过自定义事件复用 Sidebar 已有的清空确认弹窗（含锁定检测 / 体量统计 / VACUUM 提示）。
@@ -2669,24 +2652,9 @@ export default function NoteList() {
               <Trash2 size={18} />
             </Button>
           ) : (
-            // split-button：左侧 + 依然是"新建普通笔记"保留肉记忆；右侧箭头弹类型选择。
-            <div className="flex items-center">
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleCreateNote("normal")}>
-                <Plus size={18} />
-              </Button>
-              <button
-                ref={createMenuAnchorDesktopRef}
-                type="button"
-                aria-label="选择新建类型"
-                onClick={() => {
-                  setCreateMenuSource("desktop");
-                  setCreateMenuOpen((v) => !v);
-                }}
-                className="h-8 w-5 flex items-center justify-center rounded-md text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary transition-colors"
-              >
-                <ChevronDown size={12} />
-              </button>
-            </div>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleCreateNote("normal")} title={t('sidebar.newNote')}>
+              <Plus size={18} />
+            </Button>
           )}
           {/* 排序下拉（移动端） */}
           {showSortMenu && (
@@ -2737,24 +2705,6 @@ export default function NoteList() {
               <ArrowUpDown size={15} />
             </button>
           )}
-          {/* 日历筛选按钮 */}
-          {state.viewMode !== "trash" && state.viewMode !== "search" && (
-            <button
-              onClick={() => setShowCalendar(!showCalendar)}
-              className={cn(
-                "p-1.5 rounded-md transition-colors relative",
-                showCalendar || dateFilter
-                  ? "text-accent-primary bg-accent-primary/10"
-                  : "text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
-              )}
-              title={t("noteList.dateFilter")}
-            >
-              <CalendarDays size={15} />
-              {dateFilter && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-accent-primary" />
-              )}
-            </button>
-          )}
           {state.viewMode === "trash" ? (
             // 回收站视图：将"+"换成"一键清空回收站"——破坏性操作做红色降级 + 标题提示，
             // 复用 Sidebar 已有的确认弹窗（自定义事件解耦，避免重复实现 80 行清空逻辑）。
@@ -2773,24 +2723,9 @@ export default function NoteList() {
               <Trash2 size={15} />
             </Button>
           ) : (
-            // split-button： + 依然走"新建普通笔记"；箭头点开后选择类型。
-            <div className="flex items-center">
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleCreateNote("normal")}>
-                <Plus size={15} />
-              </Button>
-              <button
-                ref={createMenuAnchorMobileRef}
-                type="button"
-                aria-label="选择新建类型"
-                onClick={() => {
-                  setCreateMenuSource("mobile");
-                  setCreateMenuOpen((v) => !v);
-                }}
-                className="h-7 w-4 flex items-center justify-center rounded-md text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary transition-colors"
-              >
-                <ChevronDown size={11} />
-              </button>
-            </div>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleCreateNote("normal")} title={t('sidebar.newNote')}>
+              <Plus size={15} />
+            </Button>
           )}
           {/* 排序下拉（桌面端） */}
           {showSortMenu && (

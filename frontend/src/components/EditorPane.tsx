@@ -1181,6 +1181,11 @@ export default function EditorPane() {
 
   const handleMoveToNotebook = useCallback(async (notebookId: string) => {
     if (!activeNote || notebookId === activeNote.notebookId) return;
+    // 锁定笔记不允许移动
+    if (activeNote.isLocked) {
+      toast.warning(t('editor.lockedBanner') || "笔记已锁定，请先解锁后再移动");
+      return;
+    }
     // 必须 try/catch：后端对跨工作区移动会返回 400 CROSS_WORKSPACE_MOVE_FORBIDDEN，
     // 若不捕获会冒泡成 "Uncaught (in promise)" 噪音。这里识别错误码给出明确提示。
     try {

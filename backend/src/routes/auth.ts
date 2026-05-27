@@ -71,8 +71,8 @@ function getRegistrationOpen(): boolean {
   const row = db
     .prepare("SELECT value FROM system_settings WHERE key = 'auth_allow_registration'")
     .get() as { value: string } | undefined;
-  // 默认允许注册。管理员可在设置中关闭。
-  if (!row) return true;
+  // 默认关闭注册。管理员可在设置中开启。
+  if (!row) return false;
   return row.value === "1" || row.value === "true";
 }
 

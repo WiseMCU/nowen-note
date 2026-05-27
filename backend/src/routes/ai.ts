@@ -266,7 +266,7 @@ const ACTION_PROMPTS: Record<AIAction, string> = {
   summarize: "请为以下内容生成一个简洁的摘要（100字以内）：",
   explain: "请用通俗易懂的语言解释以下内容：",
   fix_grammar: "请修正以下内容中的语法和拼写错误，只返回修正后的文本：",
-  format_markdown: "请将以下内容按照规范的 Markdown 格式重新排版，合理使用标题、列表、代码块、表格、加粗、引用等格式元素，保持原意不变，使内容结构更清晰：",
+  format_markdown: "请将以下内容的排版结构化为规范的 Markdown，仅可添加格式标记（标题、列表、代码块、加粗、引用等），不得改动任何原文措辞、不得自行扩写或删减内容，不得变更段落先后顺序：",
   format_code: "请识别以下内容中的代码部分，用正确的编程语言标记包裹在代码块中（如 ```python），保持代码缩进和格式正确。如果内容本身就是纯代码，直接用代码块包裹并标注语言：",
   custom: "",
   title: "请根据以下笔记内容，生成一个简洁准确的标题（10字以内），只返回标题文本，不要加引号或其他标点：",
@@ -307,8 +307,20 @@ ai.post("/chat", async (c) => {
     }
   }
 
+  // 根据 action 类型选择不同的 system prompt（角色设定）。
+  // format 类操作需要更强的"不改内容"约束，避免 AI 顺手改了措辞。
+  const formatActions = ["format_markdown", "format_code"];
+  let systemRole: string;
+  if (formatActions.includes(action)) {
+    systemRole = "你是一个专业的文档格式化工具。你的唯一任务是添加 Markdown 格式标记（标题、列表、代码块、加粗、引用等），绝不改动任何原文措辞、不增删内容、不变更段落顺序。请直接输出格式化后的结果，不要添加任何解释或前缀。";
+  } else if (["title", "tags", "summarize", "explain"].includes(action)) {
+    systemRole = "你是一个专业的笔记分析助手。请根据笔记内容直接输出分析结果，不要添加额外的解释或前缀。";
+  } else {
+    systemRole = "你是一个专业的写作助手，帮助用户优化笔记内容。请直接输出结果，不要添加额外的解释或前缀。";
+  }
+
   const messages: { role: string; content: string }[] = [
-    { role: "system", content: "你是一个专业的写作助手，帮助用户优化笔记内容。请直接输出结果，不要添加额外的解释或前缀。" },
+    { role: "system", content: systemRole },
   ];
 
   if (context) {

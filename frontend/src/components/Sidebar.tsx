@@ -6,7 +6,7 @@ import {
   Settings, LogOut, FilePlus, FolderPlus, Edit2, X, BrainCircuit,
   Sparkles, NotebookPen, Smile, GripVertical,
   FolderInput, Check, Home, Download, FolderOpen,
-  Columns2, Columns3, FileType2, Link2,
+  Columns2, Columns3, FileType2, Link2, Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -708,6 +708,7 @@ export default function Sidebar({ variant = "mobile" }: { variant?: "desktop" | 
       { id: "new_note", label: t('sidebar.newNote'), icon: <FilePlus size={14} /> },
       { id: "new_word_note", label: t('sidebar.importWordNote') || "导入 Word 文档", icon: <FileType2 size={14} /> },
       { id: "new_url_note", label: t('sidebar.importUrlNote') || "导入公众号文章", icon: <Link2 size={14} /> },
+      { id: "import_md", label: t('sidebar.importMarkdown') || "导入 Markdown", icon: <Upload size={14} /> },
       { id: "new_sub", label: t('sidebar.newSubNotebook'), icon: <FolderPlus size={14} /> },
       { id: "sep1", label: "", separator: true },
       { id: "change_icon", label: t('sidebar.changeIcon'), icon: <Smile size={14} /> },
@@ -762,6 +763,10 @@ export default function Sidebar({ variant = "mobile" }: { variant?: "desktop" | 
   // 长按计时器
   const tagLongPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tagLongPressFired = useRef(false);
+
+  // Markdown 导入相关
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const importNotebookIdRef = useRef<string | null>(null);
 
   const tree = useMemo(() => buildTree(state.notebooks), [state.notebooks]);
 
@@ -967,6 +972,35 @@ export default function Sidebar({ variant = "mobile" }: { variant?: "desktop" | 
     setEditValue(nb.name);
   };
 
+  // Markdown 导入处理
+  const handleImportFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const notebookId = importNotebookIdRef.current;
+    if (!notebookId) return;
+
+    try {
+      const { toast } = await import("@/lib/toast");
+      const { readMarkdownFiles, importNotes } = await import("@/lib/importService");
+      toast.info("正在导入 Markdown 文件…");
+      const imported = await readMarkdownFiles(Array.from(files));
+      if (imported.length > 0) {
+        await importNotes(imported, notebookId);
+        actions.refreshNotebooks();
+        toast.success(`已导入 ${imported.length} 条笔记`);
+      } else {
+        toast.error("未找到可导入的内容");
+      }
+    } catch (err: any) {
+      const { toast } = await import("@/lib/toast");
+      toast.error(err?.message || "导入失败");
+    }
+
+    // 清空 input 以便重复选择同一文件
+    if (importInputRef.current) importInputRef.current.value = "";
+    importNotebookIdRef.current = null;
+  }, [actions]);
+
   // 右键菜单操作分发
   const handleMenuAction = async (actionId: string) => {
     const targetId = menu.targetId;
@@ -1094,6 +1128,12 @@ export default function Sidebar({ variant = "mobile" }: { variant?: "desktop" | 
           toast.dismiss(toastId);
           toast.error(err?.message || t('urlImport.importFailed') || "导入失败");
         }
+        break;
+      }
+      case "import_md": {
+        // 导入 Markdown 文件：触发隐藏的 file input
+        importNotebookIdRef.current = targetId;
+        importInputRef.current?.click();
         break;
       }
       case "new_sub": {
@@ -1894,6 +1934,16 @@ export default function Sidebar({ variant = "mobile" }: { variant?: "desktop" | 
           onClose={() => setTagColorPopover(null)}
         />
       )}
+
+      {/* 隐藏的 Markdown 导入 input */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".md,.txt,.html,.htm,.zip"
+        multiple
+        className="hidden"
+        onChange={handleImportFiles}
+      />
     </div>
   );
 }

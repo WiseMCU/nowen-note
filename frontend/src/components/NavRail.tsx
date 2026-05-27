@@ -32,10 +32,11 @@ import {
   BookOpen, Star, Trash2, ListTodo, BrainCircuit,
   Sparkles, NotebookPen, FolderOpen,
   Settings, LogOut, PanelLeftClose, PanelLeft, X,
-  Columns2, Columns3, Cloud,
+  Columns2, Columns3, Cloud, Sun, Moon,
 } from "lucide-react";
 import { AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
+import { useTheme } from "next-themes";
 import { useApp, useAppActions } from "@/store/AppContext";
 import { api, broadcastLogout, getCurrentWorkspace } from "@/lib/api";
 import { ViewMode, WorkspaceFeatures } from "@/types";
@@ -124,6 +125,8 @@ export default function NavRail({ variant = "desktop" }: { variant?: "desktop" |
   const [showSettings, setShowSettings] = useState(false);
   // D-2：迁移向导弹窗。点"切换到云端"会先弹出，让用户选择是否把本地数据迁过去。
   const [showMigration, setShowMigration] = useState(false);
+  // 主题切换
+  const { theme, setTheme } = useTheme();
 
   const items = features
     ? NAV_CONFIG.filter((it) => !it.feature || features[it.feature] !== false)
@@ -266,7 +269,7 @@ export default function NavRail({ variant = "desktop" }: { variant?: "desktop" |
 
       <div className={cn("my-2 border-t border-app-border/60", showLabel ? "w-8" : "w-6")} aria-hidden />
 
-      {/* 底部：设置 + 登出（label 模式下与导航项视觉对齐——也带文字，因为它们语义上是入口） */}
+      {/* 底部：设置 + 主题切换 + 登出（label 模式下与导航项视觉对齐——也带文字，因为它们语义上是入口） */}
       <button
         onClick={() => setShowSettings(true)}
         title={showLabel ? undefined : t('sidebar.settings')}
@@ -280,6 +283,22 @@ export default function NavRail({ variant = "desktop" }: { variant?: "desktop" |
         {showLabel && (
           <span className="text-[10px] leading-none mt-0.5 max-w-full truncate px-1">
             {t('sidebar.settings')}
+          </span>
+        )}
+      </button>
+      <button
+        onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+        title={showLabel ? undefined : (theme === "dark" ? "切换亮色" : "切换暗色")}
+        aria-label={theme === "dark" ? "切换亮色" : "切换暗色"}
+        className={cn(
+          itemBaseClass,
+          "text-tx-tertiary hover:bg-app-hover hover:text-tx-primary",
+        )}
+      >
+        {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+        {showLabel && (
+          <span className="text-[10px] leading-none mt-0.5 max-w-full truncate px-1">
+            {theme === "dark" ? "亮色" : "暗色"}
           </span>
         )}
       </button>

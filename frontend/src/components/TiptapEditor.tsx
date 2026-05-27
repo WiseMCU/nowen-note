@@ -2399,7 +2399,13 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       btn.title = "点击复制";
       btn.dataset.copyText = text;
       btn.innerHTML = COPY_SVG;
-      btn.onclick = async (e) => {
+      // 用 mousedown 而非 onclick：ProseMirror 在只读态下会拦截 click 事件，
+      // mousedown 阶段 stopPropagation + preventDefault 可以抢在 PM 之前处理。
+      btn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }, true);
+      btn.addEventListener("click", async (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (btn.dataset.copied === "1") return;
@@ -2419,7 +2425,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             btn.title = "点击复制";
           }, 1200);
         }
-      };
+      }, true);
       return btn;
     };
 
@@ -2544,9 +2550,11 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     // 应用按钮：用 rAF 自循环避免 observer 递归，同时去重
     let applyTimer = 0;
     let applying = false;
+    let skipNextObserve = false; // 复制按钮自身 DOM 变更时不触发重扫
     const applyButtons = () => {
       if (applying) return;
       applying = true;
+      skipNextObserve = true;
       dom.querySelectorAll(".locked-copy-btn").forEach((b) => b.remove());
 
       const walker = document.createTreeWalker(dom, NodeFilter.SHOW_TEXT);
@@ -2557,11 +2565,21 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       }
       textNodes.forEach(patchTextNode);
       applying = false;
+      // 延迟重置，让本轮 observer 回调跳过
+      requestAnimationFrame(() => { skipNextObserve = false; });
     };
 
     // 首次渲染后 + MutationObserver 自动补扫
     applyTimer = requestAnimationFrame(applyButtons);
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver((mutations) => {
+      // 跳过由复制按钮自身（locked-copy-btn）引起的 DOM 变更
+      if (skipNextObserve) return;
+      // 只关注非 locked-copy-btn 元素的变更
+      const hasRelevantChange = mutations.some((m) => {
+        const target = m.target as Element;
+        return !target.closest?.(".locked-copy-btn") && !target.classList?.contains("locked-copy-btn");
+      });
+      if (!hasRelevantChange) return;
       if (!applying) {
         cancelAnimationFrame(applyTimer);
         applyTimer = requestAnimationFrame(applyButtons);

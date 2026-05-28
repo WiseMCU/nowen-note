@@ -38,6 +38,7 @@ import {
 import {
   putWithReconcile,
   makeFetchLatestNoteVersion,
+  is409Error,
   isAborted,
 } from "@/lib/optimisticLockApi";
 import { enqueue as enqueueOfflineMutation } from "@/lib/offlineQueue";
@@ -547,14 +548,17 @@ export default function EditorPane() {
   // 使用 ref 追踪最新的 activeNote，避免 handleUpdate 闭包引用过期
   const activeNoteRef = useRef(activeNote);
   activeNoteRef.current = activeNote;
+  const syncStatusRef = useRef(syncStatus);
+  syncStatusRef.current = syncStatus;
 
 
 
   // ---------------------------------------------------------------------------
   // Phase 2: 实时协作 —— Presence / 软锁 / 远程更新提示
   // ---------------------------------------------------------------------------
-  /** 远程更新横幅：当别人保存了同一篇笔记，提示用户重新加载 */
-  const [remoteUpdate, setRemoteUpdate] = useState<{ actorUserId?: string; version: number } | null>(null);
+  /** 远程更新横幅：当别人保存了同一篇笔记，提示用户重新加载 / 处理冲突 */
+  const [remoteUpdate, setRemoteUpdate] = useState<{ actorUserId?: string; version: number; conflict?: boolean } | null>(null);
+  const lastAutoAppliedRemoteRef = useRef<string>("");
   /** 远程删除横幅 */
   const [remoteDelete, setRemoteDelete] = useState<{ actorUserId?: string; trashed?: boolean } | null>(null);
 
@@ -658,6 +662,101 @@ export default function EditorPane() {
     return () => { cancelled = true; };
   }, [selfUser]);
 
+  function getCurrentEditorSnapshot(): { content: string; contentText: string } | null {
+    try {
+      const snap = editorHandleRef.current?.getSnapshot?.();
+      return snap && typeof snap.content === "string" ? snap : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function hasLocalUnsavedChanges(): boolean {
+    const cur = activeNoteRef.current;
+    if (!cur) return false;
+    if (syncStatusRef.current === "saving" || !!saveInflightRef.current) return true;
+    const snap = getCurrentEditorSnapshot();
+    if (!snap) return false;
+    return snap.content !== cur.content || snap.contentText !== cur.contentText;
+  }
+
+  async function applyRemoteNoteUpdate(msg: {
+    noteId: string;
+    version: number;
+    updatedAt?: string;
+    title?: string;
+    contentText?: string;
+    actorUserId?: string;
+  }) {
+    const cur = activeNoteRef.current;
+    if (!cur || cur.id !== msg.noteId) return;
+    if (cur.version >= msg.version) return;
+    // Markdown/Y.js 模式由 CRDT update 合并，不走 REST 自动覆盖。
+    if (collabYDocRef.current) return;
+
+    actions.updateNoteInList({
+      id: msg.noteId,
+      title: msg.title,
+      contentText: msg.contentText,
+      updatedAt: msg.updatedAt,
+      version: msg.version,
+    } as any);
+
+    if (hasLocalUnsavedChanges()) {
+      setRemoteUpdate({ actorUserId: msg.actorUserId, version: msg.version, conflict: true });
+      return;
+    }
+
+    const applyKey = `${msg.noteId}:${msg.version}`;
+    if (lastAutoAppliedRemoteRef.current === applyKey) return;
+    lastAutoAppliedRemoteRef.current = applyKey;
+
+    try {
+      const fresh = await api.getNote(msg.noteId);
+      const latest = activeNoteRef.current;
+      if (!latest || latest.id !== msg.noteId) return;
+      if (latest.version >= fresh.version) return;
+      if (hasLocalUnsavedChanges()) {
+        setRemoteUpdate({ actorUserId: msg.actorUserId, version: fresh.version, conflict: true });
+        return;
+      }
+      actions.setActiveNote(fresh);
+      actions.updateNoteInList({
+        id: fresh.id,
+        title: fresh.title,
+        contentText: fresh.contentText,
+        updatedAt: fresh.updatedAt,
+        version: fresh.version,
+      } as any);
+      actions.setLastSynced(new Date().toISOString());
+      setRemoteUpdate(null);
+    } catch (e) {
+      console.warn("[EditorPane] auto apply remote note failed:", e);
+      setRemoteUpdate({ actorUserId: msg.actorUserId, version: msg.version });
+    }
+  }
+
+  async function checkActiveNoteRemoteVersion(reason: string) {
+    const cur = activeNoteRef.current;
+    if (!cur || collabYDocRef.current) return;
+    try {
+      const slim = await api.getNoteSlim(cur.id);
+      const latest = activeNoteRef.current;
+      if (!latest || latest.id !== cur.id) return;
+      if (typeof slim.version === "number" && slim.version > latest.version) {
+        await applyRemoteNoteUpdate({
+          noteId: cur.id,
+          version: slim.version,
+          updatedAt: slim.updatedAt,
+          title: slim.title,
+          contentText: slim.contentText,
+        });
+      }
+    } catch (e) {
+      console.warn(`[EditorPane] active note version check failed (${reason}):`, e);
+    }
+  }
+
   const { presenceUsers, isConnected, setEditing: rtSetEditing } = useRealtimeNote({
     noteId: activeNote?.id ?? null,
     // 显式传入 selfUserId：EditorPane 里已有 selfUser（localStorage 缓存 + /api/me），
@@ -665,14 +764,7 @@ export default function EditorPane() {
     // （自己编辑时弹 "XX 正在编辑 / XX 更新了笔记"）。
     selfUserId: selfUser?.userId ?? null,
     onRemoteUpdate: (msg) => {
-      // 只对当前激活笔记生效；注意闭包里用 activeNoteRef 拿最新值
-      const cur = activeNoteRef.current;
-      if (!cur || cur.id !== msg.noteId) return;
-      // 若我方 version 已经 >= 远程版本（自己刚保存过但广播延迟到达），忽略
-      if (cur.version >= msg.version) return;
-      // Phase 3: CRDT 托管的笔记不需要"请重新加载"横幅，因为 yCollab 会自动合并
-      if (collabYDoc) return;
-      setRemoteUpdate({ actorUserId: msg.actorUserId, version: msg.version });
+      void applyRemoteNoteUpdate(msg);
     },
     onRemoteDelete: (msg) => {
       const cur = activeNoteRef.current;
@@ -680,6 +772,27 @@ export default function EditorPane() {
       setRemoteDelete({ actorUserId: msg.actorUserId, trashed: msg.trashed });
     },
   });
+
+  // 移动端后台恢复 / 网络恢复 / WebSocket 重连时可能错过实时消息，补查一次当前笔记版本。
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void checkActiveNoteRemoteVersion("visible");
+    };
+    const onOnline = () => void checkActiveNoteRemoteVersion("online");
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onOnline);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
+    };
+    // checkActiveNoteRemoteVersion 是函数声明，内部读 ref；不需要作为依赖触发重绑。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (isConnected) void checkActiveNoteRemoteVersion("ws-open");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, activeNote?.id]);
 
   // ---------------------------------------------------------------------------
   // Phase 3: Y.js CRDT 协同
@@ -767,11 +880,16 @@ export default function EditorPane() {
     [presenceUsers],
   );
 
-  /** 用户点"重新加载"：拉取最新笔记，先 flush 本地 pending 再覆盖 activeNote */
+  /** 用户点"重新加载"：拉取最新笔记；冲突场景下丢弃本地 pending，避免旧内容先被保存 */
   const handleReloadRemote = useCallback(async () => {
     const cur = activeNoteRef.current;
     if (!cur) return;
-    try { editorHandleRef.current?.flushSave(); } catch {}
+    if (remoteUpdate?.conflict) {
+      try { editorHandleRef.current?.discardPending?.(); } catch {}
+      try { clearDraft(cur.id); } catch { /* ignore */ }
+    } else {
+      try { editorHandleRef.current?.flushSave(); } catch {}
+    }
     try {
       const fresh = await api.getNote(cur.id);
       actions.setActiveNote(fresh);
@@ -786,7 +904,51 @@ export default function EditorPane() {
       toast.error("加载最新版本失败");
     }
     setRemoteUpdate(null);
-  }, [actions]);
+  }, [actions, remoteUpdate?.conflict]);
+
+  /** 冲突场景：明确使用本机当前编辑器内容覆盖远端最新版 */
+  const handleOverwriteRemote = useCallback(async () => {
+    const cur = activeNoteRef.current;
+    if (!cur || !remoteUpdate?.conflict) return;
+    const snap = getCurrentEditorSnapshot();
+    if (!snap) return;
+    try {
+      actions.setSyncStatus("saving");
+      const latest = await api.getNoteSlim(cur.id);
+      const updated = await api.updateNote(cur.id, {
+        title: cur.title,
+        content: snap.content,
+        contentText: snap.contentText,
+        version: latest.version,
+      } as any);
+      if (activeNoteRef.current?.id === cur.id) {
+        actions.setActiveNote({
+          ...activeNoteRef.current,
+          ...updated,
+          content: snap.content,
+          contentText: snap.contentText,
+        });
+        actions.updateNoteInList({
+          id: updated.id,
+          title: updated.title,
+          contentText: updated.contentText,
+          updatedAt: updated.updatedAt,
+          version: updated.version,
+        } as any);
+      }
+      try { clearDraft(cur.id); } catch { /* ignore */ }
+      setRemoteUpdate(null);
+      actions.setSyncStatus("saved");
+      actions.setLastSynced(new Date().toISOString());
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => actions.setSyncStatus("idle"), 2000);
+      toast.success("已用本机内容覆盖远端版本");
+    } catch (e) {
+      console.warn("[EditorPane] overwrite remote failed:", e);
+      actions.setSyncStatus("error");
+      toast.error("覆盖远端失败，请稍后重试");
+    }
+  }, [actions, remoteUpdate?.conflict]);
 
   /** 用户确认远程删除提示：清空当前笔记并从列表移除 */
   const handleAckRemoteDelete = useCallback(() => {
@@ -946,12 +1108,62 @@ export default function EditorPane() {
       //   1) 首选用 err.currentVersion 重放一次；
       //   2) 服务端没附带版本号时再兜底走 fetchLatestVersion（GET /notes/:id）；
       //   3) 期间切笔记（onAbort）则 abort 重放，防止把旧笔记内容写入新笔记。
-      const updated = await putWithReconcile({
-        initialVersion: currentNote.version,
-        send: sendOnce,
-        fetchLatestVersion: makeFetchLatestNoteVersion(currentNote.id),
-        onAbort: () => activeNoteRef.current?.id !== currentNote.id,
-      });
+      let updated;
+      if (data.content !== undefined) {
+        // 正文保存遇到 409 时不能再“拿最新 version 盲重放旧正文”，否则会覆盖
+        // PC/Web 刚保存的内容。这里改成拉取远端最新版，保留本地草稿，并进入冲突横幅。
+        try {
+          updated = await sendOnce(currentNote.version);
+        } catch (err: any) {
+          if (!is409Error(err)) throw err;
+          if (activeNoteRef.current?.id !== currentNote.id) return;
+          let latestVersion = typeof err?.currentVersion === "number" ? err.currentVersion : undefined;
+          let latestMeta: any = null;
+          try {
+            const fresh = await api.getNote(currentNote.id);
+            latestMeta = fresh;
+            latestVersion = fresh.version;
+            actions.updateNoteInList({
+              id: fresh.id,
+              title: fresh.title,
+              contentText: fresh.contentText,
+              updatedAt: fresh.updatedAt,
+              version: fresh.version,
+            } as any);
+          } catch {
+            /* 拉全文失败也保留本地草稿，稍后让用户重试 */
+          }
+          const snap = getCurrentEditorSnapshot();
+          if (snap) {
+            try {
+              saveDraft({
+                noteId: currentNote.id,
+                editorMode: editorModeRef.current,
+                content: snap.content,
+                contentText: snap.contentText,
+                title: data.title,
+                baseVersion: latestVersion ?? currentNote.version,
+                savedAt: Date.now(),
+              });
+            } catch { /* ignore */ }
+          }
+          setRemoteUpdate({
+            actorUserId: latestMeta?.userId,
+            version: latestVersion ?? currentNote.version + 1,
+            conflict: true,
+          });
+          actions.setSyncStatus("error");
+          toast.warning("远端已有新版本，本机修改已暂存，请选择重新加载或覆盖远端", 5000);
+          return;
+        }
+      } else {
+        updated = await putWithReconcile({
+          initialVersion: currentNote.version,
+          send: sendOnce,
+          fetchLatestVersion: makeFetchLatestNoteVersion(currentNote.id),
+          onAbort: () => activeNoteRef.current?.id !== currentNote.id,
+        });
+      }
 
       // 仅在保存的笔记仍是当前激活笔记时更新状态（防止快速切换时覆盖错误笔记）
       if (activeNoteRef.current?.id === updated.id) {
@@ -2144,7 +2356,9 @@ export default function EditorPane() {
           {remoteUpdate && (
             <RemoteUpdateBanner
               actorName={findUsername(remoteUpdate.actorUserId)}
+              conflict={remoteUpdate.conflict}
               onReload={handleReloadRemote}
+              onOverwrite={remoteUpdate.conflict ? handleOverwriteRemote : undefined}
               onDismiss={() => setRemoteUpdate(null)}
             />
           )}

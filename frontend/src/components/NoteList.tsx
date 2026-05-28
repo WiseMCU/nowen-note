@@ -1034,14 +1034,24 @@ const NoteCard = React.memo(function NoteCard({
     !!note.creatorName && getCurrentWorkspace() !== "personal";
 
   return (
-    <div
+    <motion.div
       ref={cardRef}
+      // 仅做轻量淡入。早期版本用了 y:4 → y:0 的位移，会造成切换笔记本时
+      // 整列卡片"先在面板底部出现再上移"的错觉（尤其当 list 项很少、
+      // 列表内容贴近底部时尤为明显）。这里去掉 y 位移，让卡片就地淡入。
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.12, ease: "easeOut" }}
       onClick={onClick}
       onContextMenu={onContextMenu}
       draggable={draggable}
-      onDragStart={onDragStart}
+      // framer-motion 的 motion.div 把 onDragStart/onDragEnd 覆写成 (event, PanInfo) => void，
+      // 与 HTML 原生 DragEvent 签名冲突。我们在这里确实需要 HTML 的 DragEvent（下游会读
+      // dataTransfer），所以用 any 断言绕过类型检查，运行时 React 仍按 HTML 事件派发。
+      onDragStart={onDragStart as any}
       onDragOver={onDragOver}
-      onDragEnd={onDragEnd}
+      onDragEnd={onDragEnd as any}
       onDrop={onDrop}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
@@ -1134,7 +1144,7 @@ const NoteCard = React.memo(function NoteCard({
           ) : null}
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 });
 NoteCard.displayName = "NoteCard";
@@ -1273,7 +1283,6 @@ export default function NoteList() {
     sourceWorkspaceId: string | null;
   } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerMode, setPickerMode] = useState<"create" | "import">("create");
   // 新建按钮的下拉菜单（普通笔记 / Word 文档）。
   // 默认行为是单击 + 按钮直接走 normal；下拉箭头点开后才能选 word。
   // 三个 + 按钮各自一个 ref（桌面顶部 / 移动顶部 / 移动 FAB）；
@@ -1291,6 +1300,10 @@ export default function NoteList() {
   const [sortPref, setSortPref] = useState<{ by: SortBy; dir: SortDir }>(() => loadSortPref());
   const [showSortMenu, setShowSortMenu] = useState(false);
   const sortBtnRef = useRef<HTMLButtonElement>(null);
+  // Markdown 导入相关
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+  const pendingImportNotebookRef = useRef<string | null>(null);
+  const [pickerMode, setPickerMode] = useState<"create" | "import">("create");
   const [sharedNoteIds, setSharedNoteIds] = useState<Set<string>>(new Set());
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
   const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
@@ -1321,13 +1334,13 @@ export default function NoteList() {
     ghostEl: HTMLDivElement | null;
   } | null>(null);
   const noteCardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  // Markdown 导入相关
-  const importFileInputRef = useRef<HTMLInputElement>(null);
-  const pendingImportNotebookRef = useRef<string | null>(null);
   // 非虚拟列表分支用 Radix ScrollArea 包裹，需要在切换筛选条件时把内部 viewport
   // 滚动复位。Radix 的 ScrollArea forwardRef 暴露的是 Root 节点，真正的滚动容器
   // 是它内部带 data-radix-scroll-area-viewport 的子节点。
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  // 给 WebSocket 列表更新监听使用，避免每次 state.notes 变化都重订阅事件。
+  const notesRef = useRef<NoteListItem[]>([]);
+  useEffect(() => { notesRef.current = state.notes; }, [state.notes]);
   const { t } = useTranslation();
 
   // Phase 2: 加载分享状态
@@ -1479,13 +1492,38 @@ export default function NoteList() {
     });
   }, [state.notes, sortPref.by, sortPref.dir, state.viewMode]);
 
-  // 监听 WebSocket：外部导入笔记（如剪藏器）后自动刷新列表
+  // 监听 WebSocket：外部导入 / 同账号其它设备保存后自动刷新列表
   useEffect(() => {
-    const off = realtime.on("notes:imported", () => {
+    realtime.connect();
+    const offImported = realtime.on("notes:imported", () => {
       actions.refreshNotes();
       actions.refreshNotebooks();
     });
-    return off;
+    const offListUpdated = realtime.on("note:list-updated", (msg: any) => {
+      const note = msg?.note;
+      if (!note?.id) return;
+      const exists = notesRef.current.some((n) => n.id === note.id);
+      if (exists) {
+        actions.updateNoteInList({
+          id: note.id,
+          title: note.title,
+          contentText: note.contentText,
+          updatedAt: note.updatedAt,
+          version: note.version,
+          isPinned: note.isPinned,
+          isTrashed: note.isTrashed,
+          notebookId: note.notebookId,
+          workspaceId: note.workspaceId,
+        } as any);
+      } else {
+        // 当前筛选下原本没有这条笔记；可能是移动/恢复/新建，低频场景全量刷新更稳。
+        actions.refreshNotes();
+      }
+    });
+    return () => {
+      offImported();
+      offListUpdated();
+    };
   }, [actions]);
 
   // viewMode 切换时自动收起日历并清除筛选
@@ -2684,14 +2722,21 @@ export default function NoteList() {
               <ArrowUpDown size={18} />
             </button>
           )}
-          {/* 导入 Markdown 按钮 */}
+          {/* 移动端日历筛选按钮 */}
           {state.viewMode !== "trash" && state.viewMode !== "search" && (
             <button
-              onClick={handleImportClick}
-              className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
-              title={t("sidebar.importMarkdown") || "导入 Markdown"}
+              onClick={() => setShowCalendar(!showCalendar)}
+              className={cn(
+                "p-1.5 rounded-md transition-colors relative",
+                showCalendar || dateFilter
+                  ? "text-accent-primary bg-accent-primary/10"
+                  : "text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
+              )}
             >
-              <Upload size={18} />
+              <CalendarDays size={18} />
+              {dateFilter && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-accent-primary" />
+              )}
             </button>
           )}
           {state.viewMode === "trash" ? (
@@ -2712,9 +2757,35 @@ export default function NoteList() {
               <Trash2 size={18} />
             </Button>
           ) : (
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleCreateNote("normal")} title={t('sidebar.newNote')}>
-              <Plus size={18} />
-            </Button>
+            <>
+              {/* 导入 Markdown 按钮 */}
+              {state.viewMode !== "trash" && state.viewMode !== "search" && (
+                <button
+                  onClick={handleImportClick}
+                  className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
+                  title={t("sidebar.importMarkdown") || "导入 Markdown"}
+                >
+                  <Upload size={18} />
+                </button>
+              )}
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleCreateNote("normal")}>
+                <Plus size={18} />
+              </Button>
+            </>
+          )}
+              <button
+                ref={createMenuAnchorDesktopRef}
+                type="button"
+                aria-label="选择新建类型"
+                onClick={() => {
+                  setCreateMenuSource("desktop");
+                  setCreateMenuOpen((v) => !v);
+                }}
+                className="h-8 w-5 flex items-center justify-center rounded-md text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary transition-colors"
+              >
+                <ChevronDown size={12} />
+              </button>
+            </div>
           )}
           {/* 排序下拉（移动端） */}
           {showSortMenu && (
@@ -2765,14 +2836,22 @@ export default function NoteList() {
               <ArrowUpDown size={15} />
             </button>
           )}
-          {/* 导入 Markdown 按钮 */}
+          {/* 日历筛选按钮 */}
           {state.viewMode !== "trash" && state.viewMode !== "search" && (
             <button
-              onClick={handleImportClick}
-              className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
-              title={t("sidebar.importMarkdown") || "导入 Markdown"}
+              onClick={() => setShowCalendar(!showCalendar)}
+              className={cn(
+                "p-1.5 rounded-md transition-colors relative",
+                showCalendar || dateFilter
+                  ? "text-accent-primary bg-accent-primary/10"
+                  : "text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
+              )}
+              title={t("noteList.dateFilter")}
             >
-              <Upload size={15} />
+              <CalendarDays size={15} />
+              {dateFilter && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-accent-primary" />
+              )}
             </button>
           )}
           {state.viewMode === "trash" ? (
@@ -2793,9 +2872,35 @@ export default function NoteList() {
               <Trash2 size={15} />
             </Button>
           ) : (
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleCreateNote("normal")} title={t('sidebar.newNote')}>
-              <Plus size={15} />
-            </Button>
+            <>
+              {/* 导入 Markdown 按钮 */}
+              {state.viewMode !== "trash" && state.viewMode !== "search" && (
+                <button
+                  onClick={handleImportClick}
+                  className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
+                  title={t("sidebar.importMarkdown") || "导入 Markdown"}
+                >
+                  <Upload size={15} />
+                </button>
+              )}
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleCreateNote("normal")}>
+                <Plus size={15} />
+              </Button>
+            </>
+          )}
+              <button
+                ref={createMenuAnchorMobileRef}
+                type="button"
+                aria-label="选择新建类型"
+                onClick={() => {
+                  setCreateMenuSource("mobile");
+                  setCreateMenuOpen((v) => !v);
+                }}
+                className="h-7 w-4 flex items-center justify-center rounded-md text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary transition-colors"
+              >
+                <ChevronDown size={11} />
+              </button>
+            </div>
           )}
           {/* 排序下拉（桌面端） */}
           {showSortMenu && (
@@ -3049,6 +3154,7 @@ export default function NoteList() {
         ) : (
         <ScrollArea ref={scrollAreaRef} className="flex-1 min-h-0">
         <div className="px-2 pb-2 space-y-1">
+          <AnimatePresence>
             {sortedNotes.map((note) => (
               <NoteCard
                 key={note.id}
@@ -3074,6 +3180,7 @@ export default function NoteList() {
                 onTouchEnd={handleTouchEnd}
               />
             ))}
+          </AnimatePresence>
           {state.notes.length === 0 && !state.isLoading && (
             <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
               <div className="w-16 h-16 rounded-2xl bg-accent-primary/10 flex items-center justify-center mb-4">
@@ -3154,24 +3261,18 @@ export default function NoteList() {
         onClose={() => setMoveModal(null)}
       />
 
-      {/* 新建笔记 / 导入 Markdown - 笔记本选择器 */}
+      {/* 新建笔记 - 笔记本选择器 */}
       <NotebookPickerModal
         isOpen={pickerOpen}
         notebooks={state.notebooks}
         onPick={async (nbId) => {
           setPickerOpen(false);
-          if (pickerMode === "import") {
-            pendingImportNotebookRef.current = nbId;
-            importFileInputRef.current?.click();
-          } else {
-            await createNoteInNotebook(nbId, pendingNoteType);
-            setPendingNoteType("normal"); // 用完归位，避免下次默认到 word
-          }
+          await createNoteInNotebook(nbId, pendingNoteType);
+          setPendingNoteType("normal"); // 用完归位，避免下次默认到 word
         }}
         onClose={() => {
           setPickerOpen(false);
           setPendingNoteType("normal");
-          setPickerMode("create");
         }}
       />
 

@@ -3,9 +3,7 @@ services:
     image: {{IMAGE}}
     container_name: nowen-note
     restart: always
-    network_mode: bridge
-    ports:
-      - "3001:3001"
+    network_mode: host
     volumes:
       - ${DATA_PATH}:/app/data
     environment:

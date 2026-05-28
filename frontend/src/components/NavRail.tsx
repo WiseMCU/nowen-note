@@ -32,19 +32,20 @@ import {
   BookOpen, Star, Trash2, ListTodo, BrainCircuit,
   Sparkles, NotebookPen, FolderOpen,
   Settings, LogOut, PanelLeftClose, PanelLeft, X,
-  Columns2, Columns3, Cloud, Sun, Moon,
+  Columns2, Columns3, Cloud, CloudOff, Sun, Moon,
 } from "lucide-react";
 import { AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { useTheme } from "next-themes";
 import { useApp, useAppActions } from "@/store/AppContext";
-import { api, broadcastLogout, getCurrentWorkspace } from "@/lib/api";
+import { api, broadcastLogout, getCurrentWorkspace, getServerUrl, clearServerUrl } from "@/lib/api";
 import { ViewMode, WorkspaceFeatures } from "@/types";
 import { cn } from "@/lib/utils";
 import SettingsModal from "@/components/SettingsModal";
 import MigrationModal from "@/components/MigrationModal";
 import { useRailMode, nextRailMode, RailMode } from "@/hooks/useRailMode";
-import { isDesktop as isDesktopApp } from "@/lib/desktopBridge";
+import { getAppInfo, isDesktop as isDesktopApp, switchDesktopToFull, type AppInfo } from "@/lib/desktopBridge";
+import { clearLocalIdMap, clearQueue, getQueueLength } from "@/lib/offlineQueue";
 
 type NavGroup = "workspace" | "modules" | "tools";
 
@@ -127,6 +128,44 @@ export default function NavRail({ variant = "desktop" }: { variant?: "desktop" |
   const [showMigration, setShowMigration] = useState(false);
   // 主题切换
   const { theme, setTheme } = useTheme();
+  const [desktopInfo, setDesktopInfo] = useState<AppInfo | null>(null);
+
+  useEffect(() => {
+    if (!isDesktopApp()) return;
+    let cancelled = false;
+    getAppInfo()
+      .then((info) => {
+        if (!cancelled) setDesktopInfo(info ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setDesktopInfo(null);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const normalizeUrl = (url: string) => url.replace(/\/+$/, "").toLowerCase();
+  const isLoopbackUrl = (url: string) => {
+    try {
+      const u = new URL(url);
+      return u.hostname === "127.0.0.1" || u.hostname === "localhost" || u.hostname === "::1";
+    } catch {
+      return false;
+    }
+  };
+  const serverUrl = getServerUrl();
+  const currentOrigin = typeof window !== "undefined" && window.location.origin.startsWith("http")
+    ? window.location.origin
+    : "";
+  const desktopMode = desktopInfo?.mode ?? null;
+  const usingDesktopLiteMode = desktopMode === "lite";
+  const desktopLocalUrl = desktopInfo?.backendPort ? `http://127.0.0.1:${desktopInfo.backendPort}` : "";
+  const usingCurrentLocalBackend = !!serverUrl && !!desktopLocalUrl && normalizeUrl(serverUrl) === normalizeUrl(desktopLocalUrl);
+  // Electron 打包态是 file:// origin，不能用 "!currentOrigin" 判定远端；否则本地后端
+  // http://127.0.0.1:<port> 也会被误判成云端，点击“本地”会反复清状态/刷新。
+  const usingRemoteServer = !!serverUrl
+    && !usingCurrentLocalBackend
+    && (usingDesktopLiteMode || !isLoopbackUrl(serverUrl) || (!!currentOrigin && normalizeUrl(serverUrl) !== normalizeUrl(currentOrigin)));
+  const canSwitchBackToLocal = isDesktopApp() && (usingRemoteServer || usingDesktopLiteMode);
 
   const items = features
     ? NAV_CONFIG.filter((it) => !it.feature || features[it.feature] !== false)
@@ -139,6 +178,40 @@ export default function NavRail({ variant = "desktop" }: { variant?: "desktop" |
     // 与 Sidebar 内笔记本/标签点击关闭抽屉的行为保持一致。
     if (isMobile) actions.setMobileSidebar(false);
   }, [actions, isMobile]);
+
+  const handleDesktopCloudButton = useCallback(async () => {
+    if (!canSwitchBackToLocal) {
+      setShowMigration(true);
+      return;
+    }
+
+    const queuedCount = getQueueLength();
+    if (queuedCount > 0) {
+      const confirmed = window.confirm(
+        t('sidebar.switchToLocalConfirmWithQueue', '切回本地离线模式？当前云端账号还有未同步操作，切换后这些待同步操作会被丢弃，云端数据不会被删除。')
+      );
+      if (!confirmed) return;
+    }
+
+    // 桌面端切回本地统一交给主进程：写 settings、清 Electron session storage、
+    // 停/启后端并 relaunch。renderer 内部 location.reload() 在 file:// + query serverUrl
+    // 场景下容易和 AuthGate / serverUrl 持久化互相打架，表现为黑屏/闪屏。
+    const result = await switchDesktopToFull();
+    if (result?.ok !== false) return;
+
+    // 旧版 preload 不支持 mode IPC 时的兜底：只做 renderer 级清理并刷新。
+    clearQueue();
+    clearLocalIdMap();
+    broadcastLogout("switch_to_local");
+    try {
+      clearServerUrl();
+      localStorage.removeItem("nowen-token");
+      localStorage.removeItem("nowen-prefer-cloud");
+      localStorage.removeItem("nowen-offline-queue");
+      localStorage.removeItem("nowen-offline-id-map");
+    } catch { /* ignore */ }
+    window.location.reload();
+  }, [canSwitchBackToLocal, t]);
 
   // ===== 尺寸常量 =====
   // icon 模式：48px 宽栏 / 40px 方按钮
@@ -303,28 +376,33 @@ export default function NavRail({ variant = "desktop" }: { variant?: "desktop" |
         )}
       </button>
       {/*
-        D-1 / D-2：桌面端把"退出"替换为"切换到云端账号"。
-        理由：桌面端是零登录单机模式，没有传统意义上的退出。
-        D-1 行为：直接 reload 进登录页（用户如果有云端账号，自己重新登录一次）。
-        D-2 升级：先弹 MigrationModal，让用户**带着本地数据**登录到云端账号。
-          - 用户登录成功 → 自动迁移 → 写入云端 token → reload
-          - 用户取消    → 写入 prefer-cloud=1 → reload 进登录页（保留旧行为）
+        桌面端底部账号模式入口：
+          - 本地态：显示 Cloud，打开 MigrationModal；登录后可选择「直接进入云端」
+            或「迁移本地数据到云端」；
+          - 云端态：显示 CloudOff，切回本地零登录；
+          - lite 运行模式：交给主进程切回 full 并重启。
         Web/移动端保持原本的退出登录行为。
       */}
       {isDesktopApp() ? (
         <button
-          onClick={() => setShowMigration(true)}
-          title={showLabel ? undefined : t('sidebar.switchToCloud', '切换到云端账号')}
-          aria-label={t('sidebar.switchToCloud', '切换到云端账号')}
+          onClick={handleDesktopCloudButton}
+          title={showLabel ? undefined : (canSwitchBackToLocal
+            ? t('sidebar.switchToLocal', '切回本地离线模式')
+            : t('sidebar.switchToCloud', '切换到云端账号'))}
+          aria-label={canSwitchBackToLocal
+            ? t('sidebar.switchToLocal', '切回本地离线模式')
+            : t('sidebar.switchToCloud', '切换到云端账号')}
           className={cn(
             itemBaseClass,
             "text-tx-tertiary hover:bg-app-hover hover:text-accent-primary",
           )}
         >
-          <Cloud size={16} />
+          {canSwitchBackToLocal ? <CloudOff size={16} /> : <Cloud size={16} />}
           {showLabel && (
             <span className="text-[10px] leading-none mt-0.5 max-w-full truncate px-1">
-              {t('sidebar.switchToCloud', '切换云端')}
+              {canSwitchBackToLocal
+                ? t('sidebar.switchToLocalShort', '本地')
+                : t('sidebar.switchToCloudShort', '云端')}
             </span>
           )}
         </button>

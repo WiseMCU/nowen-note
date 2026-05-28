@@ -578,6 +578,7 @@ export function broadcastNoteUpdated(
     {
       type: "note:updated",
       noteId,
+      actorConnectionId: actorConnectionId || null,
       ...payload,
     },
     actorConnectionId,
@@ -588,12 +589,18 @@ export function broadcastNoteUpdated(
 export function broadcastNoteDeleted(
   noteId: string,
   payload: { actorUserId?: string; actorUsername?: string; trashed?: boolean } = {},
+  actorConnectionId?: string,
 ) {
-  broadcastRoom(`note:${noteId}`, {
-    type: "note:deleted",
-    noteId,
-    ...payload,
-  });
+  broadcastRoom(
+    `note:${noteId}`,
+    {
+      type: "note:deleted",
+      noteId,
+      actorConnectionId: actorConnectionId || null,
+      ...payload,
+    },
+    actorConnectionId,
+  );
 }
 
 /**

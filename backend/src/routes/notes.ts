@@ -10,7 +10,7 @@ import {
   getUserWorkspaceRole,
   hasRole,
 } from "../middleware/acl";
-import { broadcastNoteUpdated, broadcastNoteDeleted, broadcastYjsUpdate } from "../services/realtime";
+import { broadcastNoteUpdated, broadcastNoteDeleted, broadcastYjsUpdate, broadcastToUser } from "../services/realtime";
 import { yFlush, yDestroyDoc, yReplaceContentAsUpdate } from "../services/yjs";
 import { deleteAttachmentFilesByNoteIds, extractInlineBase64Images } from "./attachments";
 import { syncReferences as syncAttachmentReferences } from "../lib/attachmentRefs";
@@ -775,7 +775,7 @@ app.put("/:id", async (c) => {
         broadcastNoteDeleted(id, {
           actorUserId: userId,
           trashed: true,
-        });
+        }, actorConnectionId);
       } else {
         broadcastNoteUpdated(id, {
           version: n.version,
@@ -785,6 +785,26 @@ app.put("/:id", async (c) => {
           actorUserId: userId,
         }, actorConnectionId);
       }
+
+      // 同账号多端列表同步：note:<id> 房间只覆盖“正在打开这篇笔记”的客户端，
+      // 手机停留在列表页/其它笔记时不会收到。向当前用户所有连接额外广播轻量列表项，
+      // 前端可直接 updateNoteInList，无需每次保存都全量 refresh。
+      broadcastToUser(userId, {
+        type: "note:list-updated" as any,
+        note: {
+          id: n.id,
+          title: n.title,
+          contentText: n.contentText,
+          updatedAt: n.updatedAt,
+          version: n.version,
+          isPinned: n.isPinned,
+          isTrashed: n.isTrashed,
+          notebookId: n.notebookId,
+          workspaceId: n.workspaceId,
+        },
+        actorUserId: userId,
+        actorConnectionId: actorConnectionId || null,
+      } as any);
     } catch (e) {
       console.warn("[notes.put] broadcast failed:", e);
     }

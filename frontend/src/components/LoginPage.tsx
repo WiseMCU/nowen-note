@@ -589,9 +589,6 @@ export default function LoginPage({ onLogin, isClientMode = false, onDisconnect 
           </div>
           )}
 
-          {/* 体验环境提示卡片（仅 VITE_DEMO_MODE=true 构建时 + 登录模式 + 非 2FA 阶段显示）。
-              一键填入只填用户名/密码到输入框，不会自动提交，让用户自己点登录按钮。 */}
-
           <form ref={formRef} onSubmit={handleSubmit} className="space-y-4">
             {/* Phase 6: 2FA 面板（取代登录表单） */}
             {twoFactor ? (
@@ -924,6 +921,7 @@ export default function LoginPage({ onLogin, isClientMode = false, onDisconnect 
                     try {
                       localStorage.removeItem("nowen-prefer-cloud");
                       localStorage.removeItem("nowen-token");
+                      clearServerUrl();
                     } catch { /* ignore */ }
                     window.location.reload();
                   }}

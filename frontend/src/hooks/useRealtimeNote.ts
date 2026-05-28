@@ -108,6 +108,7 @@ export interface UseRealtimeNoteOptions {
   onRemoteDelete?: (payload: {
     noteId: string;
     actorUserId?: string;
+    actorConnectionId?: string | null;
     trashed?: boolean;
   }) => void;
 }
@@ -180,21 +181,18 @@ export function useRealtimeNote({
 
     const offUpdate = realtime.on("note:updated", (msg: any) => {
       if (msg.noteId !== noteId) return;
-      // 排除自己触发的回声。优先 selfUserId 匹配；若尚未就绪但 WS 已连上，
-      // 从 realtime 实时查一次（避免闭包里拿到过期的 null）。
-      const effectiveSelf = selfUserId ?? realtime.getSelfUserId();
-      if (effectiveSelf && msg.actorUserId === effectiveSelf) return;
-      // 若仍无法判断自己是谁（未登录 / 鉴权异常），保守起见不弹横幅，
-      // 免得自己触发的保存也被当作"别人更新"打断。
-      if (!effectiveSelf) return;
+      // 只排除“同一个 WebSocket 连接”的回声；不能按 userId 过滤，否则同一账号
+      // 的 PC/手机互相看不到更新。服务端正常会按 X-Connection-Id 排除发起连接，
+      // 这里再做一层兜底。
+      const myConnectionId = realtime.getConnectionId();
+      if (myConnectionId && msg.actorConnectionId === myConnectionId) return;
       onRemoteUpdateRef.current?.(msg);
     });
 
     const offDelete = realtime.on("note:deleted", (msg: any) => {
       if (msg.noteId !== noteId) return;
-      const effectiveSelf = selfUserId ?? realtime.getSelfUserId();
-      if (effectiveSelf && msg.actorUserId === effectiveSelf) return;
-      if (!effectiveSelf) return;
+      const myConnectionId = realtime.getConnectionId();
+      if (myConnectionId && msg.actorConnectionId === myConnectionId) return;
       onRemoteDeleteRef.current?.(msg);
     });
 

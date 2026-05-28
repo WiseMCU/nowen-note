@@ -38,10 +38,10 @@ i18n:
     publisher: Nowen Note
     publisher_link: https://github.com/nowen-note/nowen-note
   zh-CN:
-    name: 念笔记
+    name: 弄文笔记
     description: 自托管、注重隐私的 Markdown 笔记应用，支持 AI 助手、附件、全文检索与一键备份。
-    author: 念笔记
+    author: 弄文笔记
     official: https://github.com/nowen-note/nowen-note
     help: https://github.com/nowen-note/nowen-note/blob/main/README.md
-    publisher: 念笔记
+    publisher: 弄文笔记
     publisher_link: https://github.com/nowen-note/nowen-note

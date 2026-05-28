@@ -54,6 +54,7 @@ import {
   Link2,
   ChevronDown,
   Globe,
+  Eraser,
 } from "lucide-react";
 import { api, resolveAttachmentUrl } from "@/lib/api";
 import { FileItem, FileStats, FileSortKey, FileCategory } from "@/types";
@@ -298,6 +299,7 @@ export default function FileManager() {
   //   不做轮询——只在明显会改变占用的操作后刷，避免 N+1 请求。
   const [reclaimable, setReclaimable] = useState<{ items: number; bytes: number } | null>(null);
   const [cleaningUp, setCleaningUp] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
 
   // ---- 搜索防抖（300ms，避免每个字都打接口）----
   useEffect(() => {
@@ -459,6 +461,87 @@ export default function FileManager() {
       setCleaningUp(false);
     }
   }, [cleaningUp, reclaimable, loadList, loadStats, loadReclaimable]);
+
+  // ---- 清理未引用文件（扫描所有文件，找出未引用的并批量删除）----
+  const handleCleanup = useCallback(async () => {
+    if (cleaning) return;
+    const ok = await confirmDialog({
+      title: "确定要扫描并清理未引用的文件吗？",
+      description: "此操作不可撤销。",
+      confirmText: "开始清理",
+      danger: true,
+    });
+    if (!ok) return;
+    setCleaning(true);
+    try {
+      const allIds: string[] = [];
+      let scanPage = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const res = await api.files.list({ page: scanPage, pageSize: 200 });
+        allIds.push(...res.items.map((f: any) => f.id));
+        hasMore = scanPage * 200 < res.total;
+        scanPage++;
+      }
+
+      if (allIds.length === 0) {
+        toast.success("没有文件可清理");
+        setCleaning(false);
+        return;
+      }
+
+      const unreferenced: string[] = [];
+      const BATCH = 20;
+      for (let i = 0; i < allIds.length; i += BATCH) {
+        const batch = allIds.slice(i, i + BATCH);
+        const results = await Promise.allSettled(batch.map((id) => api.files.get(id)));
+        results.forEach((r) => {
+          if (r.status === "fulfilled" && (r.value as any).references.length === 0) {
+            unreferenced.push((r.value as any).id);
+          }
+        });
+      }
+
+      if (unreferenced.length === 0) {
+        const orphanRes = await api.dataFile.cleanupOrphans();
+        toast.success(`未发现未引用的文件。清理数据库孤儿 ${orphanRes.dbOrphansRemoved} 条`);
+        loadList();
+        loadStats();
+        setCleaning(false);
+        return;
+      }
+
+      const ok2 = await confirmDialog({
+        title: `发现 ${unreferenced.length} 个未引用的文件，确定要全部删除吗？`,
+        confirmText: `删除 ${unreferenced.length} 个`,
+        danger: true,
+      });
+      if (!ok2) {
+        setCleaning(false);
+        return;
+      }
+
+      // 使用批量删除
+      const res = await api.files.batchRemove(unreferenced);
+      const failedIdSet = new Set(res.failed.map((f: any) => f.id));
+      const succeededIds = new Set(unreferenced.filter((id) => !failedIdSet.has(id)));
+      setItems((prev) => prev.filter((it) => !succeededIds.has(it.id)));
+      setTotal((t) => Math.max(0, t - succeededIds.size));
+
+      const orphanRes = await api.dataFile.cleanupOrphans();
+
+      toast.success(
+        `清理完成：删除未引用文件 ${res.deleted} 个` +
+        (orphanRes.dbOrphansRemoved > 0 ? `，清理数据库孤儿 ${orphanRes.dbOrphansRemoved} 条` : "")
+      );
+      loadList();
+      loadStats();
+    } catch (err: any) {
+      toast.error(`清理失败：${err?.message || "未知错误"}`);
+    } finally {
+      setCleaning(false);
+    }
+  }, [cleaning, loadList, loadStats]);
 
   // 工作区切换：清空多选 + 回到第 1 页，effect 链会自然触发 loadList/loadStats 重拉
   useEffect(() => {
@@ -1054,6 +1137,28 @@ export default function FileManager() {
           {uploading ? <Loader2 size={14} className="animate-spin mr-1" /> : <Upload size={14} className="mr-1" />}
           {uploading ? "上传中" : "上传文件"}
         </Button>
+        <button
+          onClick={handleCleanup}
+          disabled={cleaning}
+          className={cn(
+            "flex items-center justify-center shrink-0 h-8 rounded-md px-3 text-xs font-medium transition-all",
+            cleaning
+              ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
+              : "bg-rose-600 hover:bg-rose-700 text-white shadow-sm"
+          )}
+        >
+          {cleaning ? (
+            <>
+              <Loader2 size={14} className="animate-spin mr-1" />
+              清理中
+            </>
+          ) : (
+            <>
+              <Eraser size={14} className="mr-1" />
+              清理未引用
+            </>
+          )}
+        </button>
         <input
           ref={fileInputRef}
           type="file"

@@ -2560,11 +2560,39 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
 
       const walker = document.createTreeWalker(dom, NodeFilter.SHOW_TEXT);
       const textNodes: Text[] = [];
-      let node: Text | null;
-      while ((node = walker.nextNode() as Text)) {
-        textNodes.push(node);
+      let tn: Text | null;
+      while ((tn = walker.nextNode() as Text | null)) {
+        if ((tn.textContent?.length || 0) > 3 && !tn.parentElement?.closest(".locked-copy-btn") && !tn.parentElement?.closest("pre, .code-block-wrapper")) {
+          textNodes.push(tn);
+        }
       }
-      textNodes.forEach(patchTextNode);
+
+      // 按父元素去重：同 parent 只处理一次
+      const seenParents = new Set<Element>();
+      for (const node of textNodes) {
+        const parent = node.parentElement;
+        if (!parent || seenParents.has(parent)) continue;
+        seenParents.add(parent);
+        patchTextNode(node);
+      }
+      // 去重：若 <code> 内的按钮文本是外层按钮文本的子串，移除以避免重复
+      dom.querySelectorAll<HTMLElement>(".locked-copy-btn").forEach((btn) => {
+        const myText = btn.dataset.copyText || "";
+        if (!myText) return;
+        let ancestor = btn.parentElement;
+        while (ancestor) {
+          const outerBtns = ancestor.querySelectorAll<HTMLElement>(".locked-copy-btn");
+          for (const outerBtn of outerBtns) {
+            if (outerBtn === btn) continue;
+            const outerText = outerBtn.dataset.copyText || "";
+            if (outerText.length > myText.length && outerText.includes(myText)) {
+              btn.remove();
+              return;
+            }
+          }
+          ancestor = ancestor.parentElement;
+        }
+      });
       applying = false;
       // 延迟重置，让本轮 observer 回调跳过
       requestAnimationFrame(() => { skipNextObserve = false; });

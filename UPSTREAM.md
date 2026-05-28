@@ -1,3 +1,3 @@
-Base: cropflre/nowen-note v1.1.6 (commit b626b3e)
-Last synced: 2026-05-27
+Base: cropflre/nowen-note v1.1.7 (commit 53c2e4d)
+Last synced: 2026-05-28
 Custom fork by: WiseMCU

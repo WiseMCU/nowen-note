@@ -1034,24 +1034,14 @@ const NoteCard = React.memo(function NoteCard({
     !!note.creatorName && getCurrentWorkspace() !== "personal";
 
   return (
-    <motion.div
+    <div
       ref={cardRef}
-      // 仅做轻量淡入。早期版本用了 y:4 → y:0 的位移，会造成切换笔记本时
-      // 整列卡片"先在面板底部出现再上移"的错觉（尤其当 list 项很少、
-      // 列表内容贴近底部时尤为明显）。这里去掉 y 位移，让卡片就地淡入。
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.12, ease: "easeOut" }}
       onClick={onClick}
       onContextMenu={onContextMenu}
       draggable={draggable}
-      // framer-motion 的 motion.div 把 onDragStart/onDragEnd 覆写成 (event, PanInfo) => void，
-      // 与 HTML 原生 DragEvent 签名冲突。我们在这里确实需要 HTML 的 DragEvent（下游会读
-      // dataTransfer），所以用 any 断言绕过类型检查，运行时 React 仍按 HTML 事件派发。
-      onDragStart={onDragStart as any}
+      onDragStart={onDragStart}
       onDragOver={onDragOver}
-      onDragEnd={onDragEnd as any}
+      onDragEnd={onDragEnd}
       onDrop={onDrop}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
@@ -1144,7 +1134,7 @@ const NoteCard = React.memo(function NoteCard({
           ) : null}
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 });
 NoteCard.displayName = "NoteCard";
@@ -3059,7 +3049,6 @@ export default function NoteList() {
         ) : (
         <ScrollArea ref={scrollAreaRef} className="flex-1 min-h-0">
         <div className="px-2 pb-2 space-y-1">
-          <AnimatePresence>
             {sortedNotes.map((note) => (
               <NoteCard
                 key={note.id}
@@ -3085,7 +3074,6 @@ export default function NoteList() {
                 onTouchEnd={handleTouchEnd}
               />
             ))}
-          </AnimatePresence>
           {state.notes.length === 0 && !state.isLoading && (
             <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
               <div className="w-16 h-16 rounded-2xl bg-accent-primary/10 flex items-center justify-center mb-4">

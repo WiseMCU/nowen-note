@@ -81,6 +81,8 @@ RUN apk add --no-cache libstdc++ libgcc
 COPY --from=node-compress /usr/local/bin/node /usr/local/bin/node
 WORKDIR /app
 
+# 根 package.json 是运行时版本号的真相源；/api/version 优先读取它
+COPY package.json ./package.json
 COPY --from=backend-build /app/backend/node_modules ./backend/node_modules
 COPY --from=backend-build /app/backend/dist ./backend/dist
 COPY backend/templates ./backend/templates

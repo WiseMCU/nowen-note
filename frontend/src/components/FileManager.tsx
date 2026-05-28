@@ -528,12 +528,16 @@ export default function FileManager() {
       setItems((prev) => prev.filter((it) => !succeededIds.has(it.id)));
       setTotal((t) => Math.max(0, t - succeededIds.size));
 
+      // 清除缓存，确保 loadList 拉取最新数据
+      invalidateFileListCache();
+
       const orphanRes = await api.dataFile.cleanupOrphans();
 
       toast.success(
         `清理完成：删除未引用文件 ${res.deleted} 个` +
         (orphanRes.dbOrphansRemoved > 0 ? `，清理数据库孤儿 ${orphanRes.dbOrphansRemoved} 条` : "")
       );
+      setPage(1);
       loadList();
       loadStats();
     } catch (err: any) {

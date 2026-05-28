@@ -759,11 +759,11 @@ function AuthGate() {
     });
   }, [user?.id]);
 
-  // 「更新日志」首次升级自动弹窗。
+  // 「更新日志」首次升级自动弹窗 — 已禁用（用户不需要自动弹出）
   //   - 仅在已登录分支生效（enable=!!user），未登录态不打扰；
   //   - useWhatsNew 内部对比 localStorage.nowen-seen-version 与 __APP_VERSION__，
   //     不一致才返回 shouldShow=true，关闭后立即写回，下一次升级才再弹。
-  const [showWhatsNew, markWhatsNewSeen] = useWhatsNew(!!user);
+  const [showWhatsNew, markWhatsNewSeen] = useWhatsNew(false);
 
   const handleDisconnect = () => {
     clearServerUrl();

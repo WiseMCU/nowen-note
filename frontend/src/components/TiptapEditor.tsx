@@ -1426,6 +1426,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     editorProps: {
       attributes: {
         class: "prose prose-sm max-w-none focus:outline-none min-h-[300px] px-1",
+        spellcheck: "false",
       },
       // 拦截 mailto: / tel: / sms: 链接的默认点击行为：
       //   - 编辑态：虽然 Link 扩展已配置 openOnClick:false，但浏览器对

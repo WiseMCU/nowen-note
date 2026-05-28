@@ -346,7 +346,9 @@ ai.post("/chat", async (c) => {
         messages,
         stream: true,
         temperature: action === "fix_grammar" ? 0.1 : action === "format_code" ? 0.2 : 0.7,
-        max_tokens: action === "title" ? 50 : action === "tags" ? 100 : action === "summarize" ? 300 : action === "custom" ? 4000 : 2000,
+        ...(action === "title" || action === "tags"
+          ? {} // title 和 tags 不限制 max_tokens，让模型自己决定
+          : { max_tokens: action === "summarize" ? 500 : action === "custom" ? 4000 : 2000 }),
       }),
     });
 

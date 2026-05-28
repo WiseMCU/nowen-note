@@ -1251,6 +1251,8 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
   // 保持最新的 onUpdate ref
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
+  // 记录 AI 处理的是全文（未选中）还是选区；Replace 行为据此区分
+  const isFullDocRef = useRef(false);
 
   /**
    * 本编辑器最近一次派发给 onUpdate 的 content 字符串。
@@ -3333,7 +3335,14 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     if (!selectedMd) {
       selectedMd = editor.state.doc.textBetween(from, to, " ");
     }
-    setAiSelectedText(selectedMd || editor.getText().slice(0, 500));
+
+    if (from < to && selectedMd) {
+      setAiSelectedText(selectedMd);
+      isFullDocRef.current = false;
+    } else {
+      setAiSelectedText(editor.getText());
+      isFullDocRef.current = true;
+    }
 
     // 获取选区在屏幕上的位置
     const coords = editor.view.coordsAtPos(from);
@@ -3390,14 +3399,25 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
 
   const handleAIInsert = useCallback((text: string) => {
     if (!editor) return;
-    const { to } = editor.state.selection;
-    insertWithMarkdownDetect(text, to, to);
+    if (isFullDocRef.current) {
+      // 全文场景：插入到文档开头
+      insertWithMarkdownDetect(text, 0, 0);
+    } else {
+      const { to } = editor.state.selection;
+      insertWithMarkdownDetect(text, to, to);
+    }
   }, [editor, insertWithMarkdownDetect]);
 
   const handleAIReplace = useCallback((text: string) => {
     if (!editor) return;
-    const { from, to } = editor.state.selection;
-    insertWithMarkdownDetect(text, from, to);
+    if (isFullDocRef.current) {
+      // 全文场景：替换整个文档
+      const docSize = editor.state.doc.content.size;
+      insertWithMarkdownDetect(text, 0, docSize);
+    } else {
+      const { from, to } = editor.state.selection;
+      insertWithMarkdownDetect(text, from, to);
+    }
   }, [editor, insertWithMarkdownDetect]);
 
   // 回到顶部 + sticky 工具栏阴影：合用一个滚动监听器避免重复订阅

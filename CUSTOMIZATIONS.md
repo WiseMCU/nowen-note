@@ -215,6 +215,50 @@ getRegistrationOpen() 中 if (!row) return false;
 - `sidebar.importMarkdown` — "导入 Markdown" / "Import Markdown"
 - `editor.aiNotConfigured` — "请先在设置中配置 AI 服务" / "Please configure AI service in Settings"
 
+### 18. AI 标题生成修复
+
+**文件**：`backend/src/routes/ai.ts`
+
+**改动**：
+- 移除 title 和 tags 的 `max_tokens` 限制，让模型自己决定输出长度
+- summarize 的 max_tokens 从 300 提升到 500
+
+**原因**：上游的 max_tokens 限制（title=50, tags=100）过小，导致 AI 生成标题失败
+
+### 19. AI 助手默认全文处理
+
+**文件**：`frontend/src/components/TiptapEditor.tsx`
+
+**改动**：
+- 添加 `isFullDocRef` 引用，记录 AI 处理的是全文还是选区
+- 修改 `openAIAssistant`：未选中文本时，AI 助手默认处理全文
+- 修改 `handleAIInsert`：全文场景插入到文档开头
+- 修改 `handleAIReplace`：全文场景替换整个文档
+
+**原因**：上游的 AI 助手只处理选中文本，未选中时行为不符合预期
+
+### 20. 文件管理清理后缓存清除
+
+**文件**：`frontend/src/components/FileManager.tsx`
+
+**改动**：
+- 在 `handleCleanup` 删除操作后调用 `invalidateFileListCache()` 清除缓存
+- 重置分页到第 1 页
+
+**原因**：上游清理后未清除列表缓存，导致删除的文件仍然显示
+
+### 21. 复制按钮去重逻辑
+
+**文件**：`frontend/src/components/TiptapEditor.tsx`
+
+**改动**：
+- 过滤长度 <= 3 的短文本节点
+- 排除代码块（`<pre>`、`.code-block-wrapper`）内的文本
+- 按父元素去重：同 parent 只处理一次
+- 按钮文本去重：内层按钮文本是外层子串时移除内层
+
+**原因**：URL 和启发式正则同时匹配到同一文本时，会出现重复的复制按钮
+
 ---
 
 ## 三、融合上游版本检查清单
@@ -239,14 +283,15 @@ getRegistrationOpen() 中 if (!row) return false;
 ### Step 3: 移植后端改动
 - [ ] auth.ts：注册默认关闭
 - [ ] ai.ts：角色化 prompt + 严格 format_markdown
+- [ ] ai.ts：移除 title/tags 的 max_tokens 限制
 
 ### Step 4: 移植前端功能
 - [ ] NavRail.tsx：主题切换按钮
 - [ ] Sidebar.tsx：笔记本导入 Markdown
-- [ ] NoteList.tsx：导入按钮
-- [ ] TiptapEditor.tsx：锁定笔记复制按钮 + spellcheck
+- [ ] NoteList.tsx：导入按钮 + 移除 NoteCard 动画
+- [ ] TiptapEditor.tsx：锁定笔记复制按钮 + spellcheck + AI 全文处理
 - [ ] EditorPane.tsx：锁定笔记移动拦截
-- [ ] FileManager.tsx：清理未引用按钮
+- [ ] FileManager.tsx：清理未引用按钮 + 缓存清除
 - [ ] AISettingsPanel.tsx：AI 测试连接 toast
 - [ ] App.tsx：禁用自动更新日志
 - [ ] importService.ts：空行保留

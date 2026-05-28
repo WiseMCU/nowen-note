@@ -61,6 +61,18 @@ docker run -d --name nowen-note --restart unless-stopped \
 
 ## 更新日志
 
+### v1.1.9-custom.1
+
+**上游同步**：基于 cropflre/nowen-note v1.1.9 (commit 68065b9) 融合
+
+**上游新增功能**：
+- 多设备笔记同步优化
+- 桌面端云端本地模式与访问控制优化
+- 修复后端实时删除广播编译错误
+- 桌面端本地模式重载循环修复
+- 访问控制默认开关调整
+- upk 绿联打包配置更新
+
 ### v1.1.7-custom.2
 
 **上游同步**：基于 cropflre/nowen-note v1.1.7 (commit 53c2e4d) 融合

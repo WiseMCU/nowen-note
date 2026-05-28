@@ -2773,20 +2773,6 @@ export default function NoteList() {
               </Button>
             </>
           )}
-              <button
-                ref={createMenuAnchorDesktopRef}
-                type="button"
-                aria-label="选择新建类型"
-                onClick={() => {
-                  setCreateMenuSource("desktop");
-                  setCreateMenuOpen((v) => !v);
-                }}
-                className="h-8 w-5 flex items-center justify-center rounded-md text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary transition-colors"
-              >
-                <ChevronDown size={12} />
-              </button>
-            </div>
-          )}
           {/* 排序下拉（移动端） */}
           {showSortMenu && (
             <SortMenu
@@ -2887,20 +2873,6 @@ export default function NoteList() {
                 <Plus size={15} />
               </Button>
             </>
-          )}
-              <button
-                ref={createMenuAnchorMobileRef}
-                type="button"
-                aria-label="选择新建类型"
-                onClick={() => {
-                  setCreateMenuSource("mobile");
-                  setCreateMenuOpen((v) => !v);
-                }}
-                className="h-7 w-4 flex items-center justify-center rounded-md text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary transition-colors"
-              >
-                <ChevronDown size={11} />
-              </button>
-            </div>
           )}
           {/* 排序下拉（桌面端） */}
           {showSortMenu && (

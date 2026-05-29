@@ -3127,7 +3127,7 @@ export default function NoteList() {
               <p className="text-xs text-tx-tertiary mb-5 max-w-[200px] leading-relaxed">
                 {t('common.noNotesHint')}
               </p>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-col gap-2">
                 <button
                   onClick={() => handleCreateNote("normal")}
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent-primary text-white text-xs font-medium hover:bg-accent-primary/90 active:scale-95 transition-all shadow-sm"

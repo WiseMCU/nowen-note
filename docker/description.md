@@ -59,9 +59,17 @@ docker run -d --name nowen-note --restart unless-stopped \
 | `SMTP_PASS` | （空） | SMTP 登录密码 |
 | `SMTP_FROM` | （空） | 发件人邮箱地址 |
 
+## 版本号规则
+
+格式：`主版本.次版本.修订号.自定义版本`
+
+- **主版本.次版本.修订号**：与上游仓库保持一致
+- **自定义版本**：二次开发的修改次数，从 1 开始递增
+- 当上游更新时，同步上游版本号并**重置自定义版本为 1**
+
 ## 更新日志
 
-### v1.1.9-custom.1
+### v1.1.9.1
 
 **上游同步**：基于 cropflre/nowen-note v1.1.9 (commit 68065b9) 融合
 
@@ -73,9 +81,34 @@ docker run -d --name nowen-note --restart unless-stopped \
 - 访问控制默认开关调整
 - upk 绿联打包配置更新
 
-### v1.1.7-custom.2
+**二次开发功能**：
+- AI 助手悬浮框支持拖拽移动
+- 移除笔记栏日历筛选按钮
+- 笔记列表空状态显示导入 Markdown 按钮（垂直排列）
+- 笔记列表顶部添加导入 Markdown 按钮
+
+### v1.1.7.2
 
 **上游同步**：基于 cropflre/nowen-note v1.1.7 (commit 53c2e4d) 融合
+
+**二次开发功能**：
+- Docker 优化：Alpine + UPX 压缩（镜像 ~123MB）
+- Docker 密码重置：`NOWEN_RESET_PASSWORD` 环境变量
+- Docker 版本号自动纠偏
+- 注册默认关闭
+- AI 角色化 system prompt + 严格 format_markdown
+- AI 标题生成修复（移除 max_tokens 限制）
+- AI 助手默认全文处理
+- 主题切换按钮（NavRail 底部）
+- 笔记本右键导入 Markdown
+- 笔记列表导入按钮
+- 锁定笔记复制按钮 + 移动拦截
+- 文件管理清理未引用按钮
+- 禁用拼写检查
+- Markdown 导入空行保留
+- 段落间距/默认字体调整
+- 移除 NoteCard 切换动画
+- 禁用自动更新日志弹窗
 
 **上游新增功能**：
 - 用户偏好系统（useUserPreferences）：大纲默认开关、进入笔记自动锁定

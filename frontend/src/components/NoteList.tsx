@@ -2722,23 +2722,6 @@ export default function NoteList() {
               <ArrowUpDown size={18} />
             </button>
           )}
-          {/* 移动端日历筛选按钮 */}
-          {state.viewMode !== "trash" && state.viewMode !== "search" && (
-            <button
-              onClick={() => setShowCalendar(!showCalendar)}
-              className={cn(
-                "p-1.5 rounded-md transition-colors relative",
-                showCalendar || dateFilter
-                  ? "text-accent-primary bg-accent-primary/10"
-                  : "text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
-              )}
-            >
-              <CalendarDays size={18} />
-              {dateFilter && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-accent-primary" />
-              )}
-            </button>
-          )}
           {state.viewMode === "trash" ? (
             // 回收站视图下用"一键清空"按钮替换"新建"——后者在回收站语义不通且会被禁止；
             // 通过自定义事件复用 Sidebar 已有的清空确认弹窗（含锁定检测 / 体量统计 / VACUUM 提示）。
@@ -2820,24 +2803,6 @@ export default function NoteList() {
               title={t("noteList.sortBy")}
             >
               <ArrowUpDown size={15} />
-            </button>
-          )}
-          {/* 日历筛选按钮 */}
-          {state.viewMode !== "trash" && state.viewMode !== "search" && (
-            <button
-              onClick={() => setShowCalendar(!showCalendar)}
-              className={cn(
-                "p-1.5 rounded-md transition-colors relative",
-                showCalendar || dateFilter
-                  ? "text-accent-primary bg-accent-primary/10"
-                  : "text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
-              )}
-              title={t("noteList.dateFilter")}
-            >
-              <CalendarDays size={15} />
-              {dateFilter && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-accent-primary" />
-              )}
             </button>
           )}
           {state.viewMode === "trash" ? (
@@ -3162,13 +3127,22 @@ export default function NoteList() {
               <p className="text-xs text-tx-tertiary mb-5 max-w-[200px] leading-relaxed">
                 {t('common.noNotesHint')}
               </p>
-              <button
-                onClick={() => handleCreateNote("normal")}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent-primary text-white text-xs font-medium hover:bg-accent-primary/90 active:scale-95 transition-all shadow-sm"
-              >
-                <Plus size={14} />
-                {t('common.newNote')}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleCreateNote("normal")}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent-primary text-white text-xs font-medium hover:bg-accent-primary/90 active:scale-95 transition-all shadow-sm"
+                >
+                  <Plus size={14} />
+                  {t('common.newNote')}
+                </button>
+                <button
+                  onClick={handleImportClick}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-app-border text-tx-secondary text-xs font-medium hover:bg-app-hover active:scale-95 transition-all"
+                >
+                  <Upload size={14} />
+                  {t('sidebar.importMarkdown') || "导入 Markdown"}
+                </button>
+              </div>
             </div>
           )}
           {/* 骨架屏 Loading */}

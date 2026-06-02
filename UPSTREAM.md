@@ -1,4 +1,4 @@
-Base: cropflre/nowen-note v1.1.9 (commit 68065b9)
+Base: cropflre/nowen-note v1.1.12 (commit aa9a2fd)
 Last synced: 2026-05-29
 Custom fork by: WiseMCU
 

@@ -69,6 +69,26 @@ docker run -d --name nowen-note --restart unless-stopped \
 
 ## 更新日志
 
+### v1.1.12.1
+
+**上游同步**：基于 cropflre/nowen-note v1.1.12 (commit aa9a2fd) 融合
+
+**上游新增功能**：
+- 表格交互优化（行高拖拽、网格选择器、合并按钮、行列增删）
+- 阅读密度偏好（宽松/紧凑模式）
+- 客户端下载面板 + Gitee 镜像同步
+- 搜索按钮上提到笔记标题栏
+- Android WebView CSS 兼容性修复（小米8黑屏）
+- TypeScript 编译错误修复
+
+**二次开发功能保留**：
+- AI 助手悬浮框支持拖拽移动
+- 移除笔记栏日历筛选按钮
+- 笔记列表空状态显示导入 Markdown 按钮
+- 锁定笔记复制按钮 + 移动拦截
+- 主题切换按钮
+- Docker 优化（Alpine + UPX 压缩）
+
 ### v1.1.9.1
 
 **上游同步**：基于 cropflre/nowen-note v1.1.9 (commit 68065b9) 融合

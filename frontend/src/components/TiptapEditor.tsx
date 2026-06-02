@@ -1,6 +1,6 @@
 import React, { forwardRef, lazy, Suspense, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useEditor, EditorContent, Extension, ReactNodeViewRenderer } from "@tiptap/react";
+import { useEditor, Editor, EditorContent, Extension, ReactNodeViewRenderer } from "@tiptap/react";
 
 // 懒加载 docx 内联预览：office 解析器（fflate + 自研 OOXML parser）有几十 KB，
 // 而绝大多数会话不会点 docx 附件，所以拆出去按需拉。
@@ -12,12 +12,15 @@ import { AnimatePresence, motion } from "framer-motion";import StarterKit from "
 import Placeholder from "@tiptap/extension-placeholder";
 import Image from "@tiptap/extension-image";
 import ResizableImageView from "./ResizableImageView";
+import { TableGridPicker, TableResizeDialog } from "./TableGridPicker";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import Underline from "@tiptap/extension-underline";
 import Highlight from "@tiptap/extension-highlight";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
-import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
+import { Table, TableHeader, TableCell } from "@tiptap/extension-table";
+// 自定义 TableRow：在原扩展基础上加 height 持久化 attribute + 行高拖拽手柄。
+import { TableRowResizable } from "./extensions/TableRowResizable";
 import TextAlign from "@tiptap/extension-text-align";
 import { common, createLowlight } from "lowlight";
 import { DOMParser as ProseMirrorDOMParser, Node as ProseMirrorNode } from "@tiptap/pm/model";
@@ -33,10 +36,12 @@ import {
   List, ListOrdered, Heading1, Heading2, Heading3,
   Quote, ImagePlus, Film, Paperclip, CheckSquare, Highlighter, Minus, Undo, Redo,
   Code, FileCode, Sparkles, X, ZoomIn, ZoomOut, RotateCcw,
-  Table2, Indent, Outdent, AlignLeft, AlignCenter, AlignRight, Trash2,
+  Indent, Outdent, AlignLeft, AlignCenter, AlignRight, Trash2,
   FileType, Check, AlertCircle, Info, ArrowUp, Link as LinkIcon,
   ExternalLink, Unlink2, Workflow, Sigma, BookOpen, Download,
   Type, Palette, Eraser, ChevronDown, Search,
+  // 表格气泡菜单图标
+  Rows3, Columns3, Merge, Split, Heading,
 } from "lucide-react";
 import { downloadAttachment } from "@/lib/downloadFile";
 import { cn } from "@/lib/utils";
@@ -1179,6 +1184,14 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
   const [imageBubble, setImageBubble] = useState<{ open: boolean; top: number; left: number }>({
     open: false, top: 0, left: 0,
   });
+  // 光标在表格内时的表格操作气泡（合并/拆分/增删行列等）
+  const [tableBubble, setTableBubble] = useState<{ open: boolean; top: number; left: number }>({
+    open: false, top: 0, left: 0,
+  });
+  // 调整表格尺寸对话框
+  const [resizeDialog, setResizeDialog] = useState<{ open: boolean; rows: number; cols: number }>({
+    open: false, rows: 3, cols: 3,
+  });
   // 光标停在链接内（且无选区）时浮出的链接气泡：打开 / 编辑 / 取消链接
   // 与 bubble（文本选区格式化）互斥——选区有内容时优先显示文本气泡。
   // 链接气泡：附件链接（href 形如 /api/attachments/<id>）需要单独的下载交互，
@@ -1394,7 +1407,8 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
         lastColumnResizable: true,
         HTMLAttributes: { class: 'tiptap-table' },
       }),
-      TableRow,
+      // TableRowResizable: 替换原 TableRow，新增行高拖拽能力
+      TableRowResizable,
       TableHeader,
       TableCell,
       TextAlign.configure({

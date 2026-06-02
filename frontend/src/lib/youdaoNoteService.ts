@@ -48,7 +48,8 @@ import Underline from "@tiptap/extension-underline";
 import Highlight from "@tiptap/extension-highlight";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
-import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
+import { Table, TableHeader, TableCell } from "@tiptap/extension-table";
+import { TableRowWithHeight } from "@/components/extensions/TableRowResizable";
 import { common, createLowlight } from "lowlight";
 import {
   ImportFileInfo,
@@ -73,7 +74,7 @@ const tiptapExtensions = [
   TaskList,
   TaskItem.configure({ nested: true }),
   Table.configure({ resizable: false }),
-  TableRow,
+  TableRowWithHeight,
   TableHeader,
   TableCell,
   // TextStyle + Color + FontSize：与编辑器保持一致

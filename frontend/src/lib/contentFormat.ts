@@ -30,7 +30,9 @@ import Underline from "@tiptap/extension-underline";
 import Highlight from "@tiptap/extension-highlight";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
-import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
+import { Table, TableHeader, TableCell } from "@tiptap/extension-table";
+// 与主编辑器对齐：TableRow 用扩展过 height 属性的版本（schema 兼容版，不带拖拽 plugin）
+import { TableRowWithHeight } from "@/components/extensions/TableRowResizable";
 import TextAlign from "@tiptap/extension-text-align";
 import { common, createLowlight } from "lowlight";
 import TurndownService from "turndown";
@@ -122,7 +124,7 @@ function getTiptapExtensions() {
     TaskList,
     TaskItem.configure({ nested: true }),
     Table.configure({ resizable: false }),
-    TableRow,
+    TableRowWithHeight,
     TableHeader,
     TableCell,
     // TextAlign 必须与 TiptapEditor 的 extensions 对齐，否则 generateHTML 时

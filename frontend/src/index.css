@@ -4,6 +4,33 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===== 旧版 WebView 兼容性回退 =====
+ * 小米 8 等旧设备的 WebView 不支持 dvh / color-mix,
+ * 导致根容器高度为 0 → 黑屏。
+ * 用 @supports 做渐进增强，保证新设备不受影响。
+ */
+
+/* dvh 回退：旧浏览器用 vh 兑替 */
+@supports not (height: 100dvh) {
+  .h-\[100dvh\] { height: 100vh !important; }
+  .min-h-\[100dvh\] { min-height: 100vh !important; }
+  .max-h-\[100dvh\] { max-height: 100vh !important; }
+  .max-md\:h-\[100dvh\] { height: 100vh !important; }
+  /* LoginPage 内联样式回退 */
+  [style*="100dvh"] {
+    min-height: 100vh !important;
+    max-height: 100vh !important;
+    height: 100vh !important;
+  }
+}
+
+/* color-mix 回退：用固定透明度代替 */
+@supports not (color-mix(in srgb, red 50%, transparent)) {
+  *:focus-visible {
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.5) !important;
+  }
+}
+
 /* ===== Light Theme (默认) ===== */
 :root {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
@@ -204,8 +231,8 @@ body {
 }
 
 .ProseMirror p {
-  margin: 0;
-  line-height: 1.6;
+  margin: var(--pm-p-margin, 0.625rem) 0;
+  line-height: var(--pm-p-line-height, 1.6);
   color: var(--pm-text);
 }
 
@@ -719,6 +746,34 @@ html[data-code-theme="solarized-light"] {
 
 .ProseMirror.resize-cursor {
   cursor: col-resize;
+}
+
+/* 行高拖拽手柄（自研 TableRowResizable 扩展使用） */
+.tiptap-row-resize-handle {
+  background: transparent !important;
+}
+.tiptap-row-resize-handle::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 2px;
+  background-color: var(--color-accent-primary, #3b82f6);
+  opacity: 0.6;
+  pointer-events: none;
+}
+.tiptap-row-resize-handle:hover::before {
+  opacity: 1;
+  height: 3px;
+}
+
+/* ===== 阅读密度（reading density）===== */
+body.density-compact {
+  --pm-p-margin: 0.3rem;
+  --pm-p-line-height: 1.4;
+  --pm-li-margin: 0.2rem;
 }
 
 /* ===== 缩进级别 =====

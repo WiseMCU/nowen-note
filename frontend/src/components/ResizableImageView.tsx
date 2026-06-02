@@ -306,7 +306,10 @@ export function ResizableImageView(props: NodeViewProps) {
         display: "inline-block",
         position: "relative",
         maxWidth: "100%",
-        margin: "1rem auto",
+        // 上下 margin 收紧（原 1rem 视觉上太空）。
+        // wrapper 是 inline-block 不会和外层 <p> 的 margin 折叠，所以这里取小值，
+        // 让"图片到下一段文字"的总间距 ≈ 4px(wrapper) + 10px(段落) = 14px，视觉刚好。
+        margin: "0.25rem auto",
         lineHeight: 0, // 消除基线空隙
         // 选中态加一圈提示框
         outline: selected ? "2px solid #3b82f6" : "none",

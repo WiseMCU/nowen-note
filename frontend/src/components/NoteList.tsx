@@ -2742,7 +2742,7 @@ export default function NoteList() {
           ) : (
             <>
               {/* 导入 Markdown 按钮 */}
-              {state.viewMode !== "trash" && state.viewMode !== "search" && (
+              {state.viewMode !== "search" && (
                 <button
                   onClick={handleImportClick}
                   className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
@@ -2825,7 +2825,7 @@ export default function NoteList() {
           ) : (
             <>
               {/* 导入 Markdown 按钮 */}
-              {state.viewMode !== "trash" && state.viewMode !== "search" && (
+              {state.viewMode !== "search" && (
                 <button
                   onClick={handleImportClick}
                   className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"

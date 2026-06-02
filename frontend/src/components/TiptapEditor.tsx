@@ -3658,7 +3658,16 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
           onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
           title={t('tiptap.insertTable')}
         >
-          <Table2 size={iconSize} />
+          <TableGridPicker
+            iconSize={iconSize}
+            onPick={(rows, cols) =>
+              editor
+                .chain()
+                .focus()
+                .insertTable({ rows, cols, withHeaderRow: true })
+                .run()
+            }
+          />
         </ToolbarButton>
         {/* Mermaid 图表：插入空的 mermaid 代码块（lang=mermaid 由 CodeBlockView 渲染图形） */}
         <ToolbarButton

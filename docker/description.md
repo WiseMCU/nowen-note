@@ -69,6 +69,14 @@ docker run -d --name nowen-note --restart unless-stopped \
 
 ## 更新日志
 
+### v1.1.12.2
+
+**修复与优化**：
+- 移除笔记卡片切换动画（NoteList 淡入效果）
+- 优化 focus-visible 蓝色边框样式（减小透明度，编辑器移除 focus 边框）
+- 默认编辑器字体改为等宽字体（__mono）
+- 更新融合经验文档（CUSTOMIZATIONS.md）
+
 ### v1.1.12.1
 
 **上游同步**：基于 cropflre/nowen-note v1.1.12 (commit aa9a2fd) 融合

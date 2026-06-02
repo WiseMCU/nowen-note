@@ -117,14 +117,6 @@ Backup policy: auto-backups are written to `/app/data/backups` by default, shari
 
 QQ group: `1093473044`
 
-## Sponsor
-
-If this project helps you, feel free to scan the QR code and buy the author a coffee.
-
-<p align="center">
-  <img src="./weixin.jpg" alt="WeChat sponsor QR" width="280" />
-</p>
-
 ## License
 
 [GPL-3.0](./LICENSE) — derivative works must also be distributed under GPL-3.0 and preserve the original copyright notice.
@@ -133,6 +125,63 @@ If this project helps you, feel free to scan the QR code and buy the author a co
 ## 更新日志
 
 > 最近 5 个版本的更新内容，完整历史见 [CHANGELOG.md](./CHANGELOG.md)。
+
+### v1.1.12.2 - 2026-05-29
+
+**修复与优化**：
+- 移除笔记卡片切换动画
+- 优化 focus-visible 蓝色边框样式
+- 默认编辑器字体改为等宽字体
+
+### v1.1.12.1 - 2026-05-29
+
+**上游同步**：基于 cropflre/nowen-note v1.1.12 融合
+
+**上游新增功能**：
+- 表格交互优化（行高拖拽、网格选择器、合并按钮、行列增删）
+- 阅读密度偏好（宽松/紧凑模式）
+- 客户端下载面板 + Gitee 镜像同步
+- 搜索按钮上提到笔记标题栏
+- Android WebView CSS 兼容性修复（小米8黑屏）
+
+**二次开发功能保留**：
+- AI 助手悬浮框支持拖拽移动
+- 移除笔记栏日历筛选按钮
+- 笔记列表空状态显示导入 Markdown 按钮
+- 锁定笔记复制按钮 + 移动拦截
+- 主题切换按钮
+- Docker 优化（Alpine + UPX 压缩）
+
+### v1.1.9.1 - 2026-05-29
+
+**上游同步**：基于 cropflre/nowen-note v1.1.9 融合
+
+**上游新增功能**：
+- 多设备笔记同步优化
+- 桌面端云端本地模式与访问控制优化
+- 桌面端本地模式重载循环修复
+
+**二次开发功能**：
+- AI 助手悬浮框支持拖拽移动
+- 移除笔记栏日历筛选按钮
+- 笔记列表导入 Markdown 按钮
+
+### v1.1.7.2 - 2026-05-28
+
+**上游同步**：基于 cropflre/nowen-note v1.1.7 融合
+
+**二次开发功能**：
+- Docker 优化：Alpine + UPX 压缩（镜像 ~123MB）
+- Docker 密码重置：`NOWEN_RESET_PASSWORD` 环境变量
+- 注册默认关闭
+- AI 角色化 system prompt + 严格 format_markdown
+- 主题切换按钮（NavRail 底部）
+- 笔记本右键导入 Markdown
+- 锁定笔记复制按钮 + 移动拦截
+- 禁用拼写检查
+- Markdown 导入空行保留
+- 移除 NoteCard 切换动画
+- 禁用自动更新日志弹窗
 
 ### v1.1.6 - 2026-05-26
 

@@ -1034,15 +1034,8 @@ const NoteCard = React.memo(function NoteCard({
     !!note.creatorName && getCurrentWorkspace() !== "personal";
 
   return (
-    <motion.div
+    <div
       ref={cardRef}
-      // 仅做轻量淡入。早期版本用了 y:4 → y:0 的位移，会造成切换笔记本时
-      // 整列卡片"先在面板底部出现再上移"的错觉（尤其当 list 项很少、
-      // 列表内容贴近底部时尤为明显）。这里去掉 y 位移，让卡片就地淡入。
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.12, ease: "easeOut" }}
       onClick={onClick}
       onContextMenu={onContextMenu}
       draggable={draggable}
@@ -1144,7 +1137,7 @@ const NoteCard = React.memo(function NoteCard({
           ) : null}
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 });
 NoteCard.displayName = "NoteCard";

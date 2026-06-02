@@ -134,7 +134,7 @@ export function SiteSettingsProvider({ children }: { children: React.ReactNode }
       const config: SiteConfig = {
         title: data.site_title || "nowen-note",
         favicon: data.site_favicon || "",
-        editorFontFamily: data.editor_font_family || "",
+        editorFontFamily: data.editor_font_family || "__mono",
       };
       setSiteConfig(config);
       applyToDOM(config.title, config.favicon);

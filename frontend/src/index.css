@@ -27,7 +27,11 @@
 /* color-mix 回退：用固定透明度代替 */
 @supports not (color-mix(in srgb, red 50%, transparent)) {
   *:focus-visible {
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.5) !important;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.3);
+  }
+  /* ProseMirror 编辑器不需要 focus-visible 边框 */
+  .ProseMirror:focus-visible {
+    box-shadow: none;
   }
 }
 

@@ -32,7 +32,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       # 根目录 package.json 包含 @capacitor/cli，必须先安装
       - name: Install root deps

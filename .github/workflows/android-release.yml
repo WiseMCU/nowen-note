@@ -34,24 +34,25 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Install dependencies
-        run: |
-          cd frontend
-          npm ci
+      # 根目录 package.json 包含 @capacitor/cli，必须先安装
+      - name: Install root deps
+        run: npm install
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm install
 
       - name: Build frontend
-        run: |
-          cd frontend
-          npm run build
+        working-directory: frontend
+        run: npm run build
 
       - name: Sync Capacitor Android
-        run: |
-          cd frontend
-          npx cap sync android
+        working-directory: frontend
+        run: npx cap sync android
 
       - name: Build APK
+        working-directory: frontend/android
         run: |
-          cd frontend/android
           chmod +x gradlew
           ./gradlew assembleDebug
 

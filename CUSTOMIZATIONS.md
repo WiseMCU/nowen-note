@@ -77,7 +77,16 @@
 - 多架构构建（linux/amd64, linux/arm64）
 - 自动更新 Docker Hub 描述
 
-### 3. 后端改动
+### 3. Android APK 构建
+
+**文件**：`.github/workflows/android-release.yml`
+
+**功能**：
+- tag 触发自动构建 APK 并发布到 GitHub Release
+- 支持手动触发构建
+- 先安装根目录依赖（`@capacitor/cli`），再安装前端依赖
+
+### 4. 后端改动
 
 **文件**：`backend/src/routes/auth.ts`
 

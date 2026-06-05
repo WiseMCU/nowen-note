@@ -2412,19 +2412,13 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       btn.className = "locked-copy-btn";
       btn.contentEditable = "false";
       btn.style.cssText =
-        "display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin:0 3px;vertical-align:middle;border-radius:6px;cursor:pointer;background:rgba(139,92,246,0.1);color:#7c3aed;flex-shrink:0;pointer-events:auto;";
+        "display:inline-flex;align-items:center;justify-content:center;min-width:28px;min-height:28px;padding:3px;margin:0 2px;vertical-align:middle;border-radius:6px;cursor:pointer;background:rgba(139,92,246,0.1);color:#7c3aed;flex-shrink:0;pointer-events:auto;touch-action:manipulation;";
       btn.title = "点击复制";
       btn.dataset.copyText = text;
       btn.innerHTML = COPY_SVG;
-      // 用 mousedown 而非 onclick：ProseMirror 在只读态下会拦截 click 事件，
-      // mousedown 阶段 stopPropagation + preventDefault 可以抢在 PM 之前处理。
-      btn.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      }, true);
-      btn.addEventListener("click", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
+
+      // 复制逻辑（桌面/移动端共用）
+      const doCopy = async () => {
         if (btn.dataset.copied === "1") return;
         const ok = await copyToClipboard(text);
         if (ok) {
@@ -2442,7 +2436,22 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             btn.title = "点击复制";
           }, 1200);
         }
+      };
+
+      // 桌面端：mousedown 阻止 ProseMirror 拦截
+      btn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        doCopy();
       }, true);
+
+      // 移动端：touchend 直接执行复制（touchstart 不能 preventDefault 否则 click 不触发）
+      btn.addEventListener("touchend", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        doCopy();
+      }, { capture: true, passive: false });
+
       return btn;
     };
 

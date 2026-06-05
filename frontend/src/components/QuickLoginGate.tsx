@@ -58,18 +58,26 @@ export default function QuickLoginGate({ isClientMode, onSettled }: Props) {
   // 不会反复弹出。
   useEffect(() => {
     let cancelled = false;
+    // 超时保护：如果生物识别模块加载卡住，5 秒后回退到密码登录
+    const timeout = setTimeout(() => {
+      if (!cancelled) onSettled(false);
+    }, 5000);
+
     (async () => {
       if (!isQuickLoginPlatformSupported()) {
+        clearTimeout(timeout);
         if (!cancelled) onSettled(false);
         return;
       }
       if (!isClientMode) {
+        clearTimeout(timeout);
         if (!cancelled) onSettled(false);
         return;
       }
       const enabled = await isQuickLoginEnabled();
       if (cancelled) return;
       if (!enabled) {
+        clearTimeout(timeout);
         onSettled(false);
         return;
       }
@@ -101,9 +109,11 @@ export default function QuickLoginGate({ isClientMode, onSettled }: Props) {
           if (result.reason === "biometry_unavailable") {
             await disableQuickLogin();
           }
+          clearTimeout(timeout);
           onSettled(false);
           return;
         }
+        clearTimeout(timeout);
         setErrorMsg(result.message || "解锁失败，请使用密码登录");
         setPhase("fallback");
         return;
@@ -152,9 +162,11 @@ export default function QuickLoginGate({ isClientMode, onSettled }: Props) {
         } catch {
           /* ignore */
         }
+        clearTimeout(timeout);
         onSettled(true, { token: result.token, user: data.user });
       } catch (e: any) {
         if (cancelled) return;
+        clearTimeout(timeout);
         setErrorMsg(
           e?.name === "AbortError"
             ? "服务器无响应，请检查网络"
@@ -165,6 +177,7 @@ export default function QuickLoginGate({ isClientMode, onSettled }: Props) {
     })();
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
     };
   }, [isClientMode, onSettled]);
 

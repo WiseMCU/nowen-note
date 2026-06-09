@@ -35,6 +35,11 @@
  */
 
 import { Capacitor } from "@capacitor/core";
+import {
+  hasBiometricAuthNativePlugin,
+  hasQuickLoginNativePlugins,
+  hasSecureStorageNativePlugin,
+} from "@/lib/nativePlugins";
 
 // 用 dynamic import 加载插件，避免 Web 构建时把原生插件硬塞进首屏 chunk。
 // 但同时插件包必须列在 dependencies，否则 Vite 解析不到模块。
@@ -73,7 +78,7 @@ function isCapacitorNative(): boolean {
 }
 
 async function loadSecureStorage(): Promise<SecureStorageModule | null> {
-  if (!isCapacitorNative()) return null;
+  if (!isCapacitorNative() || !hasSecureStorageNativePlugin()) return null;
   if (secureStorageModPromise) return secureStorageModPromise;
   secureStorageModPromise = (async () => {
     try {
@@ -97,7 +102,7 @@ async function loadSecureStorage(): Promise<SecureStorageModule | null> {
 }
 
 async function loadBiometric(): Promise<BiometricModule | null> {
-  if (!isCapacitorNative()) return null;
+  if (!isCapacitorNative() || !hasBiometricAuthNativePlugin()) return null;
   if (biometricModPromise) return biometricModPromise;
   biometricModPromise = (async () => {
     try {
@@ -130,7 +135,7 @@ export interface BiometryStatus {
 
 /** 当前运行环境是否能用快速登录（先决条件）。Web / Electron 永远 false。 */
 export function isQuickLoginPlatformSupported(): boolean {
-  return isCapacitorNative();
+  return isCapacitorNative() && hasQuickLoginNativePlugins();
 }
 
 /** 探测设备的生物识别状态。不抛错，失败返回 available=false。 */
@@ -204,6 +209,9 @@ export async function enableQuickLogin(params: {
 }): Promise<{ ok: boolean; error?: string }> {
   if (!isCapacitorNative()) {
     return { ok: false, error: "当前环境不支持快速登录" };
+  }
+  if (!hasQuickLoginNativePlugins()) {
+    return { ok: false, error: "快速登录原生组件未启用" };
   }
   if (!params.token) {
     return { ok: false, error: "缺少登录凭证" };
@@ -314,6 +322,9 @@ export type QuickLoginAttemptResult =
 
 export async function attemptQuickLogin(): Promise<QuickLoginAttemptResult> {
   if (!isCapacitorNative()) {
+    return { ok: false, reason: "unsupported" };
+  }
+  if (!hasQuickLoginNativePlugins()) {
     return { ok: false, reason: "unsupported" };
   }
 

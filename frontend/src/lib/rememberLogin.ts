@@ -34,6 +34,7 @@
  */
 
 import { Capacitor } from "@capacitor/core";
+import { hasSecureStorageNativePlugin } from "@/lib/nativePlugins";
 
 // ============================================================================
 // 类型
@@ -92,7 +93,7 @@ type SecureStorageModule =
 
 let ssModPromise: Promise<SecureStorageModule | null> | null = null;
 async function loadSecureStorage(): Promise<SecureStorageModule | null> {
-  if (!isCapacitorNative()) return null;
+  if (!isCapacitorNative() || !hasSecureStorageNativePlugin()) return null;
   if (ssModPromise) return ssModPromise;
   ssModPromise = (async () => {
     try {
@@ -128,7 +129,7 @@ const LS_KEY = "nowen-remember-login-v1";
  * - Web：false（不落密码）
  */
 export async function canPersistPassword(): Promise<boolean> {
-  if (isCapacitorNative()) return true;
+  if (isCapacitorNative()) return hasSecureStorageNativePlugin();
   const desktop = getDesktopApi();
   if (desktop) {
     try {
@@ -158,7 +159,7 @@ export async function loadRememberedCredentials(): Promise<RememberedCredentials
     }
 
     // ---- Capacitor ----
-    if (isCapacitorNative()) {
+    if (isCapacitorNative() && hasSecureStorageNativePlugin()) {
       const mod = await loadSecureStorage();
       if (!mod) return null;
       const raw = await mod.SecureStorage.get(SS_KEY);
@@ -226,7 +227,7 @@ export async function saveRememberedCredentials(
     }
 
     // ---- Capacitor ----
-    if (isCapacitorNative()) {
+    if (isCapacitorNative() && hasSecureStorageNativePlugin()) {
       const mod = await loadSecureStorage();
       if (!mod) return { ok: false, encrypted: false, error: "SecureStorage 不可用" };
       const payload = {
@@ -262,7 +263,7 @@ export async function clearRememberedCredentials(): Promise<void> {
     if (desktop) {
       try { await desktop.clear(); } catch { /* ignore */ }
     }
-    if (isCapacitorNative()) {
+    if (isCapacitorNative() && hasSecureStorageNativePlugin()) {
       const mod = await loadSecureStorage();
       if (mod) {
         try { await mod.SecureStorage.remove(SS_KEY); } catch { /* ignore */ }

@@ -3,8 +3,6 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Sparkles, ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
 /**
  * 更新日志结构（与 scripts/generate-changelog.mjs 的 --emit-json 输出保持一致）
@@ -31,6 +29,23 @@ interface WhatsNewModalProps {
   /** 高亮的版本号（首次升级弹窗时传当前版本）；未传时不高亮 */
   highlightVersion?: string;
 }
+
+const ChangelogMarkdown = React.lazy(async () => {
+  const [{ default: ReactMarkdown }, { default: remarkGfm }] = await Promise.all([
+    import("react-markdown"),
+    import("remark-gfm"),
+  ]);
+
+  return {
+    default({ children }: { children: string }) {
+      return (
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {children}
+        </ReactMarkdown>
+      );
+    },
+  };
+});
 
 /**
  * 「更新日志」Modal。
@@ -241,9 +256,15 @@ export default function WhatsNewModal({ open, onClose, highlightVersion }: Whats
                                    prose-code:text-xs prose-code:bg-zinc-100 dark:prose-code:bg-zinc-800
                                    prose-code:px-1 prose-code:py-0.5 prose-code:rounded"
                       >
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {entry.body}
-                        </ReactMarkdown>
+                        <React.Suspense
+                          fallback={
+                            <pre className="whitespace-pre-wrap font-sans text-sm text-zinc-700 dark:text-zinc-300">
+                              {entry.body}
+                            </pre>
+                          }
+                        >
+                          <ChangelogMarkdown>{entry.body}</ChangelogMarkdown>
+                        </React.Suspense>
                       </div>
                     </section>
                   );

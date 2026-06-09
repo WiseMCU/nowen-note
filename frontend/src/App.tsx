@@ -1,21 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Menu, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import Sidebar from "@/components/Sidebar";
-import NavRail from "@/components/NavRail";
 import { useRailMode } from "@/hooks/useRailMode";
-import NoteList from "@/components/NoteList";
-import EditorPane from "@/components/EditorPane";
-import TaskCenter from "@/components/TaskCenter";
-import MindMapCenter from "@/components/MindMapEditor";
-import AIChatPanel from "@/components/AIChatPanel";
-import DiaryCenter from "@/components/DiaryCenter";
-import FileManager from "@/components/FileManager";
-import SharedNoteView from "@/components/SharedNoteView";
 import LoginPage from "@/components/LoginPage";
 import QuickLoginGate from "@/components/QuickLoginGate";
-import QuickLoginEnrollDialog from "@/components/QuickLoginEnrollDialog";
 import WhatsNewModal, { useWhatsNew } from "@/components/WhatsNewModal";
 import { AppProvider, useApp, useAppActions, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, DEFAULT_SIDEBAR_WIDTH, MIN_NOTELIST_WIDTH, MAX_NOTELIST_WIDTH, DEFAULT_NOTELIST_WIDTH } from "@/store/AppContext";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -26,12 +15,36 @@ import { ConfirmProvider } from "@/components/ui/confirm";
 import Toaster from "@/components/Toaster";
 import { User } from "@/types";
 import { getServerUrl, clearServerUrl, broadcastLogout } from "@/lib/api";
-import { bootstrap as syncBootstrap, teardown as syncTeardown } from "@/lib/syncEngine";
 import { useBackButton, hideSplashScreen, useStatusBarSync, useKeyboardLayout, isNativePlatform } from "@/hooks/useCapacitor";
 import { useDesktopMenuBridge } from "@/hooks/useDesktopMenuBridge";
-import CommandPalette from "@/components/common/CommandPalette";
-import OfflineIndicator from "@/components/common/OfflineIndicator";
-import UpdateNotifier from "@/components/common/UpdateNotifier";
+
+const Sidebar = React.lazy(() => import("@/components/Sidebar"));
+const NavRail = React.lazy(() => import("@/components/NavRail"));
+const NoteList = React.lazy(() => import("@/components/NoteList"));
+const EditorPane = React.lazy(() => import("@/components/EditorPane"));
+const TaskCenter = React.lazy(() => import("@/components/TaskCenter"));
+const MindMapCenter = React.lazy(() => import("@/components/MindMapEditor"));
+const AIChatPanel = React.lazy(() => import("@/components/AIChatPanel"));
+const DiaryCenter = React.lazy(() => import("@/components/DiaryCenter"));
+const FileManager = React.lazy(() => import("@/components/FileManager"));
+const SharedNoteView = React.lazy(() => import("@/components/SharedNoteView"));
+const QuickLoginEnrollDialog = React.lazy(() => import("@/components/QuickLoginEnrollDialog"));
+const CommandPalette = React.lazy(() => import("@/components/common/CommandPalette"));
+const OfflineIndicator = React.lazy(() => import("@/components/common/OfflineIndicator"));
+const UpdateNotifier = React.lazy(() => import("@/components/common/UpdateNotifier"));
+
+function FullPageLoading({ label }: { label?: string }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 transition-colors">
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+        {label ? (
+          <p className="text-sm text-zinc-400 dark:text-zinc-500">{label}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 function SidebarResizeHandle() {
   const { state } = useApp();
@@ -754,9 +767,11 @@ function AuthGate() {
   // 这里集中接管，避免每个入口都重复挂钩。失败不阻塞 UI。
   useEffect(() => {
     if (!user?.id) return;
-    void syncBootstrap(user).catch((e) => {
-      console.warn("[App] syncBootstrap failed:", e);
-    });
+    void import("@/lib/syncEngine")
+      .then((m) => m.bootstrap(user))
+      .catch((e) => {
+        console.warn("[App] syncBootstrap failed:", e);
+      });
   }, [user?.id]);
 
   // 「更新日志」首次升级自动弹窗 — 已禁用（用户不需要自动弹出）
@@ -773,7 +788,7 @@ function AuthGate() {
     // 避免下次开 app 又用旧 token 自动登录（会落到 verify 失败再回退，但没必要走一遭）
     void import("@/lib/quickLogin").then((m) => m.disableQuickLogin()).catch(() => {});
     // Phase B: 解绑本地缓存当前用户；缓存数据保留以便下次重登秒开
-    syncTeardown();
+    void import("@/lib/syncEngine").then((m) => m.teardown()).catch(() => {});
     setIsAuthenticated(false);
     setUser(null);
   };
@@ -817,14 +832,7 @@ function AuthGate() {
 
   // 加载中
   if (isAuthenticated === null) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 transition-colors">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-zinc-400 dark:text-zinc-500">{t('auth.verifying')}</p>
-        </div>
-      </div>
-    );
+    return <FullPageLoading label={t('auth.verifying')} />;
   }
 
   // 未登录 → 一体化登录页
@@ -861,16 +869,20 @@ function AuthGate() {
   return (
     <AppProvider>
       <TooltipProvider>
-        <AppLayout />
+        <Suspense fallback={<FullPageLoading label={t('common.loading')} />}>
+          <AppLayout />
+        </Suspense>
         {/* Phase 7: 客户端模式下，密码登录成功后引导启用快速登录。
             QuickLoginEnrollDialog 内部会判断"是否已问过 / 设备是否支持"，
             不需要展示时会立即调 onClose 自我隐身。 */}
         {justPasswordLogin && isClientMode && user && activeToken && (
-          <QuickLoginEnrollDialog
-            username={user.username}
-            token={activeToken}
-            onClose={() => setJustPasswordLogin(false)}
-          />
+          <Suspense fallback={null}>
+            <QuickLoginEnrollDialog
+              username={user.username}
+              token={activeToken}
+              onClose={() => setJustPasswordLogin(false)}
+            />
+          </Suspense>
         )}
         {/* 首次升级到新版本自动弹「更新日志」。
             useWhatsNew 决定是否该弹；onClose 调 markSeen 写回 localStorage，
@@ -901,7 +913,9 @@ function App() {
     return (
       <ThemeProvider>
         <ConfirmProvider>
-          <SharedNoteView shareToken={shareMatch[1]} />
+          <Suspense fallback={<FullPageLoading />}>
+            <SharedNoteView shareToken={shareMatch[1]} />
+          </Suspense>
           <Toaster />
         </ConfirmProvider>
       </ThemeProvider>

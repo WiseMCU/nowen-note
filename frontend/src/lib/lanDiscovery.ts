@@ -27,6 +27,7 @@
  */
 
 import { Capacitor } from "@capacitor/core";
+import { hasZeroConfNativePlugin } from "@/lib/nativePlugins";
 
 // ---- 公开接口 ----
 
@@ -176,7 +177,7 @@ class CapacitorDiscovery implements LanDiscovery {
 
   isAvailable() {
     // 只判定原生平台；插件加载失败会在 start() 中降级
-    return Capacitor.isNativePlatform();
+    return Capacitor.isNativePlatform() && hasZeroConfNativePlugin();
   }
 
   private async loadPlugin(): Promise<ZeroconfPluginShape | null> {
@@ -366,7 +367,7 @@ export function getLanDiscovery(): LanDiscovery {
     return singleton;
   }
   // Capacitor 原生（Android / iOS）
-  if (Capacitor.isNativePlatform()) {
+  if (Capacitor.isNativePlatform() && hasZeroConfNativePlugin()) {
     singleton = new CapacitorDiscovery();
     return singleton;
   }

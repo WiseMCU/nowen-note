@@ -10,6 +10,26 @@ const rootPkg = JSON.parse(
 ) as { version?: string }
 const APP_VERSION = rootPkg.version || "0.0.0"
 
+const ANDROID_HTML_PRELOAD_BLOCKLIST =
+  /(?:vendor-(?:tiptap|codemirror|diagram|files|markdown|react-icons|yjs)|EditorPane|TiptapEditor|MindMapEditor|SharedNoteView|FileManager|pdf\.worker|mermaid|cytoscape|jspdf|html2canvas|katex)/
+
+function getPackageName(id: string): string | null {
+  const normalized = id.replace(/\\/g, "/")
+  const marker = "/node_modules/"
+  const markerIndex = normalized.lastIndexOf(marker)
+  if (markerIndex === -1) return null
+
+  const parts = normalized.slice(markerIndex + marker.length).split("/")
+  if (parts[0]?.startsWith("@")) {
+    return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : null
+  }
+  return parts[0] || null
+}
+
+function isPackage(pkg: string, names: string[]) {
+  return names.some((name) => pkg === name || pkg.startsWith(`${name}/`))
+}
+
 export default defineConfig({
   root: path.resolve(__dirname),
   plugins: [react()],
@@ -33,39 +53,59 @@ export default defineConfig({
     // "vite/modulepreload-polyfill" 误识别为 source phase import 而报错。
     // 现代浏览器（Chrome 64+、Firefox 115+、Safari 17.5+）已原生支持 modulepreload，
     // Capacitor WebView 和 Electron 同样无需 polyfill。
-    modulePreload: { polyfill: false },
+    modulePreload: {
+      polyfill: false,
+      resolveDependencies(_url, deps, context) {
+        if (context.hostType !== "html") return deps
+        return deps.filter((dep) => !ANDROID_HTML_PRELOAD_BLOCKLIST.test(dep))
+      },
+    },
     // 降低 chunk 大小警告阈值
     chunkSizeWarningLimit: 2000,
     rollupOptions: {
       output: {
         // 手动分包，降低构建内存峰值
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom'],
-          'vendor-tiptap': [
-            '@tiptap/react',
-            '@tiptap/starter-kit',
-            '@tiptap/extension-code-block-lowlight',
-            '@tiptap/extension-highlight',
-            '@tiptap/extension-image',
-            '@tiptap/extension-placeholder',
-            '@tiptap/extension-task-item',
-            '@tiptap/extension-task-list',
-            '@tiptap/extension-underline',
-          ],
-          'vendor-ui': [
-            'framer-motion',
-            'lucide-react',
-            'react-icons',
-          ],
-          'vendor-utils': [
-            'jszip',
-            'react-markdown',
-            'remark-gfm',
-            'turndown',
-            'date-fns',
-            'i18next',
-            'react-i18next',
-          ],
+        manualChunks(id) {
+          const pkg = getPackageName(id)
+          if (!pkg) return undefined
+
+          if (isPackage(pkg, ["react", "react-dom", "scheduler", "use-sync-external-store"])) {
+            return "vendor-react"
+          }
+          if (isPackage(pkg, ["i18next", "react-i18next", "i18next-browser-languagedetector"])) {
+            return "vendor-i18n"
+          }
+          if (pkg === "framer-motion") return "vendor-motion"
+          if (pkg === "lucide-react") return "vendor-lucide"
+          if (pkg === "react-icons") return "vendor-react-icons"
+          if (pkg.startsWith("@radix-ui/") || isPackage(pkg, ["class-variance-authority", "clsx", "tailwind-merge", "next-themes"])) {
+            return "vendor-ui"
+          }
+          if (pkg.startsWith("@capacitor/")) return "vendor-capacitor"
+          if (pkg.startsWith("@tiptap/") || pkg.startsWith("prosemirror-") || isPackage(pkg, ["lowlight", "highlight.js", "katex"])) {
+            return "vendor-tiptap"
+          }
+          if (pkg.startsWith("@codemirror/") || pkg.startsWith("@lezer/") || pkg === "y-codemirror.next") {
+            return "vendor-codemirror"
+          }
+          if (isPackage(pkg, ["mermaid", "cytoscape", "cytoscape-cose-bilkent", "elkjs", "dagre", "roughjs"]) || pkg.startsWith("@mermaid-js/")) {
+            return "vendor-diagram"
+          }
+          if (isPackage(pkg, ["jspdf", "html2canvas", "pdfjs-dist", "mammoth", "jszip", "file-saver"])) {
+            return "vendor-files"
+          }
+          if (
+            isPackage(pkg, ["react-markdown", "remark-gfm", "remark-parse", "remark-rehype", "rehype-raw", "rehype-stringify", "unified", "vfile", "turndown", "marked", "dompurify"]) ||
+            pkg.startsWith("micromark") ||
+            pkg.startsWith("mdast-util-") ||
+            pkg.startsWith("hast-util-")
+          ) {
+            return "vendor-markdown"
+          }
+          if (pkg === "date-fns") return "vendor-date"
+          if (pkg === "idb") return "vendor-idb"
+          if (isPackage(pkg, ["yjs", "y-protocols", "y-indexeddb", "lib0"])) return "vendor-yjs"
+          return undefined
         },
       },
     },

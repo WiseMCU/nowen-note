@@ -34,3 +34,7 @@ export function hasQuickLoginNativePlugins(): boolean {
 export function hasZeroConfNativePlugin(): boolean {
   return hasNativePlugin("ZeroConf");
 }
+
+export function hasClipboardNativePlugin(): boolean {
+  return hasNativePlugin("Clipboard");
+}

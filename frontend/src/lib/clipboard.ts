@@ -7,7 +7,8 @@
  *        下 `navigator.clipboard` 是 undefined，原始调用会直接抛异常。
  *     2. 老 iOS Safari / 老 Edge 不支持异步剪贴板 API。
  *   这里统一做一次：
- *     - 优先 navigator.clipboard.writeText
+ *     - Capacitor 原生 App 优先走系统剪贴板插件（Android WebView 更稳定）
+ *     - 再尝试 navigator.clipboard.writeText
  *     - 失败 / 不可用时降级到 textarea + document.execCommand("copy")
  *     - 调用方拿到 boolean 结果，自己决定 toast 文案
  *
@@ -17,9 +18,30 @@
  *
  * @returns 复制是否成功
  */
+import { Capacitor } from "@capacitor/core";
+import { hasClipboardNativePlugin } from "@/lib/nativePlugins";
+
+let nativeClipboardModule: Promise<typeof import("@capacitor/clipboard")> | null = null;
+
+async function copyWithNativeClipboard(value: string): Promise<boolean> {
+  try {
+    if (!Capacitor.isNativePlatform() || !hasClipboardNativePlugin()) return false;
+    nativeClipboardModule ??= import("@capacitor/clipboard");
+    const { Clipboard } = await nativeClipboardModule;
+    await Clipboard.write({ string: value, label: "Nowen Note" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function copyText(text: string): Promise<boolean> {
   if (text == null) return false;
   const value = String(text);
+
+  if (await copyWithNativeClipboard(value)) {
+    return true;
+  }
 
   // Path 1: 现代异步 API（secureContext / https / localhost）
   try {
@@ -49,9 +71,11 @@ export async function copyText(text: string): Promise<boolean> {
     ta.style.background = "transparent";
     ta.style.opacity = "0";
     ta.setAttribute("readonly", "");
+    ta.setAttribute("aria-hidden", "true");
     document.body.appendChild(ta);
-    ta.focus();
+    ta.focus({ preventScroll: true });
     ta.select();
+    ta.setSelectionRange(0, value.length);
     let ok = false;
     try {
       ok = document.execCommand("copy");

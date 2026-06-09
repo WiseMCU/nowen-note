@@ -46,6 +46,7 @@ import {
 import { downloadAttachment } from "@/lib/downloadFile";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
+import { copyText } from "@/lib/clipboard";
 import { prompt as promptDialog } from "@/components/ui/confirm";
 import { Note, Tag } from "@/types";
 import TagInput from "@/components/TagInput";
@@ -1500,18 +1501,13 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
               : /^tel:/i.test(href)
               ? "电话"
               : "号码";
-            try {
-              if (navigator.clipboard && window.isSecureContext) {
-                navigator.clipboard.writeText(plain).then(
-                  () => toast.success(`已复制${label}：${plain}`),
-                  () => toast.info(`${label}：${plain}`),
-                );
+            void copyText(plain).then((ok) => {
+              if (ok) {
+                toast.success(`已复制${label}：${plain}`);
               } else {
                 toast.info(`${label}：${plain}`);
               }
-            } catch {
-              toast.info(`${label}：${plain}`);
-            }
+            });
             return true;
           }
           return false;
@@ -2390,23 +2386,6 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
     // 按中文/中文标点拆 token；英文空格不分隔，让整个词组成为一体
     const tokenRe = /[^一-鿿　-〿＀-￯]+/g;
 
-    const copyToClipboard = (text: string): Promise<boolean> => {
-      if (navigator.clipboard && window.isSecureContext) {
-        return navigator.clipboard.writeText(text).then(() => true);
-      }
-      return new Promise((resolve) => {
-        try {
-          const ta = document.createElement("textarea");
-          ta.value = text;
-          ta.style.cssText = "position:fixed;left:-9999px;top:-9999px";
-          document.body.appendChild(ta);
-          ta.select();
-          resolve(document.execCommand("copy"));
-          document.body.removeChild(ta);
-        } catch { resolve(false); }
-      });
-    };
-
     const makeBtn = (text: string): HTMLElement => {
       const btn = document.createElement("span");
       btn.className = "locked-copy-btn";
@@ -2420,7 +2399,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
       // 复制逻辑（桌面/移动端共用）
       const doCopy = async () => {
         if (btn.dataset.copied === "1") return;
-        const ok = await copyToClipboard(text);
+        const ok = await copyText(text);
         if (ok) {
           btn.innerHTML = CHECK_SVG;
           btn.style.background = "rgba(16,185,129,0.15)";
@@ -2435,6 +2414,8 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             delete btn.dataset.copied;
             btn.title = "点击复制";
           }, 1200);
+        } else {
+          toast.error("复制失败，请手动选中复制");
         }
       };
 

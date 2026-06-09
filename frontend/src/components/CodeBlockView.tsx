@@ -11,6 +11,8 @@ import {
 } from "@/lib/codeBlockTheme";
 import MermaidView from "@/components/MermaidView";
 import { isMermaidLang } from "@/lib/mermaidRenderer";
+import { copyText } from "@/lib/clipboard";
+import { toast } from "@/lib/toast";
 
 /**
  * 自定义代码块视图：
@@ -142,26 +144,16 @@ export function CodeBlockView(props: NodeViewProps) {
   const handleCopy = useCallback(async () => {
     try {
       const text = node.textContent;
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        // 降级：textarea + execCommand
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        try {
-          document.execCommand("copy");
-        } finally {
-          document.body.removeChild(ta);
-        }
+      const ok = await copyText(text);
+      if (!ok) {
+        toast.error("复制失败，请手动选中复制");
+        return;
       }
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch (err) {
       console.error("Copy code block failed:", err);
+      toast.error("复制失败，请手动选中复制");
     }
   }, [node]);
 

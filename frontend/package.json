@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@capacitor/app": "^8.0.1",
+    "@capacitor/clipboard": "^8.0.1",
     "@capacitor/haptics": "^8.0.1",
     "@capacitor/keyboard": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",

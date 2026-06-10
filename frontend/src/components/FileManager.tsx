@@ -334,10 +334,30 @@ export default function FileManager() {
     }
   }, []);
 
+  const scheduleReclaimableScan = useCallback(() => {
+    if (typeof window === "undefined") return () => {};
+
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (
+        callback: IdleRequestCallback,
+        options?: IdleRequestOptions,
+      ) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    if (idleWindow.requestIdleCallback) {
+      const handle = idleWindow.requestIdleCallback(() => loadReclaimable(), { timeout: 1800 });
+      return () => idleWindow.cancelIdleCallback?.(handle);
+    }
+
+    const handle = window.setTimeout(() => loadReclaimable(), 600);
+    return () => window.clearTimeout(handle);
+  }, [loadReclaimable]);
+
   useEffect(() => {
     loadStats();
-    loadReclaimable();
-  }, [loadStats, loadReclaimable]);
+    return scheduleReclaimableScan();
+  }, [loadStats, scheduleReclaimableScan]);
 
   // ---- 拉列表（受 category / sort / searchQuery / page 驱动）----
   const loadList = useCallback(async () => {

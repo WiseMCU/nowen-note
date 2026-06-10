@@ -14,10 +14,6 @@ import { TableRowWithHeight } from "@/components/extensions/TableRowResizable";
 import { common, createLowlight } from "lowlight";
 import { TextStyleKit } from "@/components/FontSizeExtension";
 import { Video as VideoExtension } from "@/components/VideoExtension";
-import {
-  normalizeNowenBlankParagraphHtmlForImport,
-  replaceNowenBlankParagraphMarkdownWithPlaceholder,
-} from "./markdownBlankParagraph";
 
 const lowlight = createLowlight(common);
 
@@ -848,6 +844,15 @@ function unwrapOuterMarkdownFence(content: string): string {
   return lines.slice(start + 1, end).join("\n");
 }
 
+function preserveMarkdownBlankParagraphs(md: string): string {
+  if (!md) return md;
+  return md.replace(/(?:\r?\n){3,}/g, (match) => {
+    const newlineCount = (match.match(/\r?\n/g) || []).length;
+    const blankParagraphs = Math.max(1, newlineCount - 2);
+    return "\n\n" + "<!--blank-->".repeat(blankParagraphs) + "\n\n";
+  });
+}
+
 // 将 Markdown 转为 HTML（用于存储到 Tiptap 格式）
 export function markdownToSimpleHtml(md: string, imageMap?: Record<string, string>): string {
   // 去除 YAML frontmatter
@@ -857,10 +862,7 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
 
   // 脱壳：整段被 ```markdown ... ``` 包裹时，剥掉外层
   content = unwrapOuterMarkdownFence(content);
-
-  // 优先识别新的空段落标记：它既能在 Markdown 预览里显示明显空白，也能在导入时
-  // 无损还原成真正的空段落。
-  content = replaceNowenBlankParagraphMarkdownWithPlaceholder(content, "<!--blank-->");
+  content = preserveMarkdownBlankParagraphs(content);
 
   // 将连续空白行还原为 <p>&nbsp;</p>（空段落）。
   // 导出端用 <br/> 占位，Turndown → `  \n\n\n`，postProcess → `\n\n\n\n`
@@ -894,9 +896,7 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
   marked.use({ renderer, gfm: true, breaks: false });
 
   const html = marked.parse(content) as string;
-  const result = normalizeNowenBlankParagraphHtmlForImport(
-    html.replace(/<!--blank-->/g, "<p></p>")
-  );
+  const result = html.replace(/<!--blank-->/g, "<p></p>");
   // 规范化 marked 输出的 GFM 表格 HTML，使其符合 Tiptap table schema
   // （否则带表格的 md 在下游 generateJSON 时会产出非法 content，触发
   //  ProseMirror 的 "Called contentMatchAt on a node with invalid content"）

@@ -1240,13 +1240,6 @@ body.density-compact {
 .shared-note-content p {
   margin: 0.85em 0;
 }
-.shared-note-content p[data-nowen-blank="true"] {
-  min-height: 1.5em;
-}
-.shared-note-content p[data-nowen-blank="true"] br {
-  display: block;
-  line-height: inherit;
-}
 .shared-note-content > :first-child {
   margin-top: 0;
 }

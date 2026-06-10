@@ -584,7 +584,8 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
             onClick={handleNewConversation}
             disabled={isLoading}
             title={t("aiChat.newConversation")}
-            className="p-1 rounded-md text-tx-tertiary hover:text-accent-primary hover:bg-app-hover transition-colors disabled:opacity-50"
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-tx-tertiary hover:text-accent-primary hover:bg-app-hover transition-colors disabled:opacity-50 md:h-8 md:w-8 md:rounded-md"
+            aria-label={t("aiChat.newConversation")}
           >
             <Plus size={14} />
           </button>
@@ -604,7 +605,7 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
                 <div
                   key={c.id}
                   className={cn(
-                    "group flex items-center gap-1 px-2 py-1.5 rounded-md cursor-pointer text-xs transition-colors",
+                    "group flex min-h-11 items-center gap-1 px-2 py-2 rounded-xl cursor-pointer text-xs transition-colors md:min-h-0 md:py-1.5 md:rounded-md",
                     active
                       ? "bg-accent-primary/10 text-accent-primary"
                       : "text-tx-secondary hover:bg-app-hover"
@@ -631,18 +632,20 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
                     </span>
                   )}
                   {!isRenaming && (
-                    <div className="hidden group-hover:flex items-center gap-0.5">
+                    <div className="flex items-center gap-1 shrink-0 opacity-100 transition-opacity md:gap-0.5 md:opacity-0 md:group-hover:opacity-100">
                       <button
                         onClick={(e) => { e.stopPropagation(); handleStartRename(c); }}
                         title={t("aiChat.renameConversation")}
-                        className="p-0.5 rounded text-tx-tertiary hover:text-tx-primary hover:bg-app-hover"
+                        className="flex h-8 w-8 items-center justify-center rounded-lg text-tx-tertiary hover:text-tx-primary hover:bg-app-hover md:h-5 md:w-5 md:rounded"
+                        aria-label={t("aiChat.renameConversation")}
                       >
                         <Pencil size={10} />
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); void handleDeleteConversation(c.id); }}
                         title={t("aiChat.deleteConversation")}
-                        className="p-0.5 rounded text-tx-tertiary hover:text-red-500 hover:bg-app-hover"
+                        className="flex h-8 w-8 items-center justify-center rounded-lg text-tx-tertiary hover:text-red-500 hover:bg-app-hover md:h-5 md:w-5 md:rounded"
+                        aria-label={t("aiChat.deleteConversation")}
                       >
                         <Trash2 size={10} />
                       </button>
@@ -663,7 +666,8 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
           <button
             onClick={() => setSidebarOpen(v => !v)}
             title={sidebarOpen ? t("aiChat.collapseSidebar") : t("aiChat.expandSidebar")}
-            className="p-1.5 rounded-md text-tx-tertiary hover:text-tx-secondary hover:bg-app-hover transition-colors"
+            className="flex h-11 w-11 items-center justify-center rounded-xl text-tx-tertiary hover:text-tx-secondary hover:bg-app-hover transition-colors md:h-8 md:w-8 md:rounded-md"
+            aria-label={sidebarOpen ? t("aiChat.collapseSidebar") : t("aiChat.expandSidebar")}
           >
             <Menu size={14} />
           </button>
@@ -673,7 +677,7 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-tx-primary">{t("aiChat.title")}</span>
             {stats && (
-              <span className="text-[10px] text-tx-tertiary bg-app-hover px-1.5 py-0.5 rounded-full">
+              <span className="hidden sm:inline-flex text-[10px] text-tx-tertiary bg-app-hover px-1.5 py-0.5 rounded-full">
                 {t("aiChat.statsNotes", { count: stats.noteCount })}
               </span>
             )}
@@ -684,22 +688,25 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
             onClick={handleNewConversation}
             disabled={isLoading}
             title={t("aiChat.newConversation")}
-            className="p-1.5 rounded-md text-tx-tertiary hover:text-accent-primary hover:bg-app-hover transition-colors disabled:opacity-50"
+            className="flex h-11 w-11 items-center justify-center rounded-xl text-tx-tertiary hover:text-accent-primary hover:bg-app-hover transition-colors disabled:opacity-50 md:h-8 md:w-8 md:rounded-md"
+            aria-label={t("aiChat.newConversation")}
           >
             <Plus size={14} />
           </button>
           {messages.length > 0 && (
             <button
               onClick={clearChat}
-              className="p-1.5 rounded-md text-tx-tertiary hover:text-red-500 hover:bg-app-hover transition-colors"
+              className="flex h-11 w-11 items-center justify-center rounded-xl text-tx-tertiary hover:text-red-500 hover:bg-app-hover transition-colors md:h-8 md:w-8 md:rounded-md"
               title={t("aiChat.clearChat")}
+              aria-label={t("aiChat.clearChat")}
             >
               <Trash2 size={14} />
             </button>
           )}
           <button
             onClick={onClose}
-            className="p-1.5 rounded-md text-tx-tertiary hover:text-tx-secondary hover:bg-app-hover transition-colors"
+            className="flex h-11 w-11 items-center justify-center rounded-xl text-tx-tertiary hover:text-tx-secondary hover:bg-app-hover transition-colors md:h-8 md:w-8 md:rounded-md"
+            aria-label={t("common.close")}
           >
             <X size={14} />
           </button>
@@ -749,7 +756,7 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
               <div className="w-full max-w-sm mb-5">
                 <button
                   onClick={() => setShowTools(!showTools)}
-                  className="flex items-center justify-center gap-1.5 w-full py-1.5 text-[10px] text-tx-tertiary hover:text-accent-primary transition-colors"
+                  className="flex min-h-10 items-center justify-center gap-1.5 w-full rounded-xl py-2 text-[10px] text-tx-tertiary hover:bg-app-hover hover:text-accent-primary transition-colors md:min-h-0 md:rounded-md md:py-1.5"
                 >
                   <Wand2 size={10} />
                   {t("aiChat.toolsSection")}
@@ -782,7 +789,7 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
                       <button
                         onClick={() => docInputRef.current?.click()}
                         disabled={docParsing}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-500/20 transition-colors disabled:opacity-50 w-full justify-center"
+                        className="flex min-h-11 items-center gap-1.5 px-3 py-2 rounded-xl text-xs bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-500/20 transition-colors disabled:opacity-50 w-full justify-center md:min-h-9 md:rounded-lg md:py-1.5"
                       >
                         {docParsing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
                         {docParsing ? t("aiChat.parsing") : t("aiChat.uploadDoc")}
@@ -794,10 +801,10 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
                           <div className="flex items-center justify-between px-2 py-1 border-b border-app-border">
                             <span className="text-[10px] text-tx-secondary truncate">{docFileName}</span>
                             <div className="flex gap-1">
-                              <button onClick={handleCopyMarkdown} className="p-0.5 rounded hover:bg-app-hover text-tx-tertiary" title={t("aiChat.copyMarkdown")}>
+                              <button onClick={handleCopyMarkdown} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-app-hover text-tx-tertiary md:h-6 md:w-6 md:rounded-md" title={t("aiChat.copyMarkdown")} aria-label={t("aiChat.copyMarkdown")}>
                                 <Copy size={10} />
                               </button>
-                              <button onClick={() => setDocResult(null)} className="p-0.5 rounded hover:bg-app-hover text-tx-tertiary" title={t("aiChat.closePreview")}>
+                              <button onClick={() => setDocResult(null)} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-app-hover text-tx-tertiary md:h-6 md:w-6 md:rounded-md" title={t("aiChat.closePreview")} aria-label={t("aiChat.closePreview")}>
                                 <X size={10} />
                               </button>
                             </div>
@@ -835,7 +842,7 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
                       <button
                         onClick={() => importInputRef.current?.click()}
                         disabled={importLoading}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50 w-full justify-center"
+                        className="flex min-h-11 items-center gap-1.5 px-3 py-2 rounded-xl text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50 w-full justify-center md:min-h-9 md:rounded-lg md:py-1.5"
                       >
                         {importLoading ? <Loader2 size={12} className="animate-spin" /> : <FolderUp size={12} />}
                         {importLoading ? t("aiChat.importing") : t("aiChat.importFiles")}
@@ -859,7 +866,7 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
                       <button
                         onClick={handleBatchFormat}
                         disabled={batchLoading}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors disabled:opacity-50 w-full justify-center"
+                        className="flex min-h-11 items-center gap-1.5 px-3 py-2 rounded-xl text-xs bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors disabled:opacity-50 w-full justify-center md:min-h-9 md:rounded-lg md:py-1.5"
                       >
                         {batchLoading ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
                         {batchLoading ? t("aiChat.formatting") : t("aiChat.batchFormat")}
@@ -1038,11 +1045,12 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
             onClick={() => handleSend()}
             disabled={!input.trim() || isLoading}
             className={cn(
-              "shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all",
+              "shrink-0 w-11 h-11 rounded-xl flex items-center justify-center transition-all md:w-9 md:h-9",
               input.trim() && !isLoading
                 ? "bg-accent-primary hover:bg-accent-primary/90 text-white"
                 : "bg-app-hover text-tx-tertiary"
             )}
+            aria-label={t("aiChat.send")}
           >
             {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
           </button>

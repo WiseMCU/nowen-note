@@ -559,7 +559,8 @@ function MobileTopBar() {
     <header className="flex items-center px-4 py-3 border-b border-app-border bg-app-surface/50 md:hidden" style={{ paddingTop: 'calc(var(--safe-area-top) + 4px)' }}>
       <button
         onClick={() => actions.setMobileSidebar(true)}
-        className="p-2 -ml-2 rounded-lg text-tx-secondary hover:bg-app-hover active:bg-app-active"
+        className="flex h-11 w-11 items-center justify-center -ml-2 rounded-xl text-tx-secondary hover:bg-app-hover active:bg-app-active"
+        aria-label="打开侧边栏"
       >
         <Menu size={24} />
       </button>

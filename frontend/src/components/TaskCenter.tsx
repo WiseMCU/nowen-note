@@ -253,7 +253,8 @@ const TaskRow = React.forwardRef<HTMLDivElement, {
       {/* Checkbox —— 多行场景用 mt-0.5 把它轻微下压，与首行文字基线对齐 */}
       <button
         onClick={(e) => { e.stopPropagation(); onToggle(task.id); }}
-        className="flex-shrink-0 mt-0.5 transition-transform hover:scale-110"
+        className="flex h-10 w-10 -m-2 items-center justify-center rounded-xl flex-shrink-0 mt-0.5 transition-transform hover:bg-app-hover/70 hover:scale-105 md:h-8 md:w-8 md:rounded-lg"
+        aria-label={isCompleted ? t('tasks.markIncomplete') : t('tasks.markComplete')}
       >
         {isCompleted ? (
           <CheckCircle2 className="w-5 h-5 text-indigo-500" />
@@ -330,7 +331,8 @@ const TaskRow = React.forwardRef<HTMLDivElement, {
         <Flag size={14} className={pri.flagClass} />
         <button
           onClick={(e) => { e.stopPropagation(); onDelete(task.id); }}
-          className="opacity-100 md:opacity-0 md:group-hover:opacity-100 text-tx-tertiary hover:text-accent-danger transition-all"
+          className="flex h-10 w-10 items-center justify-center rounded-xl opacity-100 text-tx-tertiary hover:bg-app-hover hover:text-accent-danger transition-all md:h-7 md:w-7 md:rounded-md md:opacity-0 md:group-hover:opacity-100"
+          aria-label={t('common.delete')}
         >
           <Trash2 size={14} />
         </button>
@@ -394,7 +396,7 @@ const TaskDetail = React.forwardRef<HTMLDivElement, {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-app-border" style={{ paddingTop: 'calc(var(--safe-area-top) + 4px)' }}>
         <span className="text-sm font-semibold text-tx-primary">{t('tasks.taskDetail')}</span>
-        <button onClick={onClose} className="p-1 rounded-md hover:bg-app-hover transition-colors">
+        <button onClick={onClose} className="flex h-11 w-11 items-center justify-center rounded-xl hover:bg-app-hover transition-colors md:h-8 md:w-8 md:rounded-md" aria-label={t('common.close')}>
           <X size={16} className="text-tx-secondary" />
         </button>
       </div>

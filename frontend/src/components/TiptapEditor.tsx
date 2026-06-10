@@ -759,9 +759,10 @@ interface ToolbarButtonProps {
   disabled?: boolean;
   children: React.ReactNode;
   title?: string;
+  compact?: boolean;
 }
 
-function ToolbarButton({ onClick, isActive, disabled, children, title }: ToolbarButtonProps) {
+function ToolbarButton({ onClick, isActive, disabled, children, title, compact = false }: ToolbarButtonProps) {
   return (
     <button
       type="button"
@@ -769,7 +770,9 @@ function ToolbarButton({ onClick, isActive, disabled, children, title }: Toolbar
       disabled={disabled}
       title={title}
       className={cn(
-        "p-1.5 rounded-md transition-colors",
+        compact
+          ? "min-h-8 min-w-8 px-1.5 py-1.5 rounded-md transition-colors"
+          : "min-h-10 min-w-10 px-2 py-2 rounded-md transition-colors md:min-h-8 md:min-w-8 md:px-1.5 md:py-1.5",
         isActive
           ? "bg-accent-primary/20 text-accent-primary"
           : "text-tx-secondary hover:bg-app-hover hover:text-tx-primary",
@@ -866,7 +869,9 @@ function FontSizePopover({ editor, iconSize = 15, compact = false }: FontSizePop
         onClick={() => setOpen((v) => !v)}
         title={`${currentSize ? `字号: ${currentSize}` : "字号"}`}
         className={cn(
-          "p-1.5 rounded-md transition-colors flex items-center gap-0.5",
+          compact
+            ? "min-h-8 min-w-8 px-1.5 py-1.5 rounded-md transition-colors flex items-center gap-0.5"
+            : "min-h-10 min-w-10 px-2 py-2 rounded-md transition-colors flex items-center gap-0.5 md:min-h-8 md:min-w-8 md:px-1.5 md:py-1.5",
           currentSize
             ? "bg-accent-primary/20 text-accent-primary"
             : "text-tx-secondary hover:bg-app-hover hover:text-tx-primary",
@@ -890,7 +895,7 @@ function FontSizePopover({ editor, iconSize = 15, compact = false }: FontSizePop
                 type="button"
                 onClick={() => apply(p.value)}
                 className={cn(
-                  "px-2 py-1 rounded text-left hover:bg-app-hover flex items-baseline gap-1.5",
+                  "min-h-10 px-2 py-1.5 rounded text-left hover:bg-app-hover flex items-baseline gap-1.5",
                   currentSize === p.value && "bg-accent-primary/15 text-accent-primary",
                 )}
               >
@@ -918,12 +923,12 @@ function FontSizePopover({ editor, iconSize = 15, compact = false }: FontSizePop
               // 否则浏览器认为 mousedown 默认行为被取消，input 不会获得 focus，
               // 表现为"输入框打不进字"。
               onMouseDown={(e) => e.stopPropagation()}
-              className="flex-1 px-2 py-1 text-xs rounded border border-app-border bg-app-surface focus:outline-none focus:ring-1 focus:ring-accent-primary"
+              className="flex-1 min-h-10 px-2 py-1 text-xs rounded border border-app-border bg-app-surface focus:outline-none focus:ring-1 focus:ring-accent-primary"
             />
             <button
               type="button"
               onClick={applyCustom}
-              className="px-2 py-1 text-xs rounded bg-accent-primary text-white hover:opacity-90"
+              className="min-h-10 px-3 py-1 text-xs rounded bg-accent-primary text-white hover:opacity-90"
             >
               <Check size={12} />
             </button>
@@ -932,7 +937,7 @@ function FontSizePopover({ editor, iconSize = 15, compact = false }: FontSizePop
           <button
             type="button"
             onClick={clear}
-            className="w-full px-2 py-1 text-xs rounded text-tx-secondary hover:bg-app-hover flex items-center gap-1"
+            className="w-full min-h-10 px-2 py-1 text-xs rounded text-tx-secondary hover:bg-app-hover flex items-center gap-1"
           >
             <Eraser size={12} />
             清除字号
@@ -1021,7 +1026,9 @@ function ColorPopover({ editor, iconSize = 15, compact = false }: ColorPopoverPr
         onClick={() => setOpen((v) => !v)}
         title={isActive ? `颜色: ${fgColor || ""} ${bgColor ? "背景: " + bgColor : ""}`.trim() : "颜色"}
         className={cn(
-          "p-1.5 rounded-md transition-colors flex items-center gap-0.5",
+          compact
+            ? "min-h-8 min-w-8 px-1.5 py-1.5 rounded-md transition-colors flex items-center gap-0.5"
+            : "min-h-10 min-w-10 px-2 py-2 rounded-md transition-colors flex items-center gap-0.5 md:min-h-8 md:min-w-8 md:px-1.5 md:py-1.5",
           isActive
             ? "bg-accent-primary/20 text-accent-primary"
             : "text-tx-secondary hover:bg-app-hover hover:text-tx-primary",
@@ -1050,7 +1057,7 @@ function ColorPopover({ editor, iconSize = 15, compact = false }: ColorPopoverPr
               type="button"
               onClick={() => setTab("fg")}
               className={cn(
-                "flex-1 px-2 py-1 text-xs rounded transition-colors",
+                "flex-1 min-h-10 px-2 py-1 text-xs rounded transition-colors",
                 tab === "fg" ? "bg-app-elevated shadow-sm" : "text-tx-tertiary hover:text-tx-primary",
               )}
             >
@@ -1060,7 +1067,7 @@ function ColorPopover({ editor, iconSize = 15, compact = false }: ColorPopoverPr
               type="button"
               onClick={() => setTab("bg")}
               className={cn(
-                "flex-1 px-2 py-1 text-xs rounded transition-colors",
+                "flex-1 min-h-10 px-2 py-1 text-xs rounded transition-colors",
                 tab === "bg" ? "bg-app-elevated shadow-sm" : "text-tx-tertiary hover:text-tx-primary",
               )}
             >
@@ -1076,7 +1083,7 @@ function ColorPopover({ editor, iconSize = 15, compact = false }: ColorPopoverPr
                 onClick={() => applyColor(c)}
                 title={c}
                 className={cn(
-                  "w-7 h-7 rounded border transition-transform hover:scale-110",
+                  "w-9 h-9 rounded border transition-transform hover:scale-110 md:w-7 md:h-7",
                   current?.toLowerCase() === c.toLowerCase()
                     ? "border-accent-primary ring-2 ring-accent-primary/40"
                     : "border-app-border",
@@ -1093,14 +1100,14 @@ function ColorPopover({ editor, iconSize = 15, compact = false }: ColorPopoverPr
                 value={current || (tab === "fg" ? "#ef4444" : "#fef9c3")}
                 onChange={(e) => applyColor(e.target.value)}
                 onMouseDown={(e) => e.stopPropagation()}
-                className="w-4 h-4 p-0 border-0 bg-transparent cursor-pointer"
+                className="w-5 h-5 p-0 border-0 bg-transparent cursor-pointer"
               />
               <span className="text-tx-secondary">自定义</span>
             </label>
             <button
               type="button"
               onClick={clearColor}
-              className="ml-auto px-2 py-1 text-xs rounded text-tx-secondary hover:bg-app-hover flex items-center gap-1"
+              className="ml-auto min-h-10 px-2 py-1 text-xs rounded text-tx-secondary hover:bg-app-hover flex items-center gap-1"
             >
               <Eraser size={12} />
               清除
@@ -3486,7 +3493,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             - z 索引压在选区/链接气泡之下（z-50），保留气泡的覆盖能力。 */}
       <div
         className={cn(
-          "sticky top-0 z-20 flex items-center gap-0.5 px-4 py-2 border-b border-app-border bg-app-surface/95 backdrop-blur supports-[backdrop-filter]:bg-app-surface/70 md:flex-wrap overflow-x-auto hide-scrollbar touch-pan-x transition-shadow duration-200",
+          "sticky top-0 z-20 flex items-center gap-1 px-3 py-2 border-b border-app-border bg-app-surface/95 backdrop-blur supports-[backdrop-filter]:bg-app-surface/70 md:flex-wrap md:gap-0.5 md:px-4 overflow-x-auto hide-scrollbar touch-pan-x transition-shadow duration-200",
           // 滚动离顶后加底部阴影，表达「工具栏浮于内容之上」
           toolbarShadow && "shadow-[0_2px_8px_-2px_rgba(0,0,0,0.08)] dark:shadow-[0_2px_8px_-2px_rgba(0,0,0,0.4)]",
         )}
@@ -3889,6 +3896,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             onClick={() => editor.chain().focus().toggleBold().run()}
             isActive={editor.isActive("bold")}
             title={t('tiptap.bold')}
+            compact
           >
             <Bold size={14} />
           </ToolbarButton>
@@ -3896,6 +3904,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             onClick={() => editor.chain().focus().toggleItalic().run()}
             isActive={editor.isActive("italic")}
             title={t('tiptap.italic')}
+            compact
           >
             <Italic size={14} />
           </ToolbarButton>
@@ -3903,6 +3912,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             onClick={() => editor.chain().focus().toggleUnderline().run()}
             isActive={editor.isActive("underline")}
             title={t('tiptap.underline')}
+            compact
           >
             <UnderlineIcon size={14} />
           </ToolbarButton>
@@ -3910,6 +3920,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             onClick={() => editor.chain().focus().toggleStrike().run()}
             isActive={editor.isActive("strike")}
             title={t('tiptap.strikethrough')}
+            compact
           >
             <Strikethrough size={14} />
           </ToolbarButton>
@@ -3920,6 +3931,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             onClick={() => editor.chain().focus().toggleCode().run()}
             isActive={editor.isActive("code")}
             title={t('tiptap.inlineCode')}
+            compact
           >
             <Code size={14} />
           </ToolbarButton>
@@ -3928,6 +3940,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             onClick={openLinkEditor}
             isActive={editor.isActive("link")}
             title={t('tiptap.link')}
+            compact
           >
             <LinkIcon size={14} />
           </ToolbarButton>
@@ -3935,6 +3948,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             onClick={toggleCodeBlockStrict}
             isActive={editor.isActive("codeBlock")}
             title={t('tiptap.codeBlock')}
+            compact
           >
             <FileCode size={14} />
           </ToolbarButton>
@@ -3954,13 +3968,14 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
                 .run()
             }
             title={t('tiptap.clearFormat') || "清除格式 (Ctrl+Shift+X)"}
+            compact
           >
             <Eraser size={14} />
           </ToolbarButton>
           {!isGuest && (
             <>
               <div className="w-px h-4 bg-app-border mx-0.5" />
-              <ToolbarButton onClick={openAIAssistant} title={t('tiptap.aiAssistant')}>
+              <ToolbarButton onClick={openAIAssistant} title={t('tiptap.aiAssistant')} compact>
                 <Sparkles size={14} className="text-violet-500" />
               </ToolbarButton>
             </>
@@ -4012,6 +4027,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
                 void downloadAttachment(linkBubble.href, linkBubble.filename || "");
               }}
               title={t('tiptap.linkDownload')}
+              compact
             >
               <Download size={14} />
             </ToolbarButton>
@@ -4019,6 +4035,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
             <ToolbarButton
               onClick={() => openLinkUrl(linkBubble.href)}
               title={t('tiptap.linkOpen')}
+              compact
             >
               <ExternalLink size={14} />
             </ToolbarButton>
@@ -4033,6 +4050,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
               void openLinkEditor(range);
             }}
             title={t('tiptap.linkEdit')}
+            compact
           >
             <LinkIcon size={14} />
           </ToolbarButton>
@@ -4043,6 +4061,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
               removeLink(range);
             }}
             title={t('tiptap.linkRemove')}
+            compact
           >
             <Unlink2 size={14} />
           </ToolbarButton>
@@ -4075,6 +4094,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
                   .updateAttributes("image", { width: target })
                   .run();
               }}
+              compact
             >
               <span className="text-xs px-1">{s.label}</span>
             </ToolbarButton>
@@ -4089,6 +4109,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
                 .updateAttributes("image", { width: null, height: null })
                 .run();
             }}
+            compact
           >
             <span className="text-xs px-1">{t("tiptap.imageSizeOriginal")}</span>
           </ToolbarButton>

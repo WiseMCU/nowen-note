@@ -297,7 +297,7 @@ export const MermaidView: React.FC<MermaidViewProps> = ({
             会把 click 视作"切到源码态"，那边处理逻辑必须避开本按钮）。 */}
         <button
           type="button"
-          className="absolute top-1.5 right-1.5 z-10 p-1.5 rounded-md bg-app-surface/85 border border-app-border text-tx-secondary hover:text-tx-primary hover:bg-app-hover opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity shadow-sm"
+          className="absolute top-1.5 right-1.5 z-10 flex h-10 w-10 items-center justify-center rounded-xl bg-app-surface/90 border border-app-border text-tx-secondary hover:text-tx-primary hover:bg-app-hover opacity-100 md:h-8 md:w-8 md:rounded-md md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition-opacity shadow-sm"
           title="放大预览"
           aria-label="放大预览"
           onClick={(e) => {

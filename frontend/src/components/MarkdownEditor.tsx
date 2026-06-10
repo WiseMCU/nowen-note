@@ -148,9 +148,10 @@ interface ToolbarButtonProps {
   disabled?: boolean;
   children: React.ReactNode;
   title?: string;
+  compact?: boolean;
 }
 
-function ToolbarButton({ onClick, disabled, children, title }: ToolbarButtonProps) {
+function ToolbarButton({ onClick, disabled, children, title, compact = false }: ToolbarButtonProps) {
   return (
     <button
       type="button"
@@ -158,7 +159,9 @@ function ToolbarButton({ onClick, disabled, children, title }: ToolbarButtonProp
       disabled={disabled}
       title={title}
       className={cn(
-        "p-1.5 rounded-md transition-colors",
+        compact
+          ? "min-h-8 min-w-8 px-1.5 py-1.5 rounded-md transition-colors"
+          : "min-h-10 min-w-10 px-2 py-2 rounded-md transition-colors md:min-h-8 md:min-w-8 md:px-1.5 md:py-1.5",
         "text-tx-secondary hover:bg-app-hover hover:text-tx-primary",
         disabled && "opacity-30 cursor-not-allowed",
       )}
@@ -1152,7 +1155,7 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
       {editable && (
         <div
           className={cn(
-            "sticky top-0 z-20 flex items-center gap-0.5 px-4 py-2 border-b border-app-border bg-app-surface/95 backdrop-blur supports-[backdrop-filter]:bg-app-surface/70 md:flex-wrap overflow-x-auto hide-scrollbar touch-pan-x transition-colors",
+            "sticky top-0 z-20 flex items-center gap-1 px-3 py-2 border-b border-app-border bg-app-surface/95 backdrop-blur supports-[backdrop-filter]:bg-app-surface/70 md:flex-wrap md:gap-0.5 md:px-4 overflow-x-auto hide-scrollbar touch-pan-x transition-colors",
           )}
         >
           <ToolbarButton
@@ -1358,24 +1361,28 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
           <ToolbarButton
             onClick={() => withView((v) => toggleWrap(v, "**"))}
             title={tr("tiptap.bold") || "加粗"}
+            compact
           >
             <Bold size={14} />
           </ToolbarButton>
           <ToolbarButton
             onClick={() => withView((v) => toggleWrap(v, "*"))}
             title={tr("tiptap.italic") || "斜体"}
+            compact
           >
             <Italic size={14} />
           </ToolbarButton>
           <ToolbarButton
             onClick={() => withView((v) => toggleWrap(v, "~~"))}
             title={tr("tiptap.strikethrough") || "删除线"}
+            compact
           >
             <Strikethrough size={14} />
           </ToolbarButton>
           <ToolbarButton
             onClick={() => withView((v) => toggleInlineCode(v))}
             title={tr("tiptap.inlineCode") || "行内代码"}
+            compact
           >
             <CodeIcon size={14} />
           </ToolbarButton>
@@ -1385,6 +1392,7 @@ export default forwardRef<NoteEditorHandle, MarkdownEditorProps>(function Markdo
               <ToolbarButton
                 onClick={openAIAssistant}
                 title={tr("tiptap.aiAssistant") || "AI 助手"}
+                compact
               >
                 <Sparkles size={14} className="text-violet-500" />
               </ToolbarButton>

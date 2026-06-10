@@ -2693,7 +2693,8 @@ export default function NoteList() {
       <header className="flex items-center justify-between px-4 py-3 border-b border-app-border md:hidden relative z-40" style={{ paddingTop: 'calc(var(--safe-area-top) + 4px)' }}>
         <button
           onClick={() => actions.setMobileSidebar(true)}
-          className="p-2 -ml-2 rounded-lg text-tx-secondary hover:bg-app-hover active:bg-app-active"
+          className="flex h-11 w-11 items-center justify-center -ml-2 rounded-xl text-tx-secondary hover:bg-app-hover active:bg-app-active"
+          aria-label="打开侧边栏"
         >
           <Menu size={24} />
         </button>
@@ -2705,12 +2706,13 @@ export default function NoteList() {
               ref={sortBtnRef}
               onClick={() => setShowSortMenu((v) => !v)}
               className={cn(
-                "p-1.5 rounded-md transition-colors relative",
+                "flex h-11 w-11 items-center justify-center rounded-xl transition-colors relative md:h-8 md:w-8 md:rounded-md",
                 sortPref.by !== "manual"
                   ? "text-accent-primary bg-accent-primary/10"
                   : "text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
               )}
               title={t("noteList.sortBy")}
+              aria-label={t("noteList.sortBy")}
             >
               <ArrowUpDown size={18} />
             </button>
@@ -2721,7 +2723,7 @@ export default function NoteList() {
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 text-accent-danger hover:bg-accent-danger/10"
+              className="h-11 w-11 rounded-xl text-accent-danger hover:bg-accent-danger/10 md:h-8 md:w-8 md:rounded-md"
               title={t('sidebar.emptyTrash')}
               aria-label={t('sidebar.emptyTrash')}
               onClick={() => {
@@ -2738,13 +2740,14 @@ export default function NoteList() {
               {state.viewMode !== "search" && (
                 <button
                   onClick={handleImportClick}
-                  className="p-1.5 rounded-md transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary"
+                  className="flex h-11 w-11 items-center justify-center rounded-xl transition-colors text-tx-tertiary hover:bg-app-hover hover:text-tx-secondary md:h-8 md:w-8 md:rounded-md"
                   title={t("sidebar.importMarkdown") || "导入 Markdown"}
+                  aria-label={t("sidebar.importMarkdown") || "导入 Markdown"}
                 >
                   <Upload size={18} />
                 </button>
               )}
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleCreateNote("normal")}>
+              <Button variant="ghost" size="icon" className="h-11 w-11 rounded-xl md:h-8 md:w-8 md:rounded-md" onClick={() => handleCreateNote("normal")} aria-label={t("noteList.newNote") || "新建笔记"}>
                 <Plus size={18} />
               </Button>
             </>

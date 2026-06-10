@@ -387,7 +387,7 @@ function MindMapListRow({
       </div>
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="opacity-100 md:opacity-0 md:group-hover:opacity-100 text-tx-tertiary hover:text-accent-danger transition-all flex-shrink-0"
+        className="flex h-10 w-10 items-center justify-center rounded-xl opacity-100 text-tx-tertiary hover:bg-app-hover hover:text-accent-danger transition-all flex-shrink-0 md:h-7 md:w-7 md:rounded-md md:opacity-0 md:group-hover:opacity-100"
       >
         <Trash2 size={14} />
       </button>
@@ -1065,7 +1065,7 @@ export default function MindMapCenter() {
             <div className="flex items-center gap-1">
               <button
                 onClick={handleCreate}
-                className="p-1.5 rounded-md hover:bg-app-hover transition-colors text-tx-secondary hover:text-indigo-500"
+                className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-app-hover transition-colors text-tx-secondary hover:text-indigo-500 md:h-8 md:w-8 md:rounded-md"
                 title={t("mindMap.create")}
               >
                 <Plus size={16} />
@@ -1073,7 +1073,8 @@ export default function MindMapCenter() {
               {isMobile && (
                 <button
                   onClick={() => setSidebarOpen(false)}
-                  className="p-1.5 rounded-md hover:bg-app-hover transition-colors text-tx-secondary"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-app-hover transition-colors text-tx-secondary md:h-8 md:w-8 md:rounded-md"
+                  aria-label={t("common.close")}
                 >
                   <PanelLeftClose size={16} />
                 </button>
@@ -1126,7 +1127,8 @@ export default function MindMapCenter() {
                 {isMobile && (
                   <button
                     onClick={() => setSidebarOpen(true)}
-                    className="p-1.5 rounded-md hover:bg-app-hover text-tx-secondary transition-colors flex-shrink-0"
+                    className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-app-hover text-tx-secondary transition-colors flex-shrink-0 md:h-8 md:w-8 md:rounded-md"
+                    aria-label={t("mindMap.title")}
                   >
                     <Menu size={16} />
                   </button>
@@ -1149,7 +1151,7 @@ export default function MindMapCenter() {
               <div className="flex items-center gap-1">
                 <button
                   onClick={handleZoomOut}
-                  className="p-1.5 rounded-md hover:bg-app-hover text-tx-secondary transition-colors"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-app-hover text-tx-secondary transition-colors md:h-8 md:w-8 md:rounded-md"
                   title={t("mindMap.zoomOut")}
                 >
                   <ZoomOut size={16} />
@@ -1159,14 +1161,14 @@ export default function MindMapCenter() {
                 </span>
                 <button
                   onClick={handleZoomIn}
-                  className="p-1.5 rounded-md hover:bg-app-hover text-tx-secondary transition-colors"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-app-hover text-tx-secondary transition-colors md:h-8 md:w-8 md:rounded-md"
                   title={t("mindMap.zoomIn")}
                 >
                   <ZoomIn size={16} />
                 </button>
                 <button
                   onClick={handleZoomReset}
-                  className="p-1.5 rounded-md hover:bg-app-hover text-tx-secondary transition-colors"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-app-hover text-tx-secondary transition-colors md:h-8 md:w-8 md:rounded-md"
                   title={t("mindMap.fitView")}
                 >
                   <Maximize2 size={16} />
@@ -1175,7 +1177,7 @@ export default function MindMapCenter() {
                 <button
                   onClick={() => setShowMiniMap((v) => !v)}
                   className={cn(
-                    "p-1.5 rounded-md transition-colors",
+                    "flex h-10 w-10 items-center justify-center rounded-xl transition-colors md:h-8 md:w-8 md:rounded-md",
                     showMiniMap
                       ? "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-500"
                       : "hover:bg-app-hover text-tx-secondary"

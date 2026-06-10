@@ -321,7 +321,7 @@ export default function AttachmentDetailDrawer({
               {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             </button>
             <button
-              className="p-1.5 rounded-md text-tx-tertiary hover:text-tx-primary hover:bg-app-hover"
+              className="flex h-11 w-11 items-center justify-center rounded-xl text-tx-tertiary hover:text-tx-primary hover:bg-app-hover md:h-8 md:w-8 md:rounded-md"
               onClick={onClose}
               aria-label="关闭"
             >

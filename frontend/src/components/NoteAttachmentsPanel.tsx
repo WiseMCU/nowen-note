@@ -360,13 +360,13 @@ export default function NoteAttachmentsPanel({ noteId, noteTitle, onClose }: Pro
 
                       {/* 操作按钮（hover 显示） */}
                       <div
-                        className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                        className="flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity flex-shrink-0"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7"
+                          className="h-10 w-10 rounded-xl md:h-7 md:w-7 md:rounded-md"
                           title="复制直链"
                           onClick={() => handleCopyLink(item)}
                         >
@@ -379,7 +379,7 @@ export default function NoteAttachmentsPanel({ noteId, noteTitle, onClose }: Pro
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7"
+                          className="h-10 w-10 rounded-xl md:h-7 md:w-7 md:rounded-md"
                           title="详情"
                           onClick={() => setDetailId(item.id)}
                         >

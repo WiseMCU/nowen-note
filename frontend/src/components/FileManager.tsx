@@ -1077,7 +1077,7 @@ export default function FileManager() {
           variant={isImageHostMode ? "default" : "outline"}
           onClick={toggleImageHostMode}
           className={cn(
-            "shrink-0",
+            "shrink-0 min-h-11 px-3 md:min-h-9",
             isImageHostMode &&
               "bg-indigo-500 hover:bg-indigo-600 text-white border-indigo-500",
           )}
@@ -1117,7 +1117,7 @@ export default function FileManager() {
           size="sm"
           variant={selectionMode ? "default" : "outline"}
           onClick={toggleSelectionMode}
-          className="shrink-0"
+          className="shrink-0 min-h-11 px-3 md:min-h-9"
           title={selectionMode ? "退出多选" : "进入多选"}
         >
           {selectionMode ? (
@@ -1143,7 +1143,7 @@ export default function FileManager() {
             variant="outline"
             onClick={handleCleanupOrphans}
             disabled={cleaningUp}
-            className="shrink-0 text-amber-600 border-amber-500/40 hover:bg-amber-500/10 hover:text-amber-700 hover:border-amber-500/60"
+            className="shrink-0 min-h-11 px-3 text-amber-600 border-amber-500/40 hover:bg-amber-500/10 hover:text-amber-700 hover:border-amber-500/60 md:min-h-9"
             title={`发现 ${reclaimable.items} 个没有被任何笔记引用的附件，可释放约 ${humanSize(reclaimable.bytes)}`}
           >
             {cleaningUp ? (
@@ -1157,7 +1157,7 @@ export default function FileManager() {
           </Button>
         )}
 
-        <Button size="sm" onClick={onPickFiles} disabled={uploading} className="shrink-0">
+        <Button size="sm" onClick={onPickFiles} disabled={uploading} className="shrink-0 min-h-11 px-3 md:min-h-9">
           {uploading ? <Loader2 size={14} className="animate-spin mr-1" /> : <Upload size={14} className="mr-1" />}
           {uploading ? "上传中" : "上传文件"}
         </Button>
@@ -1165,7 +1165,7 @@ export default function FileManager() {
           onClick={handleCleanup}
           disabled={cleaning}
           className={cn(
-            "flex items-center justify-center shrink-0 h-8 rounded-md px-3 text-xs font-medium transition-all",
+            "flex items-center justify-center shrink-0 h-11 rounded-xl px-3 text-xs font-medium transition-all md:h-8 md:rounded-md",
             cleaning
               ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
               : "bg-rose-600 hover:bg-rose-700 text-white shadow-sm"
@@ -1201,7 +1201,7 @@ export default function FileManager() {
             - 图床模式：与普通模式同构，但"孤儿"改名为"未引用"——更贴合图床场景
               （图床里这一类多是用户传上去专门发外链的、本就不需要被笔记引用的资源，
               "孤儿"措辞略带贬义，"未引用"更中性）。 */}
-        <div className="flex items-center gap-1 text-xs">
+        <div className="flex items-center gap-1 overflow-x-auto hide-scrollbar max-w-full text-xs">
           {(isImageHostMode
             ? ([
                 { key: "all", label: "全部", count: stats?.total ?? 0, icon: <Filter size={12} /> },
@@ -1246,7 +1246,7 @@ export default function FileManager() {
               key={tab.key}
               onClick={() => handleCategoryChange(tab.key as CategoryFilter)}
               className={cn(
-                "px-2.5 py-1 rounded-md flex items-center gap-1.5 transition-colors",
+                "min-h-10 shrink-0 px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-colors md:min-h-8 md:px-2.5 md:py-1 md:rounded-md",
                 category === tab.key
                   ? tab.key === "unreferenced"
                     ? "bg-amber-500/15 text-amber-600"
@@ -1274,28 +1274,28 @@ export default function FileManager() {
 
         {/* 搜索 */}
         <div className="relative w-full sm:w-56">
-          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-tx-tertiary" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-tx-tertiary" />
           <Input
             placeholder="按文件名搜索…"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            className="pl-7 h-8 text-xs bg-app-bg"
+            className="pl-9 h-11 text-sm bg-app-bg md:h-8 md:pl-7 md:text-xs"
           />
           {searchInput && (
             <button
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-tx-tertiary hover:text-tx-primary"
+              className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-tx-tertiary hover:bg-app-hover hover:text-tx-primary"
               onClick={() => setSearchInput("")}
             >
-              <X size={12} />
+              <X size={14} />
             </button>
           )}
         </div>
 
         {/* 排序 */}
         <div className="flex items-center gap-1 text-xs">
-          <ArrowUpDown size={12} className="text-tx-tertiary" />
+          <ArrowUpDown size={14} className="text-tx-tertiary" />
           <select
-            className="h-8 px-2 rounded-md border border-app-border bg-app-bg text-tx-primary text-xs outline-none"
+            className="h-11 px-3 rounded-xl border border-app-border bg-app-bg text-tx-primary text-sm outline-none md:h-8 md:px-2 md:rounded-md md:text-xs"
             value={sort}
             onChange={(e) => {
               setSort(e.target.value as FileSortKey);
@@ -1343,7 +1343,7 @@ export default function FileManager() {
                 setPage(1);
               }}
               className={cn(
-                "px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors",
+                "min-h-10 px-3 py-1 rounded-xl flex items-center gap-1 transition-colors md:min-h-8 md:px-2 md:py-0.5 md:rounded-md",
                 myUploadsRef === sub.key
                   ? "bg-accent-primary/15 text-accent-primary"
                   : "text-tx-secondary hover:bg-app-hover",
@@ -1376,7 +1376,7 @@ export default function FileManager() {
             <div className="flex flex-wrap items-center gap-2 px-4 md:px-6 py-2">
               <button
                 onClick={toggleSelectAll}
-                className="flex items-center gap-1.5 text-xs text-tx-secondary hover:text-tx-primary transition-colors"
+                className="flex min-h-10 items-center gap-1.5 rounded-xl px-2 text-xs text-tx-secondary hover:bg-app-hover hover:text-tx-primary transition-colors md:min-h-8 md:rounded-md"
                 disabled={items.length === 0}
                 title={allSelectedOnPage ? "取消选择本页全部" : "选择本页全部"}
               >
@@ -1403,6 +1403,7 @@ export default function FileManager() {
                 variant="outline"
                 onClick={() => setSelectedIds(new Set())}
                 disabled={selectedIds.size === 0}
+                className="min-h-11 px-3 md:min-h-9"
               >
                 清空选择
               </Button>
@@ -1411,7 +1412,7 @@ export default function FileManager() {
                 variant="outline"
                 onClick={handleBatchDelete}
                 disabled={selectedIds.size === 0 || batchDeleting}
-                className="text-red-500 border-red-500/40 hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/60 disabled:opacity-50"
+                className="min-h-11 px-3 text-red-500 border-red-500/40 hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/60 disabled:opacity-50 md:min-h-9"
               >
                 {batchDeleting ? (
                   <Loader2 size={14} className="mr-1 animate-spin" />
@@ -1794,12 +1795,12 @@ const GridCard = React.memo(function GridCard({
       {!selectionMode && (
         <div
           className={cn(
-            "absolute top-1.5 right-1.5 flex gap-1 transition-opacity",
-            isImageHostMode ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+            "absolute top-1.5 right-1.5 flex gap-1 transition-opacity opacity-100 md:opacity-0 md:group-hover:opacity-100",
+            isImageHostMode && "opacity-100",
           )}
         >
           <button
-            className="w-6 h-6 rounded-md bg-black/50 hover:bg-black/70 text-white flex items-center justify-center disabled:opacity-50"
+            className="w-9 h-9 rounded-lg bg-black/55 hover:bg-black/75 text-white flex items-center justify-center disabled:opacity-50 md:w-6 md:h-6 md:rounded-md"
             onClick={(e) => {
               e.stopPropagation();
               onDownload(item);
@@ -1807,31 +1808,31 @@ const GridCard = React.memo(function GridCard({
             disabled={isDownloading}
             title="下载"
           >
-            {isDownloading ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+            {isDownloading ? <Loader2 size={14} className="animate-spin md:h-3 md:w-3" /> : <Download size={14} className="md:h-3 md:w-3" />}
           </button>
 
           {isImageHostMode ? (
             // 分裂按钮：左半 URL，右半下拉 MD/HTML
             <div className="relative flex items-stretch rounded-md overflow-hidden">
               <button
-                className="px-1.5 bg-black/50 hover:bg-black/70 text-white flex items-center"
+                className="min-w-9 px-2 bg-black/55 hover:bg-black/75 text-white flex items-center justify-center md:min-w-0 md:px-1.5"
                 onClick={(e) => {
                   e.stopPropagation();
                   onCopyUrl(item);
                 }}
                 title="复制 URL"
               >
-                {isCopied ? <Check size={12} /> : <Copy size={12} />}
+                {isCopied ? <Check size={14} className="md:h-3 md:w-3" /> : <Copy size={14} className="md:h-3 md:w-3" />}
               </button>
               <button
-                className="px-0.5 bg-black/50 hover:bg-black/70 text-white flex items-center border-l border-white/15"
+                className="min-w-8 px-1 bg-black/55 hover:bg-black/75 text-white flex items-center justify-center border-l border-white/15 md:min-w-0 md:px-0.5"
                 onClick={(e) => {
                   e.stopPropagation();
                   setFormatMenuOpen((v) => !v);
                 }}
                 title="选择复制格式"
               >
-                <ChevronDown size={11} />
+                <ChevronDown size={12} />
               </button>
               {formatMenuOpen && (
                 <div
@@ -1857,14 +1858,14 @@ const GridCard = React.memo(function GridCard({
             </div>
           ) : (
             <button
-              className="w-6 h-6 rounded-md bg-black/50 hover:bg-black/70 text-white flex items-center justify-center"
+              className="w-9 h-9 rounded-lg bg-black/55 hover:bg-black/75 text-white flex items-center justify-center md:w-6 md:h-6 md:rounded-md"
               onClick={(e) => {
                 e.stopPropagation();
                 onCopyUrl(item);
               }}
               title="复制链接"
             >
-              {isCopied ? <Check size={12} /> : <Copy size={12} />}
+              {isCopied ? <Check size={14} className="md:h-3 md:w-3" /> : <Copy size={14} className="md:h-3 md:w-3" />}
             </button>
           )}
         </div>

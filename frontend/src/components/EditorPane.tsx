@@ -1613,7 +1613,8 @@ export default function EditorPane() {
         <header className="flex items-center gap-2 px-3 py-2 border-b border-app-border bg-app-surface/50 md:hidden" style={{ paddingTop: 'calc(var(--safe-area-top) + 8px)' }}>
           <button
             onClick={() => actions.setMobileView("list")}
-            className="flex items-center text-accent-primary py-1.5 px-1.5 -ml-1.5 rounded-lg active:bg-app-hover"
+            className="flex min-h-11 items-center gap-1 text-accent-primary py-2 px-2 -ml-2 rounded-xl active:bg-app-hover"
+            aria-label={t('editor.back')}
           >
             <ChevronLeft size={24} />
             <span className="text-sm font-medium">{t('editor.back')}</span>
@@ -1690,12 +1691,12 @@ export default function EditorPane() {
             - 小屏宽度有限，原来一行塞 5 个图标按钮已挤压，且看不到笔记本路径与标题；
             - 锁/置顶属低频开关，挪进 ⋯ 菜单，菜单项里反映当前状态；
             - Presence 头像在小屏意义不大，移动端不渲染；桌面端保留。 */}
-      <header className="flex flex-col border-b border-app-border bg-app-surface/50 md:hidden" style={{ paddingTop: 'var(--safe-area-top)' }}>
+      <header className="flex flex-col gap-1 border-b border-app-border bg-app-surface/50 md:hidden" style={{ paddingTop: 'var(--safe-area-top)' }}>
         {/* 第 1 行：返回 + 面包屑 + 同步 */}
-        <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+        <div className="flex items-center gap-2 px-3 pt-2 pb-0.5">
           <button
             onClick={() => actions.setMobileView("list")}
-            className="flex items-center text-accent-primary py-1 px-1 -ml-1 rounded-lg active:bg-app-hover shrink-0"
+            className="flex h-11 w-11 items-center justify-center text-accent-primary -ml-1 rounded-xl active:bg-app-hover shrink-0"
             aria-label={t('editor.back')}
           >
             <ChevronLeft size={22} />
@@ -1704,8 +1705,9 @@ export default function EditorPane() {
               点击调起"移动到笔记本"菜单（与桌面端面包屑可点击的语义一致） */}
           <button
             onClick={() => { setShowMobileMenu(true); setShowMobileMoveMenu(true); }}
-            className="flex-1 min-w-0 flex items-center gap-1 text-xs text-tx-tertiary active:bg-app-hover rounded-md px-1.5 py-1 overflow-hidden"
+            className="flex-1 min-w-0 min-h-11 flex items-center gap-1 text-xs text-tx-tertiary active:bg-app-hover rounded-xl px-2 py-2 overflow-hidden"
             title={t('editor.moveToNotebook')}
+            aria-label={t('editor.moveToNotebook')}
           >
             {currentPath.length > 0 ? (
               <span className="flex items-center gap-1 min-w-0 overflow-hidden">
@@ -1729,7 +1731,7 @@ export default function EditorPane() {
           <SyncIndicator syncStatus={syncStatus} lastSyncedAt={lastSyncedAt} onManualSync={handleManualSync} />
         </div>
         {/* 第 2 行：标题 + 收藏 + 更多 */}
-        <div className="flex items-center gap-1 px-3 pb-2 pt-0.5">
+        <div className="flex items-center gap-2 px-3 pb-2 pt-0.5">
           <div className="flex-1 min-w-0 flex items-center gap-1.5">
             {/* 锁/置顶 状态徽章（只显示已激活状态，未激活不占位）
                 注意：isLocked / isPinned 在 SQLite 里是 0/1，直接 `value && <Icon/>`
@@ -1749,20 +1751,26 @@ export default function EditorPane() {
           </div>
           {/* 搜索（查找替换）：移动端高频操作上提到顶部 */}
           <Button
-            variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+            variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-xl md:h-8 md:w-8 md:rounded-md"
             onClick={() => window.dispatchEvent(new CustomEvent('nowen:open-search'))}
             aria-label={t('editor.searchInNote')}
           >
-            <Search size={17} />
+            <Search size={18} />
           </Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={toggleFavorite}
+          <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-xl md:h-8 md:w-8 md:rounded-md" onClick={toggleFavorite}
             aria-label={activeNote.isFavorite ? t('editor.unfavoriteTooltip') : t('editor.favoriteTooltip')}>
-            <Star size={17} className={cn(activeNote.isFavorite && "text-amber-400 fill-amber-400")} />
+            <Star size={18} className={cn(activeNote.isFavorite && "text-amber-400 fill-amber-400")} />
           </Button>
           {/* 更多操作按钮 */}
           <div className="relative shrink-0" ref={mobileMenuRef}>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setShowMobileMenu(!showMobileMenu); setShowMobileMoveMenu(false); }}>
-              <MoreHorizontal size={16} />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-11 w-11 rounded-xl md:h-8 md:w-8 md:rounded-md"
+              aria-label={t('common.more') || '更多操作'}
+              onClick={() => { setShowMobileMenu(!showMobileMenu); setShowMobileMoveMenu(false); }}
+            >
+              <MoreHorizontal size={18} />
             </Button>
             {/* 更多操作下拉菜单 */}
             <AnimatePresence>
@@ -1772,7 +1780,7 @@ export default function EditorPane() {
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95, y: -4 }}
                   transition={{ duration: 0.12 }}
-                  className="absolute top-full right-0 mt-1 w-56 bg-app-elevated border border-app-border rounded-lg shadow-xl z-50 py-1 overflow-hidden"
+                  className="absolute top-full right-0 mt-1 w-60 max-w-[calc(100vw-1.5rem)] bg-app-elevated border border-app-border rounded-xl shadow-xl z-50 py-1 overflow-hidden"
                 >
                   {/* 锁定 / 解锁 —— 原顶栏外露按钮，移入菜单避免拥挤 */}
                   <button
@@ -2829,7 +2837,8 @@ function SyncIndicator({
       onClick={onManualSync}
       disabled={syncStatus === "saving" || syncStatus === "offline"}
       title={getTooltip()}
-      className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] transition-colors hover:bg-app-hover group"
+      className="flex min-h-11 items-center gap-1.5 px-2.5 py-2 rounded-xl text-[11px] transition-colors hover:bg-app-hover group md:min-h-8 md:rounded-md md:px-2 md:py-1"
+      aria-label={getTooltip()}
     >
       <AnimatePresence mode="wait">
         {syncStatus === "saving" && (
@@ -2840,7 +2849,7 @@ function SyncIndicator({
             exit={{ opacity: 0, scale: 0.5 }}
             transition={{ rotate: { repeat: Infinity, duration: 1, ease: "linear" }, opacity: { duration: 0.15 } }}
           >
-            <RefreshCw size={13} className="text-accent-primary" />
+            <RefreshCw size={14} className="text-accent-primary" />
           </motion.div>
         )}
         {syncStatus === "saved" && (
@@ -2851,7 +2860,7 @@ function SyncIndicator({
             exit={{ opacity: 0, scale: 0.5 }}
             transition={{ duration: 0.25 }}
           >
-            <Check size={13} className="text-green-500" />
+            <Check size={14} className="text-green-500" />
           </motion.div>
         )}
         {syncStatus === "error" && (
@@ -2862,7 +2871,7 @@ function SyncIndicator({
             exit={{ opacity: 0, scale: 0.5 }}
             transition={{ duration: 0.15 }}
           >
-            <CloudOff size={13} className="text-red-500" />
+            <CloudOff size={14} className="text-red-500" />
           </motion.div>
         )}
         {(syncStatus === "queued" || syncStatus === "offline") && (
@@ -2873,7 +2882,7 @@ function SyncIndicator({
             exit={{ opacity: 0, scale: 0.5 }}
             transition={{ duration: 0.15 }}
           >
-            <CloudUpload size={13} className="text-amber-500" />
+            <CloudUpload size={14} className="text-amber-500" />
           </motion.div>
         )}
         {syncStatus === "idle" && (
@@ -2884,13 +2893,13 @@ function SyncIndicator({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
           >
-            <Cloud size={13} className="text-tx-tertiary group-hover:text-tx-secondary transition-colors" />
+            <Cloud size={14} className="text-tx-tertiary group-hover:text-tx-secondary transition-colors" />
           </motion.div>
         )}
       </AnimatePresence>
 
       <span className={cn(
-        "hidden sm:inline transition-colors",
+        "hidden sm:inline whitespace-nowrap transition-colors",
         syncStatus === "saving" && "text-accent-primary",
         syncStatus === "saved" && "text-green-500",
         syncStatus === "error" && "text-red-500",

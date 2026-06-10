@@ -42,6 +42,19 @@ const tiptapExtensions = [
   VideoExtension,
 ];
 
+const BLANK_PARAGRAPH_MARKER = "NOWEN_EXPORT_BLANK_PARAGRAPH_4F6B2C91";
+
+function isBlankParagraphLike(node: HTMLElement): boolean {
+  if (node.nodeName !== "P") return false;
+  if ((node.textContent || "").trim()) return false;
+
+  return Array.from(node.childNodes).every((child) => {
+    if (child.nodeType === 3) return !(child.textContent || "").trim();
+    if (child.nodeType !== 1) return true;
+    return (child as HTMLElement).nodeName === "BR";
+  });
+}
+
 /**
  * 把 note.content 规范化为 HTML。
  * - Tiptap JSON：用 generateHTML 渲染，确保 <pre><code class="language-xxx"> 结构被 turndown
@@ -740,6 +753,12 @@ function createTurndown(): TurndownService {
     headingStyle: "atx",
     codeBlockStyle: "fenced",
     bulletListMarker: "-",
+    blankReplacement: (_content, node) => {
+      if (isBlankParagraphLike(node)) {
+        return `\n\n${BLANK_PARAGRAPH_MARKER}\n\n`;
+      }
+      return (node as HTMLElement & { isBlock?: boolean }).isBlock ? "\n\n" : "";
+    },
   });
 
   // ---- 自定义转义：只保留"会真正改变结构"的转义，避免 `JWT_SECRET` 变成
@@ -775,6 +794,11 @@ function createTurndown(): TurndownService {
   };
 
   // 自定义 task list 转换
+  td.addRule("blankParagraphWithBreak", {
+    filter: (node) => isBlankParagraphLike(node),
+    replacement: () => `\n\n${BLANK_PARAGRAPH_MARKER}\n\n`,
+  });
+
   td.addRule("taskListItem", {
     filter: (node) => {
       return (
@@ -816,12 +840,27 @@ function postProcessMarkdown(md: string): string {
   if (!md) return md;
   // 用 ``` 行作为分隔，奇数下标段（在围栏内部）原样保留
   const parts = md.split(/(^```[^\n]*\n[\s\S]*?^```[ \t]*$)/gm);
+  const markerPattern = new RegExp(
+    `\\n*${BLANK_PARAGRAPH_MARKER}(?:\\n+${BLANK_PARAGRAPH_MARKER})*\\n*`,
+    "g",
+  );
+  const markerCountPattern = new RegExp(BLANK_PARAGRAPH_MARKER, "g");
   for (let i = 0; i < parts.length; i++) {
     if (i % 2 === 1) continue; // 围栏代码块原样保留
     // 折叠 3+ 个换行为 2 个；同时去掉行尾多余空格
-    parts[i] = parts[i].replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+    parts[i] = parts[i]
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(markerPattern, (match) => {
+        const blankParagraphs = match.match(markerCountPattern)?.length || 1;
+        return "\n".repeat(blankParagraphs + 2);
+      });
   }
   return parts.join("");
+}
+
+export function htmlToMarkdownForExport(html: string, td = createTurndown()): string {
+  return html ? postProcessMarkdown(td.turndown(html)) : "";
 }
 
 export type ExportProgress = {
@@ -918,7 +957,7 @@ export async function exportAllNotes(
       }
 
       // 转换为 Markdown
-      const markdown = html ? postProcessMarkdown(td.turndown(html)) : "";
+      const markdown = htmlToMarkdownForExport(html, td);
 
       // 添加 YAML frontmatter
       const frontmatter = [
@@ -1129,7 +1168,7 @@ export async function exportNotebook(
         html = await inlineRemoteImages(html, imgStats, { noteId: note.id, noteTitle: note.title });
       }
 
-      const markdown = html ? postProcessMarkdown(td.turndown(html)) : "";
+      const markdown = htmlToMarkdownForExport(html, td);
       const frontmatter = [
         "---",
         `title: "${note.title.replace(/"/g, '\\"')}"`,
@@ -1265,7 +1304,7 @@ export async function exportSingleNote(
       }
     }
 
-    const markdown = html ? postProcessMarkdown(td.turndown(html)) : "";
+    const markdown = htmlToMarkdownForExport(html, td);
 
     const frontmatter = [
       "---",

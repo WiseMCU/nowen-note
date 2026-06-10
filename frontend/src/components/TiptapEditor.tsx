@@ -2581,15 +2581,17 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
         seenParents.add(parent);
         patchTextNode(node);
       }
-      // 去重：若 <code> 内的按钮文本是外层按钮文本的子串，移除以避免重复
+      // 去重：若内层元素（如 <code>）里的按钮文本是外层按钮文本的子串，移除以避免重复。
+      // 注意不能比较同一父元素下的兄弟按钮，否则 gpt-5.4 会被 gpt-5.4-mini 误删。
       dom.querySelectorAll<HTMLElement>(".locked-copy-btn").forEach((btn) => {
         const myText = btn.dataset.copyText || "";
         if (!myText) return;
-        let ancestor = btn.parentElement;
+        let ancestor = btn.parentElement?.parentElement ?? null;
         while (ancestor) {
           const outerBtns = ancestor.querySelectorAll<HTMLElement>(".locked-copy-btn");
           for (const outerBtn of outerBtns) {
             if (outerBtn === btn) continue;
+            if (outerBtn.parentElement === btn.parentElement) continue;
             const outerText = outerBtn.dataset.copyText || "";
             if (outerText.length > myText.length && outerText.includes(myText)) {
               btn.remove();

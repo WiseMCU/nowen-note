@@ -106,6 +106,7 @@ Android 可直接从 [Releases](https://github.com/cropflre/nowen-note/releases)
 
 - 浏览器剪藏扩展（Chrome / Edge）：[Chrome Web Store](https://chromewebstore.google.com/detail/nowen-note-web-clipper/nglkodhfdbnfielchjpkjhenfaecafpg)
 - 部署指南（本地 / Docker / 桌面 / 移动 / 群晖 / 绿联 / 威联通 / 飞牛 / 极空间 / ARM64）：[docs/deployment.md](./docs/deployment.md)
+- Android 运行时排查清单（Capacitor / WebView / APK 验证）：[docs/android-runtime-debugging.md](./docs/android-runtime-debugging.md)
 - 飞牛 .fpk 应用打包：[scripts/fpk/README.md](./scripts/fpk/README.md)
 - ARM64 详解：[docs/deploy-arm64.md](./docs/deploy-arm64.md)
 - 邮件备份配置：[docs/backup-email-smtp.md](./docs/backup-email-smtp.md)

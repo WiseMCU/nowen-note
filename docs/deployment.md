@@ -150,6 +150,26 @@ storeFile=你的keystore路径
 
 移动端首次启动需配置服务器地址（IP:端口 或域名），通过 HTTP 连接到已部署的 nowen-note 后端。
 
+### Android 排查建议
+
+如果遇到下面这类问题：
+
+- APK 重新编译后，界面看起来“没有变化”
+- 浏览器里正常，Android 原生壳里不正常
+- 用户截图和本地验证结果冲突
+- 模拟器、真机、内置浏览器表现不一致
+
+不要直接继续改样式，先按这份清单排查运行时：
+
+- [Android 运行时排查清单](./android-runtime-debugging.md)
+
+这份清单重点覆盖：
+
+- 如何区分 Vite 页面、Docker 页面、Android WebView 页面
+- 如何确认设备上真的安装了最新 APK
+- 如何确认 WebView 当前实际加载的 URL
+- 如何直接读取运行时 DOM，而不是只靠截图猜测
+
 **Android 图标：** 自定义设计的 Nowen Note 品牌图标，深色背景（#0D1117）+ 白色笔记纸 + 蓝色品牌字母 N + 铅笔装饰，支持 Android 自适应图标（Adaptive Icon）。
 
 ---

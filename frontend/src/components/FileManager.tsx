@@ -1041,10 +1041,11 @@ export default function FileManager() {
     >
       {/* 顶栏 */}
       <div
-        className="flex flex-wrap items-center gap-3 px-4 md:px-6 py-3 border-b border-app-border bg-app-surface/40"
+        className="flex flex-col gap-3 px-4 md:px-6 py-3 border-b border-app-border bg-app-surface/40"
         style={{ paddingTop: "calc(var(--safe-area-top) + 4px)" }}
       >
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-start gap-3 md:items-center">
+          <div className="flex min-w-0 items-center gap-2">
           <div
             className={cn(
               "w-8 h-8 rounded-lg flex items-center justify-center transition-colors",
@@ -1055,11 +1056,11 @@ export default function FileManager() {
           >
             {isImageHostMode ? <Globe size={18} /> : <Inbox size={18} />}
           </div>
-          <div>
+          <div className="min-w-0">
             <h2 className="text-sm font-semibold text-tx-primary">
               {isImageHostMode ? "图床" : "文件管理"}
             </h2>
-            <p className="text-[11px] text-tx-tertiary leading-none mt-0.5">
+            <p className="mt-0.5 text-[11px] leading-snug text-tx-tertiary">
               {isImageHostMode
                 ? "上传图片 / 文件即得直链 · 支持复制 URL / Markdown / HTML"
                 : statsLine || "\u00A0"}
@@ -1067,122 +1068,125 @@ export default function FileManager() {
           </div>
         </div>
 
-        <div className="flex-1" />
+          <div className="hidden flex-1 md:block" />
 
-        {/* 图床模式开关：放在视图切换之前，让用户第一眼能找到。
-            图床本质是 FileManager 的"图片专区 + 直链复制"特化形态，
-            点亮后整页 UI 会切换为图床外观（标题 / 图标 / 卡片工具条）。 */}
-        <Button
-          size="sm"
-          variant={isImageHostMode ? "default" : "outline"}
-          onClick={toggleImageHostMode}
-          className={cn(
-            "shrink-0 min-h-11 px-3 md:min-h-9",
-            isImageHostMode &&
-              "bg-indigo-500 hover:bg-indigo-600 text-white border-indigo-500",
+          {/* 视图切换：图床模式锁定网格视图，所以隐藏切换组 */}
+          {!isImageHostMode && (
+            <div className="hidden md:flex items-center rounded-lg border border-app-border bg-app-bg p-0.5">
+              <button
+                className={cn(
+                  "px-2 py-1 rounded-md text-xs flex items-center gap-1 transition-colors",
+                  viewMode === "grid" ? "bg-accent-primary/15 text-accent-primary" : "text-tx-secondary hover:bg-app-hover",
+                )}
+                onClick={() => setViewMode("grid")}
+                title="网格视图"
+              >
+                <LayoutGrid size={14} />
+              </button>
+              <button
+                className={cn(
+                  "px-2 py-1 rounded-md text-xs flex items-center gap-1 transition-colors",
+                  viewMode === "list" ? "bg-accent-primary/15 text-accent-primary" : "text-tx-secondary hover:bg-app-hover",
+                )}
+                onClick={() => setViewMode("list")}
+                title="列表视图"
+              >
+                <List size={14} />
+              </button>
+            </div>
           )}
-          title={isImageHostMode ? "退出图床" : "进入图床（外链分享 · 图片与文件直链）"}
-        >
-          <Globe size={14} className="mr-1" />
-          {isImageHostMode ? "退出图床" : "图床"}
-        </Button>
+        </div>
 
-        {/* 视图切换：图床模式锁定网格视图，所以隐藏切换组 */}
-        {!isImageHostMode && (
-          <div className="hidden md:flex items-center rounded-lg border border-app-border bg-app-bg p-0.5">
-            <button
-              className={cn(
-                "px-2 py-1 rounded-md text-xs flex items-center gap-1 transition-colors",
-                viewMode === "grid" ? "bg-accent-primary/15 text-accent-primary" : "text-tx-secondary hover:bg-app-hover",
-              )}
-              onClick={() => setViewMode("grid")}
-              title="网格视图"
-            >
-              <LayoutGrid size={14} />
-            </button>
-            <button
-              className={cn(
-                "px-2 py-1 rounded-md text-xs flex items-center gap-1 transition-colors",
-                viewMode === "list" ? "bg-accent-primary/15 text-accent-primary" : "text-tx-secondary hover:bg-app-hover",
-              )}
-              onClick={() => setViewMode("list")}
-              title="列表视图"
-            >
-              <List size={14} />
-            </button>
-          </div>
-        )}
-
-        <Button
-          size="sm"
-          variant={selectionMode ? "default" : "outline"}
-          onClick={toggleSelectionMode}
-          className="shrink-0 min-h-11 px-3 md:min-h-9"
-          title={selectionMode ? "退出多选" : "进入多选"}
-        >
-          {selectionMode ? (
-            <>
-              <X size={14} className="mr-1" />
-              退出多选
-            </>
-          ) : (
-            <>
-              <CheckSquare size={14} className="mr-1" />
-              选择
-            </>
-          )}
-        </Button>
-
-        {/* 可回收空间徽标：
-            - 仅在检测到"有可清理的孤儿"时显示（items>0），避免干扰正常使用；
-            - 点击触发真清理（含二次确认）；
-            - 扫描失败或还没扫完则不渲染，保持顶栏简洁。 */}
-        {reclaimable && reclaimable.items > 0 && (
+        <div className="flex flex-wrap items-center gap-2 md:justify-end">
+          {/* 图床模式开关：放在视图切换之前，让用户第一眼能找到。
+              图床本质是 FileManager 的"图片专区 + 直链复制"特化形态，
+              点亮后整页 UI 会切换为图床外观（标题 / 图标 / 卡片工具条）。 */}
           <Button
             size="sm"
-            variant="outline"
-            onClick={handleCleanupOrphans}
-            disabled={cleaningUp}
-            className="shrink-0 min-h-11 px-3 text-amber-600 border-amber-500/40 hover:bg-amber-500/10 hover:text-amber-700 hover:border-amber-500/60 md:min-h-9"
-            title={`发现 ${reclaimable.items} 个没有被任何笔记引用的附件，可释放约 ${humanSize(reclaimable.bytes)}`}
-          >
-            {cleaningUp ? (
-              <Loader2 size={14} className="mr-1 animate-spin" />
-            ) : (
-              <Sparkles size={14} className="mr-1" />
+            variant={isImageHostMode ? "default" : "outline"}
+            onClick={toggleImageHostMode}
+            className={cn(
+              "min-h-11 px-3 md:min-h-9",
+              isImageHostMode &&
+                "bg-indigo-500 hover:bg-indigo-600 text-white border-indigo-500",
             )}
-            <span className="hidden sm:inline">可回收 </span>
-            <span>{humanSize(reclaimable.bytes)}</span>
-            <span className="ml-1 text-[10px] opacity-70">({reclaimable.items})</span>
+            title={isImageHostMode ? "退出图床" : "进入图床（外链分享 · 图片与文件直链）"}
+          >
+            <Globe size={14} className="mr-1" />
+            {isImageHostMode ? "退出图床" : "图床"}
           </Button>
-        )}
 
-        <Button size="sm" onClick={onPickFiles} disabled={uploading} className="shrink-0 min-h-11 px-3 md:min-h-9">
-          {uploading ? <Loader2 size={14} className="animate-spin mr-1" /> : <Upload size={14} className="mr-1" />}
-          {uploading ? "上传中" : "上传文件"}
-        </Button>
-        <button
-          onClick={handleCleanup}
-          disabled={cleaning}
-          className={cn(
-            "flex items-center justify-center shrink-0 h-11 rounded-xl px-3 text-xs font-medium transition-all md:h-8 md:rounded-md",
-            cleaning
-              ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
-              : "bg-rose-600 hover:bg-rose-700 text-white shadow-sm"
+          <Button
+            size="sm"
+            variant={selectionMode ? "default" : "outline"}
+            onClick={toggleSelectionMode}
+            className="min-h-11 px-3 md:min-h-9"
+            title={selectionMode ? "退出多选" : "进入多选"}
+          >
+            {selectionMode ? (
+              <>
+                <X size={14} className="mr-1" />
+                退出多选
+              </>
+            ) : (
+              <>
+                <CheckSquare size={14} className="mr-1" />
+                选择
+              </>
+            )}
+          </Button>
+
+          {/* 可回收空间徽标：
+              - 仅在检测到"有可清理的孤儿"时显示（items>0），避免干扰正常使用；
+              - 点击触发真清理（含二次确认）；
+              - 扫描失败或还没扫完则不渲染，保持顶栏简洁。 */}
+          {reclaimable && reclaimable.items > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleCleanupOrphans}
+              disabled={cleaningUp}
+              className="min-h-11 px-3 text-amber-600 border-amber-500/40 hover:bg-amber-500/10 hover:text-amber-700 hover:border-amber-500/60 md:min-h-9"
+              title={`发现 ${reclaimable.items} 个没有被任何笔记引用的附件，可释放约 ${humanSize(reclaimable.bytes)}`}
+            >
+              {cleaningUp ? (
+                <Loader2 size={14} className="mr-1 animate-spin" />
+              ) : (
+                <Sparkles size={14} className="mr-1" />
+              )}
+              <span className="hidden sm:inline">可回收 </span>
+              <span>{humanSize(reclaimable.bytes)}</span>
+              <span className="ml-1 text-[10px] opacity-70">({reclaimable.items})</span>
+            </Button>
           )}
-        >
-          {cleaning ? (
-            <>
-              <Loader2 size={14} className="animate-spin mr-1" />
-              清理中
-            </>
-          ) : (
-            <>
-              <Eraser size={14} className="mr-1" />
-              清理未引用
-            </>
-          )}
-        </button>
+
+          <Button size="sm" onClick={onPickFiles} disabled={uploading} className="min-h-11 px-3 md:min-h-9">
+            {uploading ? <Loader2 size={14} className="animate-spin mr-1" /> : <Upload size={14} className="mr-1" />}
+            {uploading ? "上传中" : "上传文件"}
+          </Button>
+          <button
+            onClick={handleCleanup}
+            disabled={cleaning}
+            className={cn(
+              "flex min-h-11 items-center justify-center rounded-xl px-3 text-xs font-medium transition-all md:h-8 md:min-h-0 md:rounded-md",
+              cleaning
+                ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
+                : "bg-rose-600 hover:bg-rose-700 text-white shadow-sm"
+            )}
+          >
+            {cleaning ? (
+              <>
+                <Loader2 size={14} className="animate-spin mr-1" />
+                清理中
+              </>
+            ) : (
+              <>
+                <Eraser size={14} className="mr-1" />
+                清理未引用
+              </>
+            )}
+          </button>
+        </div>
         <input
           ref={fileInputRef}
           type="file"

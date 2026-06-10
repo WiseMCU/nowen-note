@@ -87,6 +87,21 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth >= 768 : true,
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const updateLayout = () => {
+      const desktop = window.innerWidth >= 768;
+      setIsDesktop(desktop);
+      setSidebarOpen((prev) => (desktop ? true : prev && false));
+    };
+    updateLayout();
+    window.addEventListener("resize", updateLayout);
+    return () => window.removeEventListener("resize", updateLayout);
+  }, []);
 
   // 加载知识库统计
   // v7：切换工作区会换一份索引 scope，必须重拉；不重拉的话 UI 还显示
@@ -569,13 +584,16 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
   };
 
   return (
-    <div className="flex h-full bg-app-bg">
+    <div className="relative flex h-full bg-app-bg overflow-hidden">
       {/* ===== 左侧：会话列表 ===== */}
       {/* 收起时宽度为 0；展开时占 208px。用 overflow-hidden 让内容动画收纳。 */}
       <aside
         className={cn(
-          "flex flex-col border-r border-app-border bg-app-surface/30 transition-[width] duration-150 overflow-hidden shrink-0",
-          sidebarOpen ? "w-52" : "w-0"
+          "flex flex-col overflow-hidden border-app-border bg-app-surface/95 transition-transform duration-200 ease-out md:relative md:shrink-0 md:border-r md:bg-app-surface/30",
+          isDesktop
+            ? "relative w-52 shrink-0 border-r translate-x-0"
+            : "absolute inset-y-0 left-0 z-30 w-[min(18rem,82vw)] border-r shadow-xl",
+          !isDesktop && (sidebarOpen ? "translate-x-0" : "-translate-x-full"),
         )}
       >
         <div className="flex items-center justify-between px-3 py-2.5 border-b border-app-border">
@@ -658,8 +676,17 @@ export default function AIChatPanel({ onClose, onNavigateToNote }: {
         </ScrollArea>
       </aside>
 
+      {!isDesktop && sidebarOpen && (
+        <button
+          type="button"
+          aria-label={t("common.close")}
+          className="absolute inset-0 z-20 bg-black/20"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* ===== 右侧：消息主区 ===== */}
-      <div className="flex flex-col flex-1 min-w-0">
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col bg-app-bg">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-app-border bg-app-surface/50">
         <div className="flex items-center gap-2">

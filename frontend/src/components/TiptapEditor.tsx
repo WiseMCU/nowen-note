@@ -28,6 +28,7 @@ import { TextSelection } from "@tiptap/pm/state";
 import { markdownToSimpleHtml } from "@/lib/importService";
 import { repairTiptapJson } from "@/lib/tiptapSchemaRepair";
 import { markdownToHtml as mdToFullHtml, detectFormat as detectContentFormat, tiptapJsonToMarkdown } from "@/lib/contentFormat";
+import { shouldUseCodeBlockPaste } from "@/lib/pasteHeuristics";
 import { api } from "@/lib/api";
 import { extractRtfImagesAsync } from "@/lib/rtfImageWorkerClient";
 import { replaceDataUrlImagesWithAttachments } from "@/lib/rtfImageUploader";
@@ -1877,7 +1878,7 @@ export default forwardRef<NoteEditorHandle, TiptapEditorProps>(function TiptapEd
           //    通常同时带 text/html（每行一个 <div> 或 <pre><br>），
           //    若走 HTML 解析会被拆成多块，导致"每行一个代码块"。
           //    增加 looksLikeCode 判断：含大量中文自然语言的多行文本不应被包成 codeBlock。
-          if (text && text.includes("\n") && !looksLikeMarkdown(text) && looksLikeCode(text)) {
+          if (text && text.includes("\n") && !looksLikeMarkdown(text) && shouldUseCodeBlockPaste(text, html)) {
             console.log("[paste-diag] PATH=codeBlock (looksLikeCode)");
             // 把纯文本包在 <pre><code> 中，通过 PM 的 DOMParser.parseSlice → replaceSelection
             // 让 PM 自己处理块级节点（codeBlock）的嵌套与光标定位。
@@ -4389,45 +4390,6 @@ function formatBytes(bytes: number): string {
  *   - 代码：`const x = 1;\nif (x) {\n  return;\n}`       → true（无中文，有代码特征）
  *   - 运维文档：`#查看raid信息\nyum install megacli -y\n通过命令...` → false（中文占比高）
  *   - shell 命令：`ls -la\ncd /tmp\nmkdir test`           → true（无中文，命令格式）
- */
-function looksLikeCode(text: string): boolean {
-  // 统计中文字符数量（CJK统一汉字 + 扩展）
-  const cjkChars = text.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g);
-  const cjkCount = cjkChars ? cjkChars.length : 0;
-  // 统计非空白可见字符总数
-  const visibleChars = text.replace(/\s/g, "").length;
-  if (visibleChars === 0) return false;
-
-  const cjkRatio = cjkCount / visibleChars;
-
-  // 如果中文字符占比 > 20%，大概率是自然语言文本而非代码
-  if (cjkRatio > 0.2) return false;
-
-  // 如果中文字符占比 > 8% 且没有明显的代码特征，也不当做代码
-  if (cjkRatio > 0.08) {
-    const lines = text.split("\n");
-    let codeSignals = 0;
-    for (const line of lines) {
-      const trimmed = line.trimEnd();
-      // 缩进（至少2空格或tab开头）
-      if (/^(\s{2,}|\t)/.test(line) && trimmed.length > 0) codeSignals++;
-      // 行尾分号、大括号
-      if (/[;{}]\s*$/.test(trimmed)) codeSignals++;
-      // 赋值语句
-      if (/[=!<>]=|=>|->/.test(trimmed)) codeSignals++;
-      // 函数调用 xxx(...)
-      if (/\w+\(.*\)\s*[;{]?\s*$/.test(trimmed)) codeSignals++;
-    }
-    // 如果代码特征不够多，不当做代码
-    if (codeSignals < lines.length * 0.3) return false;
-  }
-
-  return true;
-}
-
-/**
- * 检测粘贴的文本是否包含 Markdown 格式标记
- * 通过匹配多种 Markdown 语法特征来判断
  */
 function looksLikeMarkdown(text: string): boolean {
   // 短路：图片 / 链接 Markdown 语法在自然文本里几乎不会自然出现，一旦

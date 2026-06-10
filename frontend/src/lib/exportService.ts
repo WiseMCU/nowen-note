@@ -16,6 +16,7 @@ import { common, createLowlight } from "lowlight";
 import { api, resolveAttachmentUrl } from "./api";
 import { TextStyleKit } from "@/components/FontSizeExtension";
 import { Video as VideoExtension } from "@/components/VideoExtension";
+import { repeatNowenBlankParagraphHtml } from "./markdownBlankParagraph";
 
 // TipTap 扩展列表（需与 importService / 编辑器保持一致，否则某些节点会被吞掉）
 const lowlight = createLowlight(common);
@@ -853,7 +854,7 @@ function postProcessMarkdown(md: string): string {
       .replace(/\n{3,}/g, "\n\n")
       .replace(markerPattern, (match) => {
         const blankParagraphs = match.match(markerCountPattern)?.length || 1;
-        return "\n".repeat(blankParagraphs + 2);
+        return `\n\n${repeatNowenBlankParagraphHtml(blankParagraphs)}\n\n`;
       });
   }
   return parts.join("");

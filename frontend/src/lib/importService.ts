@@ -14,6 +14,10 @@ import { TableRowWithHeight } from "@/components/extensions/TableRowResizable";
 import { common, createLowlight } from "lowlight";
 import { TextStyleKit } from "@/components/FontSizeExtension";
 import { Video as VideoExtension } from "@/components/VideoExtension";
+import {
+  normalizeNowenBlankParagraphHtmlForImport,
+  replaceNowenBlankParagraphMarkdownWithPlaceholder,
+} from "./markdownBlankParagraph";
 
 const lowlight = createLowlight(common);
 
@@ -854,6 +858,10 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
   // 脱壳：整段被 ```markdown ... ``` 包裹时，剥掉外层
   content = unwrapOuterMarkdownFence(content);
 
+  // 优先识别新的空段落标记：它既能在 Markdown 预览里显示明显空白，也能在导入时
+  // 无损还原成真正的空段落。
+  content = replaceNowenBlankParagraphMarkdownWithPlaceholder(content, "<!--blank-->");
+
   // 将连续空白行还原为 <p>&nbsp;</p>（空段落）。
   // 导出端用 <br/> 占位，Turndown → `  \n\n\n`，postProcess → `\n\n\n\n`
   // 即每个空段 = \n\n\n\n。这里检测 \n\n\n\n → 1空段，\n\n\n\n\n\n → 2空段……
@@ -886,7 +894,9 @@ export function markdownToSimpleHtml(md: string, imageMap?: Record<string, strin
   marked.use({ renderer, gfm: true, breaks: false });
 
   const html = marked.parse(content) as string;
-  const result = html.replace(/<!--blank-->/g, "<p>&nbsp;</p>");
+  const result = normalizeNowenBlankParagraphHtmlForImport(
+    html.replace(/<!--blank-->/g, "<p></p>")
+  );
   // 规范化 marked 输出的 GFM 表格 HTML，使其符合 Tiptap table schema
   // （否则带表格的 md 在下游 generateJSON 时会产出非法 content，触发
   //  ProseMirror 的 "Called contentMatchAt on a node with invalid content"）

@@ -18,6 +18,7 @@ import {
   normalizeToMarkdown,
   tiptapJsonToMarkdown,
 } from "@/lib/contentFormat";
+import { NOWEN_BLANK_PARAGRAPH_HTML } from "@/lib/markdownBlankParagraph";
 
 describe("detectFormat", () => {
   it("空 / null / 空对象 → empty", () => {
@@ -161,6 +162,12 @@ describe("markdownToHtml", () => {
     expect(html).toContain('style="text-align:center"');
     expect(html).toContain("centered");
   });
+
+  it("导出的空段落标记在预览 HTML 中保留明显空段落", () => {
+    const html = markdownToHtml(`A\n\n${NOWEN_BLANK_PARAGRAPH_HTML}\n\nB`);
+    expect(html).toContain('data-nowen-blank="true"');
+    expect(html).toContain("<br>");
+  });
 });
 
 describe("markdownToPlainText", () => {
@@ -250,6 +257,15 @@ describe("RTE ↔ MD 回路（关键结构保留）", () => {
     expect(table).toBeTruthy();
     // 至少含表头行 + 数据行
     expect((table.content || []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("MD→Tiptap JSON：空段落标记会还原为真正空段落", () => {
+    const json = markdownToTiptapJSON(`A\n\n${NOWEN_BLANK_PARAGRAPH_HTML}\n\nB`);
+    const blocks = (json.content || []) as any[];
+    expect(blocks.map((b) => b.type)).toEqual(["paragraph", "paragraph", "paragraph"]);
+    expect(blocks[0].content?.[0]?.text).toBe("A");
+    expect(blocks[1].content).toBeUndefined();
+    expect(blocks[2].content?.[0]?.text).toBe("B");
   });
 
   // ---------------- TextStyle / Color / FontSize 回路 ----------------

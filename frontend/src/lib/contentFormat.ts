@@ -43,6 +43,7 @@ import { MathInline, MathBlock } from "@/components/MathExtensions";
 import { FootnoteReference, FootnoteDefinition } from "@/components/FootnoteExtensions";
 import { TextStyleKit } from "@/components/FontSizeExtension";
 import { Video as VideoExtension, videoNodeToMarkdown } from "@/components/VideoExtension";
+import { normalizeNowenBlankParagraphHtmlForImport } from "./markdownBlankParagraph";
 
 // ---------- 格式识别 ----------
 
@@ -1188,7 +1189,7 @@ export function markdownToHtml(md: string): string {
  * 链路：MD → HTML → Tiptap generateJSON（用和 Tiptap 编辑器完全一致的 extensions）
  */
 export function markdownToTiptapJSON(md: string): any {
-  const html = markdownToHtml(md);
+  const html = normalizeNowenBlankParagraphHtmlForImport(markdownToHtml(md));
   try {
     return generateJSON(html || "<p></p>", getTiptapExtensions());
   } catch (err) {
